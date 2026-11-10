@@ -21,8 +21,14 @@ the Switch the main goal; work uninterrupted until 06:00 AEST without asking; a 
 | Generator for the first codegen | the base's built `sdk/out/win-amd64/rexglue.exe` | the request |
 | Base ports after 62 | ports 63, 64 applied | the request says "ports 1-62 and later"; the Viva session relayed them for the user |
 | Hand-written natives | none; `hand.txt` lists nothing | the request: only from a console profile |
-| Register diet (non_volatile_as_local and the rest) | off for the first codegens | it needs this game's own audit on code generated with it (katamari-nx's rc3 lesson) |
+| Register diet (non_volatile_as_local and the rest) | off for the first codegens (on later: below) | it needs this game's own audit on code generated with it (katamari-nx's rc3 lesson) |
 | `.ps1` tools | run through the session's PowerShell tool | the machine's default policy refuses `powershell -File` from a plain shell; no policy change |
+| Register diet | on since 15:55 (`non_volatile_as_local`, `non_argument_as_local` with 131 kept, `elide_lr_stores`), after the audits (`out/nonarg1.log`, read-before-write) | the codegen notes below |
+| The Switch test NRO | built with `BLUR_BUILTIN_CONFIG=OFF`: it reads a full `renut.toml` next to it (the package's `renut.toml` / `renut_play.toml` / `renut_ab.toml`, copied over it) | the request's package is three full tomls; the built-in pair was Katamari's (log off, MSAA 4) |
+| SMAA (`banjo_renut_smaa`) | off in Blur's tomls; `configs/renut_smaa.toml` turns it on | banjo-nx ships it on (its user's call); it changes the picture, so here it is the user's decision |
+| The game's gamma ramp (`banjo_renut_game_gamma`) | on in Blur's tomls; `configs/renut_gamma_off.toml` | the title matches the reference with it (below); its console cost is the user's to weigh |
+| The reference | `--banjo_renderer=emulated --gpu_plugin=xenos --d3d12_readback_resolve=true` | the user's tip (18:40) |
+| Builds | a PC and a Switch build may run at once | the user, 19:50 |
 
 ## The game (2026-11-10)
 

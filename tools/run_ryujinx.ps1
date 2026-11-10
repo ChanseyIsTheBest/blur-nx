@@ -23,7 +23,11 @@ if ($freeCommit -lt $MinCommitGB) { Write-Output ("free commit memory {0:N1} GB 
 $built = Join-Path $root "app\out\$Build\renut.nro"
 if (-not (Test-Path $built)) { Write-Output "no NRO at $built"; exit 4 }
 Copy-Item $built $nro -Force
-if ($Toml) { Copy-Item $Toml (Join-Path $sd "blur.toml") -Force }
+# blur-nx (2026-11-10): the test builds (BLUR_BUILTIN_CONFIG=OFF) read renut.toml, the player's build blur.toml: both.
+if ($Toml) {
+  Copy-Item $Toml (Join-Path $sd "renut.toml") -Force
+  Copy-Item $Toml (Join-Path $sd "blur.toml") -Force
+}
 New-Item -ItemType Directory -Force $out | Out-Null
 $logs = Join-Path $sd "logs"
 if (Test-Path $logs) { Remove-Item -Recurse -Force $logs }

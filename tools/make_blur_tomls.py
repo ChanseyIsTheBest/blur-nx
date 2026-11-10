@@ -54,6 +54,14 @@ SHIPPED = {
     # the reference apply. Title screen against the reference: mean difference 2.9 / 7.6 / 9.0 off, 0.3 / 1.3 / 1.5 on.
     # rr6-nx measured its present cost on the console at 0.4-0.6 ms a frame (the base's open item): the user's decision.
     'banjo_renut_game_gamma': 'true  # the ramp of the reference and the 360 display; configs/renut_gamma_off.toml: without it',
+    # 2026-11-10: banjo-nx ships SMAA on (its user's call); it smooths edges, not the game's picture: off here,
+    # configs/renut_smaa.toml for the user to decide on. Banjo's fur-shell cuts (also its user's calls) act only on Banjo's
+    # four fur shaders (render/draw.cpp, by pixel shader hash): inert for Blur, set to the game's own all the same.
+    'banjo_renut_smaa': "false  # blur-nx: off (not the game's picture; the note above is banjo-nx's); configs/renut_smaa.toml: on",
+    'banjo_renut_fur_shells': '1',
+    'banjo_renut_portrait_fur_shells': '1',
+    'banjo_renut_fur_shells_percent': '100',
+    'banjo_renut_portrait_fur_shells_percent': '100',
 }
 PLAY = {'log_level': '"error"', 'banjo_renut_diag_resolve_trace': 'false', 'banjo_renut_diag_gpu_shaders': 'false',
         'banjo_renut_diag_terrain': 'false', 'switch_profile_stacks': 'false', 'banjo_cpu_profiler': 'false',
@@ -85,6 +93,8 @@ CONFIGS = {
     'renut_gamma_off.toml': ({'banjo_renut_game_gamma': 'false'},
                              "without the display's gamma ramp (brighter darks than the reference; saves the ramp's "
                              "present cost)"),
+    'renut_smaa.toml': ({'banjo_renut_smaa': 'true'},
+                        "SMAA 1x on the 3D image before the HUD (smooths edges: not the game's picture; costs GPU time)"),
     'renut_profile.toml': ({'switch_profile_stacks': 'true'},
                            'the console profile: the sampler on (logs/rex/rex_profile.log, one report every 10 s)'),
 }

@@ -448,15 +448,15 @@ banjo_deko3d_eager_kicks = true
 # game's own picture. On in every config (your call); false here turns it off. configs/banjo_renut_smaa_ab.toml
 # switches it every 4 s (its GPU time in the "[renut A/B]" lines), _high.toml is the high preset, _compare.toml
 # writes same-frame before/after pictures.
-banjo_renut_smaa = true
+banjo_renut_smaa = false  # blur-nx: off (not the game's picture; the note above is banjo-nx's); configs/renut_smaa.toml: on
 # NOT exact, your call (2026-10-21): 75 % of each fur part's shells (three of every four; 16 of Banjo's 21, his
 # outermost shell drawn, so the fur keeps its length; the dialogue portrait's too). 100 draws every shell as the
 # game; configs/banjo_renut_fur_shells_all.toml does that.
-banjo_renut_fur_shells_percent = 75
+banjo_renut_fur_shells_percent = 100
 # NOT exact, your call (2026-10-21): the dialogue portrait (the 96 x 96 box in the dialogue window) with half its fur
 # shells (11 of 21) and 2x MSAA instead of the game's 4x (1 = none, 0 = the game's).
 # configs/banjo_renut_portrait_full.toml puts both back.
-banjo_renut_portrait_fur_shells_percent = 50
+banjo_renut_portrait_fur_shells_percent = 100
 banjo_renut_portrait_msaa_samples = 2
 # NOT exact, your request (2026-10-21): the internal resolution. The 3D image at 1152x648 in handheld mode and 1536x864
 # docked; the HUD, menus and text at the display's resolution (1280x720 handheld, 1920x1080 docked: the swapchain is

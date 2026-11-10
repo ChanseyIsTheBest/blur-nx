@@ -1,30 +1,23 @@
-# Beautiful Katamari for the Switch: your options. Every other setting is built into the NRO
-# (app/blur_switch_defaults.toml). Delete this file and the game writes it again at the next start.
+# Blur for the Nintendo Switch (blur-nx): your options. Every other setting is built into the game.
+# Delete this file and the game writes it again at the next start.
 
-# Samples per pixel of the game's edge smoothing (MSAA): 4 (the game's own), 2 or 1 (off).
-# Fewer gives rougher edges and less GPU work.
-msaa_level = 4
+# SMAA edge smoothing on the 3D (the HUD and text stay sharp). Not the game's own picture; costs GPU time.
+banjo_renut_smaa = false
 
-# Frame rate cap: "Off" (the game's own, uncapped as on the Xbox 360) or "30".
-frame_cap = "Off"
+# The game's own edge smoothing (4x MSAA, as on the Xbox 360). true turns it off (lighter on the GPU, rougher edges).
+disable_msaa = false
 
-# Language: 1 = English, 2 = Japanese.
-user_language = 1
+# Controller vibration (rumble). false = none.
+input_rumble = true
 
-# The DLC packs that only unlock what the game itself unlocks (Accessory Sets A-D, Character Sets A-D, Special Accessory).
-# false keeps them from the game; true loads them too. The stage packs always load.
-katamari_dlc_unlock_packs = false
-
-# Face buttons by position, as on an Xbox pad (bottom = A). false = by letter.
+# Face buttons by position, as on an Xbox pad (the bottom button is A). false = by letter (the Switch's A is A).
 input_xbox_layout = true
 
 # Single Joy-Cons are held sideways, one per player.
 input_joycon_sideways = true
-# With it, a single Joy-Con's stick is turned for the sideways grip.
-input_joycon_sideways_stick = true
 
-# Button mapping for each player: the Switch buttons that press each Xbox button. Empty = default.
-# Buttons: A B X Y L R ZL ZR PLUS MINUS LSTICK RSTICK UP DOWN LEFT RIGHT SL SR NONE. Example: a = "B, ZR"
+# Each player's buttons: the Switch buttons that press each Xbox button, for example a = "B, ZR". Empty = the default.
+# Buttons: A B X Y L R ZL ZR PLUS MINUS LSTICK RSTICK UP DOWN LEFT RIGHT SL SR, or NONE.
 
 [input_p1]
 a = ""
