@@ -22,6 +22,7 @@
 #include <rex/types.h>
 
 #include "renut_engine/gpu/render/render_scale.h"
+#include "renut_engine/gpu/d3d/d3d.h"  // blur-nx (2026-11-10): d3d::SurfaceDesc in StackHeaderSet
 
 namespace renut::gpu {
 
@@ -88,6 +89,8 @@ struct HostSurface {
   // banjo-nx (2026-10-19, banjo_renut_resolve_skip): bumped by every draw that can write it (a colour write mask; for
   // depth, a depth write or stencil writes) and every clear of it; part of a resolve's signature.
   uint64_t writes = 0;
+  // blur-nx (2026-11-10, blur_renut_sample_grid_resolve): g_surface_write_seq at the last draw into it (not its clears).
+  uint64_t blur_draw_seq = 0;
 
   // The view and bindless slot shaders read the target through (depth
   // resolves); made on first use, see SurfaceSampleSlotLocked.
@@ -117,6 +120,7 @@ struct HostSurface {
   bool edram_wiped = false;
   uint64_t edram_wiped_generation = 0, edram_wiped_writes = 0;
   float edram_wiped_color[4] = {};
+  uint64_t blur_wiped_seq = 0;  // blur-nx (2026-11-10, blur_renut_wipe_overwritten): g_surface_write_seq at the wipe
 
   // gpu_profile labels of draws with it as the first target: color only,
   // color with depth, depth only. Made on first use.
@@ -176,6 +180,26 @@ HostSurface *DepthRestoreSourceLocked(const HostSurface *depth);
 // The host target for the D3DSurface at 'surface_va', created or rebuilt as
 // needed. nullptr for 0 or when the target cannot be created.
 HostSurface *GetHostSurfaceLocked(u32 surface_va);
+// blur-nx (2026-11-10, blur_renut_stack_surface_headers): the game binds the surface at surface_va (any game thread): a
+// header on the stack is kept as it is now, for the render thread's later reads.
+void NoteSurfaceHeader(u32 surface_va);
+// blur-nx (2026-11-10, blur_renut_stack_surface_headers): the headers of the stack surfaces bound as render targets and
+// depth when a clear or resolve is queued (game thread), and the render thread's use of them while it replays that
+// operation: the game thread runs ahead, and a stack slot can hold another surface's header by the time the operation
+// is replayed (one global copy per address gave a clear the wrong EDRAM).
+struct StackHeaderSet {
+  u32 count = 0;
+  u32 va[5] = {};
+  d3d::SurfaceDesc desc[5] = {};
+};
+void CaptureStackHeaders(const u8 *device, StackHeaderSet &out);
+void SetReplayStackHeaders(const StackHeaderSet *set);
+// blur-nx (2026-11-10, blur_renut_sample_grid_resolve): for a 4x colour surface, the single-sampled target over the same
+// EDRAM base with the same host format and scale and twice its pitch (the same sample grid), or nullptr.
+HostSurface *SampleGridAliasLocked(const HostSurface *surface);
+// blur-nx (2026-11-10, blur_renut_wipe_overwritten): whether a colour target over the same EDRAM base tile in another view
+// was written (drawn or cleared) after write sequence 'seq'.
+bool OverlapWrittenSinceLocked(const HostSurface *surface, uint64_t seq);
 // banjo-nx (2026-10-20, from sa2-nx, banjo_renut_chain_reuse): banjo-nx's surface epoch (bumped by every target built, retired,
 // unused or rebound, the resolution scale latched and the tiling extent set).
 uint64_t SurfaceEpochLocked();

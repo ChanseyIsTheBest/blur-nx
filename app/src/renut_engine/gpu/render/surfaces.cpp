@@ -8,6 +8,7 @@
 #include <chrono>  // banjo-nx (2026-10-28): dynamic resolution
 #include <numeric>
 #include <string>
+#include <mutex>  // blur-nx (2026-11-10): g_stack_headers_mutex
 #include <unordered_map>
 #include <vector>
 
@@ -975,6 +976,88 @@ void ColorEdramWipedLocked(const HostSurface *surface, const plume::RenderRect &
 
 HostSurface *GetHostSurfaceSlow(u32 surface_va, const d3d::SurfaceDesc *desc);
 
+// blur-nx (2026-11-10, blur_renut_stack_surface_headers, A/B 215): headers of surfaces on the stack, as the game bound them
+// (NoteSurfaceHeader, game threads); the render thread reads a surface's header when it replays, by which time a
+// temporary D3DSurface on the stack has been overwritten. Blur builds one for the clear and resolve that put its 640x360
+// motion-blur source in place: read later it was zeros (an empty 1x1 surface), and the frame lost its motion blur.
+std::mutex g_stack_headers_mutex;
+std::unordered_map<u32, d3d::SurfaceDesc> g_stack_headers;
+inline bool StackVa(u32 va) { return va >= 0x70000000u && va < 0x80000000u; }
+
+bool OverlapWrittenSinceLocked(const HostSurface *surface, uint64_t seq) {
+  if (!surface || surface->depth)
+    return false;
+  uint64_t own = 0;
+  bool found = false;
+  for (const auto &[key, target] : g_targets) {
+    if (target.get() == surface) {
+      own = key;
+      found = true;
+      break;
+    }
+  }
+  if (!found)
+    return false;
+  constexpr uint64_t kViewMask = 0xFFFFFFFFull;
+  for (const auto &[key, target] : g_targets) {
+    if (target && target.get() != surface && target->texture && !target->depth && (key & 0xFFF) == (own & 0xFFF) &&
+        (key & kViewMask) != (own & kViewMask) && target->write_seq > seq)
+      return true;
+  }
+  return false;
+}
+
+HostSurface *SampleGridAliasLocked(const HostSurface *s) {
+  if (!s || s->depth || s->samples != plume::RenderSampleCount::COUNT_4)
+    return nullptr;
+  const u32 pitch = u32(s->info_word) & 0x3FFF;
+  if (!pitch || pitch * 2 > 0x3FFF)
+    return nullptr;
+  // TargetKey's layout: the base tile, the pitch, the samples (0: 1), not depth, the scale code, the host format.
+  const uint64_t key = uint64_t(u32(s->color_info_word) & 0xFFF) | uint64_t(pitch * 2) << 12 |
+                       uint64_t(s->scale.code & 7) << 29 | uint64_t(u32(s->format)) << 32;
+  const auto it = g_targets.find(key);
+  if (it == g_targets.end() || !it->second || !it->second->texture ||
+      it->second->samples != plume::RenderSampleCount::COUNT_1)
+    return nullptr;
+  return it->second.get();
+}
+
+const StackHeaderSet *g_replay_stack_headers = nullptr;  // render thread: the operation being replayed
+
+void CaptureStackHeaders(const u8 *device, StackHeaderSet &out) {
+  out.count = 0;
+  if (!device || !banjo::renut_gpu::StackSurfaceHeadersOn())
+    return;
+  const auto be = [device](u32 off) {
+    return u32(device[off]) << 24 | u32(device[off + 1]) << 16 | u32(device[off + 2]) << 8 | u32(device[off + 3]);
+  };
+  const u32 vas[5] = {be(d3d::kDeviceOffsetRenderTargets), be(d3d::kDeviceOffsetRenderTargets + 4),
+                      be(d3d::kDeviceOffsetRenderTargets + 8), be(d3d::kDeviceOffsetRenderTargets + 12),
+                      be(d3d::kDeviceOffsetDepthStencil)};
+  for (const u32 va : vas) {
+    if (!StackVa(va) || out.count >= 5)
+      continue;
+    if (const auto *desc = GuestPtr<const d3d::SurfaceDesc>(va + sizeof(d3d::Resource))) {
+      out.va[out.count] = va;
+      out.desc[out.count] = *desc;
+      ++out.count;
+    }
+  }
+}
+
+void SetReplayStackHeaders(const StackHeaderSet *set) { g_replay_stack_headers = set; }
+
+void NoteSurfaceHeader(u32 surface_va) {
+  if (!StackVa(surface_va) || !banjo::renut_gpu::StackSurfaceHeadersOn())
+    return;
+  const auto *desc = GuestPtr<const d3d::SurfaceDesc>(surface_va + sizeof(d3d::Resource));
+  if (!desc)
+    return;
+  std::lock_guard lock(g_stack_headers_mutex);
+  g_stack_headers[surface_va] = *desc;
+}
+
 HostSurface *GetHostSurfaceLocked(u32 surface_va) {
   if (!surface_va)
     return nullptr;
@@ -984,6 +1067,27 @@ HostSurface *GetHostSurfaceLocked(u32 surface_va) {
   const auto *desc = GuestPtr<const d3d::SurfaceDesc>(surface_va + sizeof(d3d::Resource));
   if (!desc)
     return nullptr;
+  d3d::SurfaceDesc stack_copy;  // blur-nx (2026-11-10, blur_renut_stack_surface_headers)
+  if (StackVa(surface_va) && banjo::renut_gpu::StackSurfaceHeadersOn()) {
+    bool found = false;
+    if (const StackHeaderSet *set = g_replay_stack_headers) {  // the queued operation's own (clears, resolves)
+      for (u32 i = 0; i < set->count; ++i) {
+        if (set->va[i] == surface_va) {
+          stack_copy = set->desc[i];
+          desc = &stack_copy;
+          found = true;
+          break;
+        }
+      }
+    }
+    if (!found) {  // else as last bound (draws)
+      std::lock_guard lock(g_stack_headers_mutex);
+      if (const auto it = g_stack_headers.find(surface_va); it != g_stack_headers.end()) {
+        stack_copy = it->second;
+        desc = &stack_copy;
+      }
+    }
+  }
 
   const bool memo = banjo::renut_gpu::CpuMemosOn();
   SurfaceMemo &m = g_surface_memo[(surface_va * 0x9E3779B1u) >> 26];
@@ -1120,6 +1224,16 @@ HostSurface *UiDepthSurfaceLocked(HostSurface *scene_depth) {
 }
 
 HostSurface *GetHostSurfaceSlow(u32 surface_va, const d3d::SurfaceDesc *desc) {
+  // blur-nx (2026-11-10, blur_renut_surface_size_guard, A/B 217): no Xbox 360 target is wider or taller than 8192; a
+  // header that reads so is not one (a temporary on the stack, read after the stack was reused).
+  if (banjo::renut_gpu::SurfaceSizeGuardOn() &&
+      (d3d::SurfaceWidth(desc->Size) > 8192 || d3d::SurfaceHeight(desc->Size) > 8192)) {
+    static uint32_t logged = 0;
+    if (logged++ < 8)
+      RGPU_WARN("[renut] surface {:08X}: its header reads {}x{}: no target made (blur_renut_surface_size_guard)",
+                surface_va, d3d::SurfaceWidth(desc->Size), d3d::SurfaceHeight(desc->Size));
+    return nullptr;
+  }
   const bool depth = d3d::IsDepthFormat(desc->Format);
   plume::RenderFormat format = depth ? DepthTargetFormat(desc->Format) : SurfaceColorFormat(*desc);
   // The render resolution, or the finer one graphics_options gives it.

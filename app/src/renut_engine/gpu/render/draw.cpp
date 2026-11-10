@@ -10790,6 +10790,7 @@ int FastDrawLocked(const u8 *device_state, const DrawCall &call, const ReplayCon
     if ((f.kp_hot.color_mask >> (4 * i)) & 0xF) {
       ++targets.colors[i]->writes;
       targets.colors[i]->write_seq = ++g_surface_write_seq;  // sasrt-nx: the EDRAM depth restore
+      targets.colors[i]->blur_draw_seq = g_surface_write_seq;  // blur-nx (2026-11-10, blur_renut_sample_grid_resolve)
     }
   if (targets.depth) {
     const u32 dc = f.kp_hot.depth_control;
@@ -12792,6 +12793,7 @@ bool DrawStateLocked(const u8 *device_state, const DrawCall &call, const ReplayC
     if ((key.color_mask >> (4 * i)) & 0xF) {
       ++targets.colors[i]->writes;
       targets.colors[i]->write_seq = ++g_surface_write_seq;  // sasrt-nx: the EDRAM depth restore
+      targets.colors[i]->blur_draw_seq = g_surface_write_seq;  // blur-nx (2026-11-10, blur_renut_sample_grid_resolve)
     }
   if (targets.depth) {
     const u32 dc = key.depth_control;
@@ -13695,8 +13697,16 @@ namespace {
 void ClearTargets(const Targets &t, u32 flags, const plume::RenderRect &rect, const float color[4],
                   float depth, u32 stencil) {
   if (banjo::renut_gpu::ResolveTraceOn()) {
-    RGPU_INFO("[trace] clear {:X} rect ({},{})-({},{}) of {}x{}", flags, rect.left, rect.top, rect.right, rect.bottom,
-              t.width, t.height);
+    RGPU_INFO("[trace] clear {:X} rect ({},{})-({},{}) of {}x{}, colour {} {} {} {} (blur-nx: the colour)", flags, rect.left,
+              rect.top, rect.right, rect.bottom, t.width, t.height, color[0], color[1], color[2], color[3]);
+    // blur-nx (2026-11-10): which EDRAM each cleared target is (base tile, pitch, samples code, host format, size).
+    for (uint32_t i = 0; i < t.color_count; ++i)
+      RGPU_INFO("[trace]   clear colour {}: base {:03X} pitch {} samples {} fmt {} {}x{}", i,
+                u32(t.colors[i]->color_info_word) & 0xFFF, u32(t.colors[i]->info_word) & 0x3FFF,
+                (u32(t.colors[i]->info_word) >> 16) & 3, u32(t.colors[i]->format), t.colors[i]->width, t.colors[i]->height);
+    if (t.depth)
+      RGPU_INFO("[trace]   clear depth: base {:03X} pitch {} samples {} {}x{}", u32(t.depth->color_info_word) & 0xFFF,
+                u32(t.depth->info_word) & 0x3FFF, (u32(t.depth->info_word) >> 16) & 3, t.depth->width, t.depth->height);
   }
   if (rect.right <= rect.left || rect.bottom <= rect.top)
     return;
@@ -13782,6 +13792,7 @@ void ClearTargets(const Targets &t, u32 flags, const plume::RenderRect &rect, co
       ColorEdramWipedLocked(c, rect, found);
       for (HostSurface *wiped : found) {
         wiped->edram_wiped = true;
+        wiped->blur_wiped_seq = g_surface_write_seq;  // blur-nx (2026-11-10, blur_renut_wipe_overwritten)
         wiped->edram_wiped_generation = wiped->generation;
         wiped->edram_wiped_writes = wiped->writes;
         std::memcpy(wiped->edram_wiped_color, color, sizeof(wiped->edram_wiped_color));
@@ -14770,8 +14781,16 @@ void ResolveStateLocked(const u8 *device_state, u32 flags, const ClearRect *sour
   // nothing has written here since (ClearTargets): the resolve reads that clear. Viva Pinata blanks its 1280x720 mask this way at a
   // fade (the scene's tile clears, then a resolve of the mask's target into the mask's texture).
   if (surface && surface->edram_wiped) {
-    const bool still = surface->edram_wiped_generation == surface->generation && surface->edram_wiped_writes == surface->writes;
+    bool still = surface->edram_wiped_generation == surface->generation && surface->edram_wiped_writes == surface->writes;
     surface->edram_wiped = false;
+    // blur-nx (2026-11-10, blur_renut_wipe_overwritten, A/B 218): written over through another view since the wipe.
+    if (still && banjo::renut_gpu::WipeOverwrittenOn() && OverlapWrittenSinceLocked(surface, surface->blur_wiped_seq)) {
+      still = false;
+      static u32 logged = 0;
+      if (LogLimited(logged, 4))
+        RGPU_INFO("[renut] resolve of {}x{}: its EDRAM wipe was drawn over through another view since; not applied "
+                  "(blur_renut_wipe_overwritten)", surface->width, surface->height);
+    }
     if (still) {
       Targets wiped;
       wiped.colors[wiped.color_count++] = surface;
@@ -14793,6 +14812,12 @@ void ResolveStateLocked(const u8 *device_state, u32 flags, const ClearRect *sour
               surface->depth ? "depth" : "colour", source_va, surface->width, surface->height, u32(surface->format),
               u32(surface->samples), dest_texture_va, dest_x, dest_y, dest_level, dest_slice, r.x1, r.y1, r.x2, r.y2,
               flags, (flags & 0x100) ? "clear colour after " : "", (flags & 0x200) ? "clear depth after" : "");
+    // blur-nx (2026-11-10): the source header's words (Size, SurfaceInfo, Format, ColorInfo) and the destination's
+    // fetch dwords 1-2 (base and format, size): what the console's resolve goes by.
+    const u32 *dw = dest_format ? reinterpret_cast<const u32 *>(dest_format) : nullptr;
+    RGPU_INFO("[trace]   source words size {:08X} info {:08X} format {:08X} color {:08X}; dest fetch {:08X} {:08X}",
+              surface->size_word, surface->info_word, surface->format_word, surface->color_info_word,
+              dw ? __builtin_bswap32(dw[1]) : 0u, dw ? __builtin_bswap32(dw[2]) : 0u);
   }
   plume::RenderCommandList *cmd = s.command_list;
   static uint32_t depth_logged = 0;
@@ -14908,7 +14933,35 @@ void ResolveStateLocked(const u8 *device_state, u32 flags, const ClearRect *sour
                                           int32_t(host_x) + (rect.right - rect.left),
                                           int32_t(host_y) + (rect.bottom - rect.top));
         const bool multisampled = surface->samples != plume::RenderSampleCount::COUNT_1;
-        if (dest->host_format != surface->format) {
+        // blur-nx (2026-11-10, blur_renut_sample_grid_resolve, A/B 216): a 4x view over a single-sampled target of twice
+        // its pitch, drawn after the view was (its own clears aside): the console's resolve averages each pixel's four
+        // samples, which are that target's 2x2 blocks. Blur's 640x360 half-size scene comes from its 1280x720 post
+        // target this way (the reference's capture: the motion blur's source is that image; here it was black).
+        HostSurface *grid_alias = nullptr;
+        if (multisampled && slice == 0 && z == 0 && dest_level == 0 && host_x == 0 && host_y == 0 && rect.left == 0 &&
+            rect.top == 0 && banjo::renut_gpu::SampleGridResolveOn() &&
+            dest->host_format == surface->format) {
+          grid_alias = SampleGridAliasLocked(surface);
+          if (grid_alias && grid_alias->blur_draw_seq <= surface->blur_draw_seq)
+            grid_alias = nullptr;
+        }
+        uint32_t grid_slot = kInvalidDescriptor;
+        if (grid_alias) {
+          grid_slot = SurfaceSampleSlotLocked(grid_alias);
+          if (grid_slot != kInvalidDescriptor)
+            TransitionSurfaceLocked(grid_alias, plume::RenderTextureLayout::SHADER_READ);
+        }
+        if (grid_alias && grid_slot != kInvalidDescriptor && DrawBoxDownsampleLocked(grid_slot, dest, dest_rect, 2)) {
+          static uint32_t logged = 0;
+          if (logged++ < 4)
+            RGPU_INFO("[renut] resolve of a {}x{} 4x view drawn from the {}x{} target under it, its 2x2 box "
+                      "(blur_renut_sample_grid_resolve)", surface->width, surface->height, grid_alias->width,
+                      grid_alias->height);
+          g_bound.framebuffer = nullptr;
+          g_bound.pipeline = nullptr;
+          g_bound.layout = false;
+          g_bound.viewport_set = false;
+        } else if (dest->host_format != surface->format) {
           // blur-nx (2026-11-10, blur_renut_resolve_keep_dest): a destination kept in another format (ResolveTarget):
           // its part written by a draw that converts.
           if (!(slice == 0 && z == 0 && dest_level == 0 && DrawResolveCopy(surface, dest, rect, host_x, host_y, true))) {

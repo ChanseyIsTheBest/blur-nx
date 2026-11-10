@@ -44,6 +44,13 @@ if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force; Write-Output "stopped pi
 else { Write-Output "Ryujinx exited by itself (code $($p.ExitCode))" }
 Start-Sleep -Seconds 2
 if (Test-Path $logs) { Copy-Item -Recurse $logs (Join-Path $out "logs") -Force }
+# blur-nx (2026-11-10): in Ryujinx the NRO's working folder is the SD's /switch, so the sampler's rex_profile.log (and
+# banjo_profiler.log) land there, in this port's own data folder: moved into the run's folder (the next run starts a new
+# one).
+foreach ($f in @("rex_profile.log", "banjo_profiler.log")) {
+  $pf = Join-Path $data "sdcard\switch\$f"
+  if ((Test-Path $pf) -and (Get-Item $pf).LastWriteTime -ge $started) { Move-Item $pf (Join-Path $out $f) -Force }
+}
 # This run's captures move out of the SD (the SD's folder no longer grows); older ones there are left alone.
 Get-ChildItem $sd -Filter "*.png" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -ge $started } |
     Move-Item -Destination $out -Force

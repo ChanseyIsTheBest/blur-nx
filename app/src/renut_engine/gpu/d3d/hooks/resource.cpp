@@ -724,6 +724,7 @@ void LockSurface(u32 texture, u32 slice, u32 level, u32 flags, u32 &address, u32
                  u32 &slice_bytes, u32 &tail_offset) {
   const Subresource sub = SubresourceLayout(texture, slice, level);
   const u32 dword1 = LoadU32(texture + 0x20);
+  NoteCpuLockOfResolve(texture, level, dword1 & 0x3F);  // blur-nx (2026-11-10, diagnostic)
   u32 block_width, block_height;
   BlockSize(dword1 & 0x3F, block_width, block_height);
   row_pitch = sub.row_pitch * block_height;

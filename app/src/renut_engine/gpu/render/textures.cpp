@@ -830,6 +830,11 @@ void CopyDepthWords(HostTexture &t, HostTexture &source) {
 }
 
 // GetResolveTextureLocked; 'fetch' receives the header's fetch constant.
+// blur-nx (2026-11-10, diagnostic): every texture a resolve wrote, by header VA (width | height << 16), for
+// NoteCpuLockOfResolve; its own mutex, the Lock hooks run on game threads.
+std::mutex g_resolved_mutex;
+std::unordered_map<u32, u32> g_resolved_sizes;
+
 // blur-nx (2026-11-10, blur_renut_resolve_keep_dest): colour formats a converting draw writes and reads exactly.
 bool ConvertibleResolveFormat(plume::RenderFormat f) {
   switch (f) {
@@ -925,6 +930,10 @@ HostTexture *ResolveTarget(u32 texture_va, plume::RenderFormat format, RenderSca
   slot->gpu_written = true;
   slot->uploaded = true;
   slot->used_frame = g_frame;
+  {
+    std::lock_guard resolved_lock(g_resolved_mutex);  // blur-nx (2026-11-10, diagnostic)
+    g_resolved_sizes[texture_va] = slot->width | slot->height << 16;
+  }
   HostTexture *&entry = g_resolve_targets[fetch.BasePage()];
   if (entry != slot.get()) {
     entry = slot.get();
@@ -1830,6 +1839,61 @@ uint32_t Level0Slot(HostTexture &t) {
 HostTexture *ResolveStagingLocked(const HostTexture *dest) {
   ScratchTarget *scratch = GetScratchTarget(dest->host_format, dest->alloc_width, dest->alloc_height);
   return scratch ? &scratch->target : nullptr;
+}
+
+void NoteCpuLockOfResolve(u32 texture_va, u32 level, u32 guest_format) {
+  u32 size = 0;
+  {
+    std::lock_guard resolved_lock(g_resolved_mutex);
+    const auto it = g_resolved_sizes.find(texture_va);
+    if (it == g_resolved_sizes.end())
+      return;
+    size = it->second;
+  }
+  static std::mutex seen_mutex;
+  static std::unordered_map<u32, uint32_t> seen;
+  uint32_t n;
+  {
+    std::lock_guard seen_lock(seen_mutex);
+    n = ++seen[texture_va];
+    if (seen.size() > 64 && n == 1)
+      return;
+  }
+  if (n == 1 || n == 100 || n == 10000)
+    RGPU_WARN("[renut] the CPU locks resolve destination {:08X} ({}x{}, level {}, guest format {}), lock {}: Renut's "
+              "resolves stay on the GPU, so the CPU reads what it wrote there itself (blur-nx diagnostic)", texture_va,
+              size & 0xFFFF, size >> 16, level, guest_format, n);
+}
+
+bool DrawBoxDownsampleLocked(uint32_t source_slot, HostTexture *dest, const plume::RenderRect &dest_rect, uint32_t box) {
+  auto &s = State();
+  plume::RenderCommandList *cmd = Video::CommandListLocked();
+  plume::RenderPipeline *pipeline = dest ? MipPipeline(dest->host_format) : nullptr;
+  if (!cmd || !pipeline || !s.texture_mip_ps || source_slot == kInvalidDescriptor || !dest->texture ||
+      !dest->render_target || dest->dimension != TextureDimension::Tex2D || dest->stacked)
+    return false;
+  if (!dest->copy_framebuffer) {
+    const plume::RenderTexture *targets[] = {dest->texture.get()};
+    dest->copy_framebuffer = s.device->createFramebuffer(plume::RenderFramebufferDesc(targets, 1));
+    if (!dest->copy_framebuffer)
+      return false;
+  }
+  TransitionTextureLocked(dest, plume::RenderTextureLayout::COLOR_WRITE);
+  cmd->setFramebuffer(dest->copy_framebuffer.get());
+  cmd->setGraphicsPipelineLayout(s.utility_layout.get());
+  cmd->setPipeline(pipeline);
+  cmd->setGraphicsDescriptorSet(s.texture_set.get(), 0);
+  cmd->setGraphicsDescriptorSet(s.sampler_set.get(), 1);
+  cmd->setViewports(plume::RenderViewport(0.0f, 0.0f, float(dest->alloc_width), float(dest->alloc_height)));
+  cmd->setScissors(dest_rect);
+  UtilityPush push{};
+  push.scale[0] = push.scale[1] = 1.0f;
+  push.texture_index = source_slot;
+  push.sampler_index = kPointClampSamplerSlot;
+  push.param0 = float(box);
+  cmd->setGraphicsPushConstants(0, &push, 0, sizeof(push));
+  cmd->drawInstanced(3, 1, 0, 0);
+  return true;
 }
 
 HostTexture *ResolveSourceStagingLocked(plume::RenderFormat format, uint32_t width, uint32_t height) {

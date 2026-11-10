@@ -18,6 +18,7 @@
 #include "renut_engine/gpu/guest/guest_memory.h"
 #include "renut_engine/gpu/banjo_renut_tuning.h"  // blur-nx (2026-11-10): OcclusionQueriesOn
 #include "renut_engine/gpu/log.h"
+#include "renut_engine/gpu/render/surfaces.h"  // blur-nx (2026-11-10): NoteSurfaceHeader
 #include <algorithm>
 
 using namespace renut::gpu;
@@ -231,11 +232,13 @@ void D3D_SetSurfaceClip_hook(u32 /*device*/, u32, u32, u32, u32) {}
 
 // void D3DDevice_SetRenderTarget(D3DDevice*, DWORD Index, D3DSurface*) [0x82248BD0]
 void D3DDevice_SetRenderTarget_hook(u32 device, u32 index, u32 surface) {
+  NoteSurfaceHeader(surface);  // blur-nx (2026-11-10, blur_renut_stack_surface_headers)
   native::SetRenderTarget(native::DeviceAt(device), index, surface);
 }
 
 // void D3DDevice_SetDepthStencilSurface(D3DDevice*, D3DSurface*) [0x82248FB0]
 void D3DDevice_SetDepthStencilSurface_hook(u32 device, u32 surface) {
+  NoteSurfaceHeader(surface);  // blur-nx (2026-11-10, blur_renut_stack_surface_headers)
   native::SetDepthStencilSurface(native::DeviceAt(device), surface);
 }
 

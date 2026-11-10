@@ -685,6 +685,33 @@ REXCVAR_DEFINE_BOOL(blur_renut_tile_resolve_staging, true, "Banjo/Renut",
                     "whatever the memory held. The staging is resolved again only when the target was drawn or "
                     "cleared since (a tile's own clear after its resolve does not count). Off: the blit")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(blur_renut_stack_surface_headers, true, "Banjo/Renut",  // blur-nx: on with blur_renut_wipe_overwritten (blur-notes)
+                    "blur-nx (2026-11-10, A/B 215): a render target or depth surface whose header is on the stack (a "
+                    "temporary D3DSurface the game builds for one clear and resolve) keeps the header words as they "
+                    "were when the game bound it: the render thread reads surface headers later, when the stack has "
+                    "been reused (Blur's 640x360 motion-blur source read as an empty 1x1 surface: no motion blur, the "
+                    "frame darkened by the composite). Off: the header read at replay")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(blur_renut_sample_grid_resolve, true, "Banjo/Renut",
+                    "blur-nx (2026-11-10, A/B 216): a 4x multisampled surface over the EDRAM of a single-sampled one of "
+                    "the same format and twice its pitch (the same sample grid: each 2x2 block of the big surface's "
+                    "pixels is one pixel's four samples) resolves as the console does, the 2x2 box of the big surface "
+                    "when that was drawn last. Blur makes its 640x360 half-size scene (the motion blur's and the light "
+                    "trails' source) this way from its 1280x720 post target. Off: the 4x view's own target (black)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(blur_renut_surface_size_guard, true, "Banjo/Renut",
+                    "blur-nx (2026-11-10, A/B 217): a surface header that reads wider or taller than 8192 (no Xbox 360 "
+                    "target is) makes no host target: the header is not one (Blur's temporary surfaces on the stack, "
+                    "read after the stack was reused, came out as 12120x26733 and the like; in Ryujinx each failed "
+                    "allocation set off a memory emergency, and the race was drawn over garbage). Off: Renut tries")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(blur_renut_wipe_overwritten, true, "Banjo/Renut",
+                    "blur-nx (2026-11-10, A/B 218): vivapinata-nx's EDRAM wipe (a clear through another layout, applied "
+                    "at the wiped target's next resolve when nothing wrote it since) is left out when another target "
+                    "over the same EDRAM base was drawn or cleared after the wipe: on the console that write is in the "
+                    "EDRAM the resolve reads. Blur clears its 640x360 view, draws the scene through the 1280x720 one "
+                    "and resolves the 640x360 view: the wipe blackened the frame. Off: as vivapinata-nx wrote it")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(banjo_renut_push_point_only, true, "Banjo/Enhancements",
                     "Renut's renderer (Vulkan): with the constants in uniform buffers, the push constant (the three "
                     "constant addresses) is read only by the point sprites' geometry shader, so only point-list draws "
@@ -1027,6 +1054,10 @@ const char *AbName(int target) {
   case 212: return "a partial resolve keeps a destination of another format and converts (blur_renut_resolve_keep_dest)";
   case 213: return "occlusion queries answered as the reference's GPU does (blur_renut_occlusion_queries)";
   case 214: return "multisampled region resolves through a whole-target staging image (blur_renut_tile_resolve_staging)";
+  case 215: return "stack surface headers kept as bound (blur_renut_stack_surface_headers)";
+  case 216: return "a 4x view of a 1x surface resolves as its 2x2 box (blur_renut_sample_grid_resolve)";
+  case 217: return "no host target for a surface header over 8192 wide or tall (blur_renut_surface_size_guard)";
+  case 218: return "an EDRAM wipe written over through another view is left out (blur_renut_wipe_overwritten)";
   default: {
     // sasrt-nx (2026-11-08): the GPU round's items (sasrt_gpu_round.h: 90 and up).
     const char *name = sasrt::gpu_round::AbName(target);
@@ -1732,6 +1763,26 @@ bool OcclusionQueriesOn() {
 bool TileResolveStagingOn() {
   static const bool on = REXCVAR_GET(blur_renut_tile_resolve_staging);
   return KeyOn<214>(on);
+}
+// blur-nx (2026-11-10): render/surfaces.cpp NoteSurfaceHeader, A/B 215.
+bool StackSurfaceHeadersOn() {
+  static const bool on = REXCVAR_GET(blur_renut_stack_surface_headers);
+  return KeyOn<215>(on);
+}
+// blur-nx (2026-11-10): render/draw.cpp's sample-grid resolve, A/B 216.
+bool SampleGridResolveOn() {
+  static const bool on = REXCVAR_GET(blur_renut_sample_grid_resolve);
+  return KeyOn<216>(on);
+}
+// blur-nx (2026-11-10): render/surfaces.cpp GetHostSurfaceSlow, A/B 217.
+bool SurfaceSizeGuardOn() {
+  static const bool on = REXCVAR_GET(blur_renut_surface_size_guard);
+  return KeyOn<217>(on);
+}
+// blur-nx (2026-11-10): render/draw.cpp ResolveStateLocked's EDRAM wipe, A/B 218.
+bool WipeOverwrittenOn() {
+  static const bool on = REXCVAR_GET(blur_renut_wipe_overwritten);
+  return KeyOn<218>(on);
 }
 bool ScanOutHandOverOn() {
   static const bool on = REXCVAR_GET(banjo_deko3d_scanout_handover);

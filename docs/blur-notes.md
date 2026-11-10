@@ -339,6 +339,41 @@ into its corner from a temporary surface on the stack (0x7010F6B0, cleared, 1x1 
 blurred highlights (the tail lights' spill) add nothing. Where the console puts the scene into that image is not yet
 found: the next thing to look at.
 
+**Found (21:10): the motion-blur source is a temporary surface on the stack.** The resolve trace with the source
+header's words (`diag3`): the surface at 0x7010F6B0 reads size 0, info 0, format 0 at replay, and its "format" even
+changed between runs (2_10_10_10 in one, 8_8_8_8 in the next): Renut's render thread reads a surface's header when it
+replays the frame, by which time the game's function has returned and its stack is reused. When the game bound it, the
+header described the real source of the 640x360 image. `blur_renut_stack_surface_headers` (A/B 215, on): a surface
+bound by SetRenderTarget / SetDepthStencilSurface whose header is on the stack (0x70000000-0x7FFFFFFF) keeps its header
+words as they were then (`render/surfaces.cpp` `NoteSurfaceHeader`; the render thread's `GetHostSurfaceLocked` reads
+the copy). The composite (`ps_b20cdc973266527b`) pulls the scene towards the motion-blur image by a radial edge term
+and the image's alpha, adds the lens image and the bloom squared, then tone-maps through a 3D lookup: with the image
+all zero the frame was darkened towards the edges and had no motion blur. The bloom chain reads the scene copy and a
+256x1 curve the CPU uploads (values up to 15 of 255); the CPU locks only Blur's six 1x1 luminance resolves, which the
+base's readback covers.
+
+**The whole chain, with the reference's own capture (22:00-22:50).** A RenderDoc capture of the reference (renderdoccmd
+on the emulated renderer, `rdc_trigger.py` at the grid) shows the motion blur's colour input is the half-size scene,
+and how the console makes it: the game draws the frame into its 1280x720 single-sampled half-float target (base 0,
+pitch 1280), binds a temporary 640x360 4x half-float surface over the same EDRAM (base 0, pitch 640: the same sample
+grid, each 640x360 pixel's four samples are a 2x2 block of the 1280x720 one) and resolves it: the 4x resolve averages
+the samples, a free 2x downsample. Renut had three things in the way, each now fixed under its own key:
+
+| Key (A/B) | What | Before |
+|---|---|---|
+| `blur_renut_stack_surface_headers` (215, on) | the temporary surface's header is on the stack; the headers of stack surfaces bound as render targets or depth are copied when a clear or resolve is queued and used by the render thread for that operation (`backend/queued.cpp`, `CaptureStackHeaders`); draws use the header as last bound | read at replay, after the stack was reused: an empty 1x1 surface (or, from leftover words, 12120x26733 and the like: in Ryujinx each failed allocation set off a memory emergency, and the races were drawn over garbage) |
+| `blur_renut_sample_grid_resolve` (216, on) | a 4x surface over a single-sampled one of the same format at twice its pitch resolves as the 2x2 box of the big one when that was drawn after the view (`DrawBoxDownsampleLocked`, the mip shader) | the 4x view's own host target, empty |
+| `blur_renut_wipe_overwritten` (218, on) | vivapinata-nx's EDRAM wipe (a clear through another layout, applied at the wiped target's next resolve when it was not written since) is left out when another target over the same EDRAM base was written after the wipe | Blur's own clear of the 640x360 view earlier in the frame was applied at the resolve, over the scene drawn through the 1280x720 view: a black frame |
+| `blur_renut_surface_size_guard` (217, on) | a header over 8192 wide or tall makes no target | the failed allocations above |
+
+With the four: the race draws with its motion blur (the soft screen edges of the reference), the brightness close to
+the reference's (`glow5`: means 55-65 against 67). The tail lights' wide red spill is still to compare at the same
+moment (the reference's car was braking).
+
+**Machine copies: on hold (the user, 21:12: "I'll tell you when", waiting on the SASRT session).** The SASRT
+session's generator patch (copies of functions with guest atomics) is applied to `tools/localize_native.py`; nothing
+runs it until post-codegen runs again.
+
 ## What belonged to Katamari, taken out (`tools/blur_strip_katamari.py`)
 
 rr6-nx's list (pacman-nx's before it): the N&B / NFS:MW / Mass Effect sources no CMake file builds, Katamari's stage
