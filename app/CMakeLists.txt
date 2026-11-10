@@ -636,6 +636,11 @@ endif()
 if(WIN32)
     target_compile_options(renut PRIVATE -gline-tables-only -gcodeview)
     target_link_options(renut PRIVATE "LINKER:/DEBUG:FULL")
+    # blur-nx (2026-11-10): the renderer's objects too, so a render-thread crash names its file and line (the first
+    # ones here named only the nearest public symbol, KeepConstantF4Pending + 0x64DD). Debug info only.
+    if(TARGET banjo_renut_gpu)
+        target_compile_options(banjo_renut_gpu PRIVATE -gline-tables-only -gcodeview)
+    endif()
 endif()
 
 if(REXGLUE_PLATFORM_SWITCH AND BANJO_SWITCH_RENDERER_LINES)

@@ -782,7 +782,7 @@ u32 D3DDevice_BeginCommandBuffer_hook(u32 device_va, u32 command_buffer, u32 fla
     }
     d.SetW(native::off::TilingExtent, extent_x);
     d.SetW(native::off::TilingExtent + 4, extent_y);
-    d.SetW(0x343C, 0);  // katamari-nx: 0x338C->0x337C (blur-nx: 0x337C->0x343C)
+    d.SetW(0x3434, 0);  // katamari-nx: 0x338C->0x337C (blur-nx: 0x337C->0x3434: Blur's BeginTiling 822551E8 stores Flags with `stw r25,13364(r31)`; +168, not pacman-nx's +176, which starts at the clear values 13376)
     d.SetW(0x3260, 2);  // katamari-nx: 0x31B8->0x31A8 (blur-nx: 0x31A8->0x3260)
     if (flags & 0x40) {
       ConfigureForOnePassZPass(d, (flags >> 7) & 1, tile_count, extent_x);
@@ -1188,7 +1188,9 @@ void ReadRamp(u32 ramp_va, u16 (&ramp)[768]) {
 
 // void D3DDevice_SetGammaRamp(D3DDevice*, const D3DGAMMARAMP*) [0x8261FA08]
 // (TU3's build dropped the unused Flags between them)
-void D3DDevice_SetGammaRamp_hook(u32 device_va, u32 ramp_va) {
+// blur-nx (2026-11-10): XDK 2.0.11164's form, (device, flags, ramp): Blur's SetGammaRamp 8223FBB0 and SetPWLGamma
+// 8223FC80 start `mr r31,r3; mr r4,r5` (the table in r5), as guwange-nx's, worldkeflings-nx's and pacman-nx's note say.
+void D3DDevice_SetGammaRamp_hook(u32 device_va, u32 /*flags*/, u32 ramp_va) {
   native::Device d = native::DeviceAt(device_va);
   if (!d || !ramp_va)
     return;
@@ -1199,7 +1201,7 @@ void D3DDevice_SetGammaRamp_hook(u32 device_va, u32 ramp_va) {
 
 // void D3DDevice_SetPWLGamma(D3DDevice*, const D3DPWLGAMMA*) [0x8261FAD0]
 // (TU3's build dropped the unused Flags between them)
-void D3DDevice_SetPWLGamma_hook(u32 device_va, u32 pwl_va) {
+void D3DDevice_SetPWLGamma_hook(u32 device_va, u32 /*flags*/, u32 pwl_va) {
   native::Device d = native::DeviceAt(device_va);
   if (!d || !pwl_va)
     return;
@@ -1307,6 +1309,21 @@ BANJO_RENUT_HOOK(sub_82254790, D3DDevice_Swap_hook);  // D3DDevice_Swap  // kata
 BANJO_RENUT_UNHOOKED_HOOK_SHARED(sub_82640818, D3DDevice_BeginCommandBuffer_hook);  // D3DDevice_BeginCommandBuffer  // katamari-nx: not hooked (D3DDevice_BeginCommandBuffer: no clear counterpart (sig 0.27); census first)
 BANJO_RENUT_UNHOOKED_HOOK(sub_82640DE8, D3DDevice_EndCommandBuffer_hook);  // D3DDevice_EndCommandBuffer  // katamari-nx: not hooked (D3DDevice_EndCommandBuffer: no clear counterpart (sig 0.49/0.48))
 BANJO_RENUT_UNHOOKED_HOOK_SHARED(sub_821F1A78, D3DDevice_RunCommandBuffer_hook);  // D3DDevice_RunCommandBuffer  // katamari-nx: not hooked (D3DDevice_RunCommandBuffer: no clear counterpart (sig 0.50/0.48))
+// blur-nx (2026-11-10): Blur records Direct3D command buffers (Katamari's XDK linked none). Its four functions, matched
+// with N&B's (title update 3, whose forms these hooks were written for) over Blur's Direct3D range by shape:
+// BeginCommandBuffer 8224A918 (0.82; the next 0.23), EndCommandBuffer 8224AE70 (0.99), RunCommandBuffer 8224B248 (0.97),
+// SetCommandBufferPredication 8224A310 (1.00; SetPredication 82255078 0.90 is hooked on its own). The buffer object's
+// fields are N&B's (322 displacements of the four pairs the same; every one that differs is a device word, moved as
+// the zones say). End, Run and the predication keep N&B's arguments; Begin has the first release's unused pPersistTags
+// before pTilingRects (r3-r9, N&B's r3-r8), which TU3 dropped. Unhooked, D3D's RunCommandBuffer walked a buffer recorded
+// on Renut's device and read guest 0x00100000 (renut10).
+u32 D3DDevice_BeginCommandBuffer11164_hook(u32 device_va, u32 command_buffer, u32 flags, u32 inherit_tags,
+                                          u32 /*persist_tags*/, u32 tiling_rects, u32 tile_count) {
+  return D3DDevice_BeginCommandBuffer_hook(device_va, command_buffer, flags, inherit_tags, tiling_rects, tile_count);
+}
+BANJO_RENUT_HOOK(sub_8224A918, D3DDevice_BeginCommandBuffer11164_hook);  // D3DDevice_BeginCommandBuffer (XDK 11164 form)
+BANJO_RENUT_HOOK(sub_8224AE70, D3DDevice_EndCommandBuffer_hook);  // D3DDevice_EndCommandBuffer
+BANJO_RENUT_HOOK(sub_8224B248, D3DDevice_RunCommandBuffer_hook);  // D3DDevice_RunCommandBuffer
 BANJO_RENUT_HOOK(sub_82248A20, BlockOnFence_hook);  // D3D_CDevice_BlockOnFence  // katamari-nx: N&B sub_8225D370, D3D_CDevice_BlockOnFence: sig 0.55/0.32  // blur-nx: Katamari sub_824DFC48, guwange-nx D3D_CDevice_BlockOnFence 822698A8, exact (51 instructions); agrees: 1
 BANJO_RENUT_HOOK(sub_82247AD0, CBlocker_Check_hook);  // D3D_CBlocker_Check  // katamari-nx: N&B sub_82634740, D3D_CBlocker_Check: sig 0.66/0.26  // blur-nx: Katamari sub_824D0290, guwange-nx D3D_CBlocker_Check 82258BF0, exact (54 instructions); agrees: 1
 BANJO_RENUT_HOOK(sub_82249B68, IsFencePending_hook);  // D3DDevice_IsFencePending  // katamari-nx: N&B sub_8225D468, D3DDevice_IsFencePending: sig 0.71/0.47  // blur-nx: Katamari sub_824E03D0, guwange-nx D3DDevice_IsFencePending 8226A7E8, exact (36 instructions); agrees: 1

@@ -8597,7 +8597,7 @@ VertexDeclarationRecord &NoDeclaration() {
 // Its D3DVERTEXELEMENT9s (12 bytes each, ended by D3DDECL_END) are at +52 of the declaration, inside the device
 // snapshot, so a draw reads them from its own snapshot; at most 15 before the device's next field (+0x3088). One record
 // per distinct element list; each new list is logged once with its elements, to check the layout.
-constexpr u32 kDeviceDeclarationOffset = 0x2F98;
+constexpr u32 kDeviceDeclarationOffset = 0x3050;  // blur-nx: 0x2F98->0x3050 (Blur's InitializeApiState 0x822534B8 `stw r11,12368(r31)`: the render-state block's +184; draws were dropped on it)
 constexpr u32 kDeclarationElementsOffset = 52;
 constexpr u32 kDeviceDeclarationMaxElements = 15;
 

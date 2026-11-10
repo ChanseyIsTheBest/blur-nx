@@ -695,7 +695,9 @@ u32 LockResource(u32 resource, u32 mip_lock, u32 base_address, u32 mip_address, 
 // The lock (sub_82625A48) as N&B's code calls it: (resource, blocker type,
 // mip lock, base, mip, address, size, flags, cache flags). TU3's build
 // dropped the first release's unused second argument (always 0).
-u32 LockResource_hook(u32 resource, u32 /*type*/, u32 mip_lock, u32 base_address, u32 mip_address,
+// blur-nx (2026-11-10): XDK 2.0.11164 has the first release's unused second argument, as pacman-nx's XDK 21250 (its
+// LockSurface 82241C48 passes the blocker type 14 in r5, where Katamari's passes it in r4).
+u32 LockResource_hook(u32 resource, u32 /*unused*/, u32 /*type*/, u32 mip_lock, u32 base_address, u32 mip_address,
                       u32 address, u32 size, u32 flags, u32 /*cache_flags*/) {
   return LockResource(resource, mip_lock, base_address, mip_address, address, size, flags);
 }
@@ -732,7 +734,9 @@ void LockSurface(u32 texture, u32 slice, u32 level, u32 flags, u32 &address, u32
             sub.tail_offset;
 }
 
-void D3D_LockSurface_hook(u32 texture, u32 slice, u32 level, u32 flags, mapped_u32 address,
+// blur-nx (2026-11-10): XDK 2.0.11164's form, with the unused second argument (Lock2DSurface 82241D20 passes its
+// out-pointers one register later than Katamari's, the last on the stack; pacman-nx's form at 21250).
+void D3D_LockSurface_hook(u32 texture, u32 /*unused*/, u32 slice, u32 level, u32 flags, mapped_u32 address,
                           mapped_u32 row_pitch, mapped_u32 slice_bytes, mapped_u32 tail_offset) {
   u32 a, p, s, t;
   LockSurface(texture, slice, level, flags, a, p, s, t);
@@ -748,7 +752,11 @@ void D3D_LockSurface_hook(u32 texture, u32 slice, u32 level, u32 flags, mapped_u
 
 // D3D::Lock2DSurface(D3DBaseTexture*, ArrayIndex, Level, D3DLOCKED_RECT*,
 //     const RECT*, DWORD Flags) [0x82626EB0] (TU3: no unused 0 second argument)
-void D3D_Lock2DSurface_hook(u32 texture, u32 slice, u32 level, mapped_u32 locked_rect,
+// blur-nx (2026-11-10): XDK 2.0.11164's form, with the unused second argument: Blur's three thunks into it
+// (LineTexture_LockRect 82242630, Surface_LockRect 82242940, the array texture's 82242550) all pass `li r4,0` and
+// the rest one register later. In Katamari's form the hook wrote the locked rect through the wrong argument, and the
+// game cleared rows at a pBits of 0x00100000 (renut5).
+void D3D_Lock2DSurface_hook(u32 texture, u32 /*unused*/, u32 slice, u32 level, mapped_u32 locked_rect,
                             mapped_u32 rect, u32 flags) {
   u32 address, row_pitch, slice_bytes, tail_offset;
   LockSurface(texture, slice, level, flags, address, row_pitch, slice_bytes, tail_offset);
@@ -782,16 +790,16 @@ void D3D_Lock3DSurface_hook(u32 texture, u32 level, mapped_u32 locked_box, mappe
 // The lock entry points, which only pick the texture, slice and level.
 void D3DArrayTexture_LockRect_hook(u32 texture, u32 slice, u32 level, mapped_u32 locked_rect,
                                    mapped_u32 rect, u32 flags) {  // 0x8263E958
-  D3D_Lock2DSurface_hook(texture, slice, level, locked_rect, rect, flags);
+  D3D_Lock2DSurface_hook(texture, 0, slice, level, locked_rect, rect, flags);
 }
 void D3DLineTexture_LockRect_hook(u32 texture, u32 level, mapped_u32 locked_rect, mapped_u32 rect,
                                   u32 flags) {  // 0x8263EA50
-  D3D_Lock2DSurface_hook(texture, 0, level, locked_rect, rect, flags);
+  D3D_Lock2DSurface_hook(texture, 0, 0, level, locked_rect, rect, flags);
 }
 void D3DSurface_LockRect_hook(u32 surface, mapped_u32 locked_rect, mapped_u32 rect,
                               u32 flags) {  // 0x8263ECF0: a texture level's surface
   const u32 info = LoadU32(surface + 0x1C);
-  D3D_Lock2DSurface_hook(LoadU32(surface + 0x18), native::Extract(info, 22, 6), info >> 28,
+  D3D_Lock2DSurface_hook(LoadU32(surface + 0x18), 0, native::Extract(info, 22, 6), info >> 28,
                          locked_rect, rect, flags);
 }
 void D3DVolume_LockBox_hook(u32 volume, mapped_u32 locked_box, mapped_u32 box,

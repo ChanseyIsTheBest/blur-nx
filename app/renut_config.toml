@@ -31,9 +31,37 @@ fp_copy_forwarding = true
 div_inline = true
 fp_moves_modeless = true
 
-# The register diet (non_volatile_as_local, non_argument_as_local, elide_lr_stores) needs this game's own audit
-# (tools/read_before_write.py, tools/non_argument_audit.py on code generated WITH the options): added once the first
-# codegen is clean (docs/blur-notes.md, "Code generation").
+# The register diet (2026-11-10, the base's keys): r14-r31, f14-f31, v14-v31 as C++ locals (non_volatile_as_local),
+# r0/r2/r11/r12/f0/v32-v63 as locals (non_argument_as_local), and no lr store where nothing reads it. Audited for Blur:
+#   - non_argument_as_local: tools/non_argument_audit.py --noreturn=8295BC10 (longjmp) on code generated WITHOUT the
+#     option (out/nonarg1.log): ENTRY 318 lines (nearly all MSVC exception funclets reading their parent's frame in r12),
+#     RET 30, HANDOVER 0; tools/diet_keep_list.py makes the keep list below (100 ENTRY and 45 RET functions);
+#   - non_volatile_as_local: tools/read_before_write.py on code generated WITH the options (docs/blur-notes.md);
+#   - v64-v127 kept in the context (katamari-nx's rc3: a movie decoder loads constant vectors into v64-v72 in one
+#     helper and reads them in others; Blur's Bink decoder is the same kind of code).
+non_volatile_as_local = true
+non_volatile_as_local_keep = ["v64-v127"]
+elide_lr_stores = true
+non_argument_as_local = true
+non_argument_as_local_keep = [
+    0x82171948, 0x82225380, 0x82227B78, 0x82233688, 0x8223C410, 0x8223C438, 0x8223C704, 0x8223C72C,
+    0x8223CFC8, 0x8223CFE8, 0x8225FD20, 0x8225FD58, 0x82266650, 0x822668B8, 0x822862A0, 0x8235A140,
+    0x8235A8F0, 0x8235AB60, 0x8235B258, 0x8235B400, 0x8235B840, 0x82363E50, 0x82365930, 0x82367360,
+    0x82367948, 0x82369A00, 0x82369BB0, 0x8238E0C0, 0x8238E888, 0x8241EC48, 0x8241ED38, 0x8241F080,
+    0x8241FA58, 0x825475D0, 0x8255BFC0, 0x8255E018, 0x825D1578, 0x825D61C0, 0x825D7C78, 0x825DA9D0,
+    0x825E6798, 0x825EFC60, 0x826070C8, 0x8260BCF8, 0x8260C240, 0x8260CF20, 0x8260E788, 0x826378A8,
+    0x82637D00, 0x82639168, 0x82643DB8, 0x82656A78, 0x82664340, 0x82664AC0, 0x826653E0, 0x82665810,
+    0x8266AFC0, 0x8266E6B0, 0x8266FC48, 0x8269A1D8, 0x826D1928, 0x8270A448, 0x8270A4B8, 0x8271F4A0,
+    0x82766118, 0x82766480, 0x82766510, 0x8278E658, 0x8278EE28, 0x827D1C88, 0x827E1508, 0x8286F850,
+    0x8286F978, 0x8286F9E8, 0x828905C8, 0x828D9CC8, 0x828E0F28, 0x82952AF4, 0x82952E1C, 0x82952E44,
+    0x82952F74, 0x82954F04, 0x829571E4, 0x82957204, 0x8295A9E4, 0x8295AA04, 0x8295AC34, 0x8295AC54,
+    0x8295AEB4, 0x8295AED4, 0x8295B01C, 0x8295B03C, 0x8295B19C, 0x8295B374, 0x8295B394, 0x8295B8F8,
+    0x8295C560, 0x8295C58C, 0x8295C8FC, 0x8295C91C, 0x8295CAC4, 0x8295CAE4, 0x8295D544, 0x8295D898,
+    0x82967390, 0x829673B0, 0x82969AD0, 0x82969AF0, 0x82969D58, 0x82969D78, 0x8296A894, 0x8296A8B4,
+    0x8296AA10, 0x8296AA30, 0x8296AC4C, 0x8296AC6C, 0x8296B278, 0x8296C368, 0x8296C388, 0x8296EFE0,
+    0x8296F0A8, 0x8296F994, 0x8296F9B4, 0x82A6DE7C, 0x82A6DE9C, 0x82A6E104, 0x82A6E124, 0x82A6E2E0,
+    0x82A6E300, 0x82A6E440, 0x82A6E46C,
+]
 
 # setjmp / longjmp (peggle2-nx's method, by shape; tools/ppc_dis.py on out/renut_image.bin, the patched image): setjmp
 # 0x8295B940 checks a hook word (`lis r4,0x82E10000; lwz r0,-26492(r4); bnectr`) and then saves f14-f31 into the

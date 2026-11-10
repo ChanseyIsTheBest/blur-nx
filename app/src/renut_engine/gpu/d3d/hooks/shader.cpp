@@ -794,11 +794,61 @@ void D3DVertexShader_Bind_hook(u32 shader_va, u32 declaration_va, mapped_u32 str
   render_thread::Queue([binding] { ApplyBindingLocked(binding); });
 }
 
+// blur-nx (2026-11-10): XDK 2.0.11164's D3DVertexShader_Bind keeps the first release's Flags and adds
+// a fifth argument (guwange-nx and worldkeflings-nx call it an index): (pShader r3, Flags r4, pDecl r5,
+// pStreamStrides r6, r7) [sub_82251090]. Renut's records hold the declaration and strides; nothing else is needed.
+// Without the hook Blur's own Bind ran on Renut's declaration record and walked a garbage element count off the stack.
+void D3DVertexShader_Bind11164_hook(u32 shader_va, u32 flags, u32 declaration_va, mapped_u32 stream_strides) {
+  (void)flags;
+  D3DVertexShader_Bind_hook(shader_va, declaration_va, stream_strides);
+}
+
+// blur-nx (2026-11-10): void D3DVertexDeclaration_GetDeclaration(D3DVertexDeclaration*, D3DVERTEXELEMENT9 *pElement,
+//     UINT *pNumElements) [sub_82244C50]. Blur's reads D3D's own declaration (the element count at +24, the elements at
+// +52), then: *pNumElements = count + 1; the min(count, *pNumElements as given) elements copied; D3DDECL_END (the
+// 12 bytes at 0x82020F7C) after them when there is room. Renut's declarations are records of its own, so the game read
+// a garbage count and walked its 12-byte loop off its own stack (renut6-9: a host access violation in sub_8232FB08,
+// about 20 s in, as the showroom loads). Answered here from the record, the same way.
+void D3DVertexDeclaration_GetDeclaration_hook(u32 declaration_va, u32 elements_va, mapped_u32 count_ptr) {
+  const auto *declaration =
+      FindRecord<VertexDeclarationRecord>(declaration_va, RecordKind::VertexDeclaration);
+  if (!declaration || !count_ptr)
+    return;
+  const u32 count = u32(declaration->elements.size());
+  const u32 room = u32(*count_ptr);
+  *count_ptr = count + 1;
+  if (!elements_va)
+    return;
+  auto *out = GuestPtr<GuestVertexElement>(elements_va);
+  if (!out)
+    return;
+  const u32 copied = count < room ? count : room;
+  for (u32 i = 0; i < copied; ++i)
+    out[i] = declaration->elements[i];
+  if (room > count) {
+    GuestVertexElement end{};
+    end.Stream = 0xFF;
+    end.Type = 0xFFFFFFFFu;  // D3DDECL_END, as Blur's constant at 0x82020F7C (00FF 0000 FFFFFFFF 00000000)
+    out[count] = end;
+  }
+}
+
 } // namespace
 
 BANJO_RENUT_HOOK(sub_82245118, D3DDevice_CreateVertexShader_hook);  // D3DDevice_CreateVertexShader  // katamari-nx: N&B sub_826377C0, signature 0.85 (next 0.55)  // blur-nx: Katamari sub_824D6120, guwange-nx D3DDevice_CreateVertexShader 8225FA88, exact (60 instructions); agrees: 1
 BANJO_RENUT_UNHOOKED_HOOK(sub_824D6010, D3DDevice_CreatePixelShader_hook);  // D3DDevice_CreatePixelShader  // katamari-nx: N&B sub_826375D8, D3DDevice_CreatePixelShader: CreateVertexShader takes sub_824D6120 (0.85); this one's next best, 0.66  // blur-nx: not hooked (hand: D3DDevice_CreatePixelShader: not linked: CreateVertexShader 82245118 counts in the word at 0x82C82B60, and nothing loads the word before it (guw)
 BANJO_RENUT_HOOK(sub_82244BD0, D3DDevice_CreateVertexDeclaration_hook);  // D3DDevice_CreateVertexDeclaration  // katamari-nx: N&B sub_826379A0, signature 0.77 (next 0.47)  // blur-nx: Katamari sub_824D4C50, guwange-nx D3DDevice_CreateVertexDeclaration 8225E340, exact (32 instructions); agrees: 1
 BANJO_RENUT_UNHOOKED_HOOK(sub_8263FBD0, D3DVertexShader_Bind_hook);  // D3DVertexShader_Bind  // katamari-nx: not hooked (D3DVertexShader_Bind: no clear counterpart (sig 0.35/0.28))
+// blur-nx (2026-11-10): Blur's D3DVertexShader_Bind is sub_82251090: the closest function of its Direct3D range to N&B's
+// sub_8263FBD0 (0.56, the next 0.31); its callers (game code sub_8232ECE8, sub_8232FF60) pass a vertex shader, 0, a
+// declaration made from a 0xFF-ended element list (sub_823310E0), a stride array and a pixel shader. The first Renut
+// run crashed in it (a read past the stack's end: Renut's declaration record read as D3D's).
+BANJO_RENUT_HOOK(sub_82251090, D3DVertexShader_Bind11164_hook);  // D3DVertexShader_Bind (XDK 11164 form)
+// blur-nx (2026-11-10): D3DVertexDeclaration_GetDeclaration (sub_82244C50: called by game code sub_8232FB08 with
+// (declaration, a 256-element stack array, &256); it reads +24 and +52 of D3D's declaration and appends 0x82020F7C).
+BANJO_RENUT_HOOK(sub_82244C50, D3DVertexDeclaration_GetDeclaration_hook);  // D3DVertexDeclaration_GetDeclaration
 BANJO_RENUT_HOOK(sub_82245020, XGRegisterVertexShader_hook);  // XGRegisterVertexShader  // katamari-nx: N&B sub_826376C8, signature 0.91 (next 0.32)  // blur-nx: Katamari sub_824D4838, guwange-nx XGRegisterVertexShader 8225F990, exact (62 instructions); agrees: 1
-BANJO_RENUT_UNHOOKED_HOOK(sub_826375A0, XGRegisterPixelShader_hook);  // XGRegisterPixelShader  // katamari-nx: not hooked (XGRegisterPixelShader: no counterpart (sig 0.26))
+// blur-nx (2026-11-10): Blur links XGRegisterPixelShader (sub_82244630: guwange-nx's and worldkeflings-nx's exact
+// shape; 40 bytes zeroed, Common 7, one reference, BaseFlush 0xFFFF0000, the physical part at +24: this hook's own
+// writes) and makes its pixel shaders through it, not CreatePixelShader (not linked); called by game code sub_8234FEA0.
+BANJO_RENUT_HOOK(sub_82244630, XGRegisterPixelShader_hook);  // XGRegisterPixelShader  // katamari-nx: not hooked (XGRegisterPixelShader: no counterpart (sig 0.26))

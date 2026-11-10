@@ -2,3 +2,307 @@
 # tools/runtime_gap_resolver.py) and jump tables (tools/switch_check.py), each with its evidence.
 
 [functions]
+
+# Code pointers into unclaimed gaps, stored in data (vtables, callback tables) or built in code (lis/addi:
+# callbacks passed at run time), accepted by tools/pointer_fixpoint.py pass 1: the scratch listing fits
+# in the gap (or continues only into a registered function it branches to: "then the registered tail"),
+# ends in a terminator and reads no register that is undefined at a function entry. The comment says
+# where the pointer is stored ("pointer at") or built ("built at", inside the code range).
+"0x821D4AF0" = { }  # 13 instructions, pointer at 0x82094964
+"0x821DFAA8" = { }  # 2 instructions, pointer at 0x82018940 (+2 more)
+# "0x8223CF94" removed (tools/override_labels_check.py, 2026-11-10): SEH scope label (`mr r8,r8`), the word before runs into it, branched to by 8223C8AC/CF64/CF6C.  # 4 instructions, pointer at 0x82104220
+"0x822AB398" = { }  # 2 instructions, pointer at 0x82029B4C
+"0x822D6DC0" = { }  # 4 instructions, pointer at 0x8202DFA8
+"0x822ECF08" = { }  # 1 instructions, pointer at 0x8202E9D0
+"0x822ED6F8" = { }  # 1 instructions, pointer at 0x8202EA30
+"0x822FD2C0" = { }  # 1 instructions, pointer at 0x8202D5D8
+"0x8230D118" = { }  # 2 instructions, pointer at 0x8202F2E8
+"0x8233BD60" = { }  # 2 instructions, pointer at 0x82032218 (+8 more)
+"0x823CB1D8" = { }  # 2 instructions, pointer at 0x8203B064
+"0x8241D180" = { }  # 2 instructions, pointer at 0x8203F6D4 (+1 more)
+"0x824EFB30" = { }  # 1 instructions, pointer at 0x8204DE50
+"0x824EFB78" = { }  # 1 instructions, pointer at 0x8204DE9C
+"0x82574C90" = { }  # 3 instructions, pointer at 0x82000DB8 (+59 more)
+"0x82574E48" = { }  # 4 instructions, pointer at 0x82051434
+"0x82574E58" = { }  # 4 instructions, pointer at 0x82051438
+"0x82611BB0" = { }  # 3 instructions, pointer at 0x8205B9E0 (+2 more)
+"0x82613F48" = { }  # 2 instructions, pointer at 0x8205BDBC
+# "0x8270FEAC" removed (2026-11-10): a jump table's base, not a function (`lis r12,0x8271; addi r12,r12,-340; lwzx r0,r12,r0; mtctr; bctr` at 0x8270FE94-A8; its words are case addresses 0x8270FF40, 0x8270FF50 ...); tools/read_before_write.py showed it reading r16 at entry.  # 29 instructions, built at 0x8270FE9C
+"0x82978598" = { }  # 2 instructions, pointer at 0x820A3CAC
+"0x8297F3E0" = { }  # 2 instructions, pointer at 0x820A3DAC
+"0x8297F3F0" = { }  # 2 instructions, pointer at 0x820A3DA8 (+4 more)
+"0x8297F3F8" = { }  # 2 instructions, pointer at 0x820A3D80 (+4 more)
+"0x8297F400" = { }  # 2 instructions, pointer at 0x820A3D7C (+4 more)
+"0x8297F408" = { }  # 2 instructions, pointer at 0x820A3DA0 (+4 more)
+"0x8297F410" = { }  # 2 instructions, pointer at 0x820A3D60 (+2 more)
+"0x82985440" = { }  # 2 instructions, pointer at 0x820A3DA4 (+4 more)
+"0x82985448" = { }  # 2 instructions, pointer at 0x820A3D88 (+4 more)
+"0x82985450" = { }  # 2 instructions, pointer at 0x820A3D84 (+4 more)
+"0x82985458" = { }  # 2 instructions, pointer at 0x820A40F4
+"0x82985468" = { }  # 2 instructions, pointer at 0x820A40E0 (+1 more)
+"0x82985470" = { }  # 2 instructions, pointer at 0x820A40A8 (+1 more)
+"0x82985478" = { }  # 2 instructions, pointer at 0x820A3D78 (+4 more)
+"0x82985480" = { }  # 2 instructions, pointer at 0x820A3D74 (+4 more)
+"0x82985700" = { }  # 2 instructions, pointer at 0x820A4164
+"0x82985710" = { }  # 2 instructions, pointer at 0x820A40D8 (+1 more)
+"0x82985718" = { }  # 2 instructions, pointer at 0x820A3D70 (+4 more)
+"0x82985CF0" = { }  # 6 instructions, pointer at 0x820A4284
+"0x82986828" = { }  # 2 instructions, pointer at 0x820A421C
+"0x829874B0" = { }  # 2 instructions, pointer at 0x820A42AC
+"0x829874B8" = { }  # 2 instructions, pointer at 0x820A42BC
+"0x8298A228" = { }  # 11 in the gap, then the registered tail sub_8298A254, pointer at 0x820A4474
+"0x82999248" = { }  # 2 instructions, pointer at 0x820A8270 (+1 more)
+"0x82A05530" = { }  # 4 instructions, built at 0x82A06654
+"0x82A05540" = { }  # 29 instructions, built at 0x82A06660
+
+# Complete functions in unclaimed gaps without a pointer the pointer sweep sees (tools/gap_sweep.py pass 1): the scratch listing fits in the gap (or continues only into a registered tail it branches
+# to), ends in a terminator, reads no register that is undefined at a function entry. First case:
+# 0x82689770, the first PC boot's "Call to invalid or unregistered function".
+"0x82175288" = { }  # 1 instructions, gap sweep
+"0x8217CED0" = { }  # 1 instructions, gap sweep
+"0x821DEF10" = { }  # 1 instructions, gap sweep
+"0x821DF0B0" = { }  # 1 instructions, gap sweep
+"0x821DF108" = { }  # 1 instructions, gap sweep
+"0x821DF130" = { }  # 1 instructions, gap sweep
+"0x821DF200" = { }  # 1 instructions, gap sweep
+"0x821DF258" = { }  # 1 instructions, gap sweep
+"0x821DF280" = { }  # 1 instructions, gap sweep
+"0x821DF3A8" = { }  # 1 instructions, gap sweep
+"0x821DF400" = { }  # 1 instructions, gap sweep
+"0x821DF428" = { }  # 1 instructions, gap sweep
+"0x821DF7D8" = { }  # 2 instructions, gap sweep
+"0x821E3454" = { }  # 1 instructions, gap sweep
+"0x821E4CA0" = { }  # 1 instructions, gap sweep
+"0x821E4DB4" = { }  # 1 instructions, gap sweep
+"0x821E56D8" = { }  # 1 instructions, gap sweep
+"0x821F1168" = { }  # 16 instructions, gap sweep
+"0x821F71EC" = { }  # 1 instructions, gap sweep
+"0x821F72D4" = { }  # 1 instructions, gap sweep
+"0x8220A30C" = { }  # 1 instructions, gap sweep
+"0x8220DDD0" = { }  # 1 instructions, gap sweep
+"0x8225E8AC" = { }  # 1 instructions, gap sweep
+"0x822750D8" = { }  # 1 instructions, gap sweep
+"0x8227BCDC" = { }  # 1 instructions, gap sweep
+"0x82295AA4" = { }  # 1 instructions, gap sweep
+"0x8229FCB8" = { }  # 5 instructions, gap sweep
+"0x8229FCF4" = { }  # 1 instructions, gap sweep
+"0x822A8CB8" = { }  # 1 instructions, gap sweep
+"0x822B9208" = { }  # 8 instructions, gap sweep
+"0x822B9228" = { }  # 1 instructions, gap sweep
+"0x822BCE50" = { }  # 1 instructions, gap sweep
+"0x822CAACC" = { }  # 1 instructions, gap sweep
+"0x822D6E38" = { }  # 1 instructions, gap sweep
+"0x822D6E58" = { }  # 1 instructions, gap sweep
+"0x822E1AE4" = { }  # 1 instructions, gap sweep
+"0x822E1B30" = { }  # 1 instructions, gap sweep
+"0x822EA850" = { }  # 1 instructions, gap sweep
+"0x822EB71C" = { }  # 1 instructions, gap sweep
+"0x822F279C" = { }  # 1 instructions, gap sweep
+"0x822F2924" = { }  # 1 instructions, gap sweep
+"0x822F31CC" = { }  # 1 instructions, gap sweep
+"0x822F6814" = { }  # 1 instructions, gap sweep
+"0x822F6EE4" = { }  # 1 instructions, gap sweep
+"0x822F7F9C" = { }  # 1 instructions, gap sweep
+"0x822FC38C" = { }  # 1 instructions, gap sweep
+"0x822FC4EC" = { }  # 1 instructions, gap sweep
+"0x822FC6A4" = { }  # 1 instructions, gap sweep
+"0x822FC81C" = { }  # 1 instructions, gap sweep
+"0x822FC99C" = { }  # 1 instructions, gap sweep
+"0x822FCB4C" = { }  # 1 instructions, gap sweep
+"0x822FCED4" = { }  # 1 instructions, gap sweep
+"0x822FCFE4" = { }  # 1 instructions, gap sweep
+"0x822FD16C" = { }  # 1 instructions, gap sweep
+"0x822FD384" = { }  # 1 instructions, gap sweep
+"0x822FD804" = { }  # 1 instructions, gap sweep
+"0x822FDA74" = { }  # 1 instructions, gap sweep
+"0x822FDB6C" = { }  # 1 instructions, gap sweep
+"0x822FDBFC" = { }  # 1 instructions, gap sweep
+"0x822FDE04" = { }  # 1 instructions, gap sweep
+"0x822FE00C" = { }  # 1 instructions, gap sweep
+"0x822FE34C" = { }  # 1 instructions, gap sweep
+"0x822FE54C" = { }  # 1 instructions, gap sweep
+"0x822FE6AC" = { }  # 1 instructions, gap sweep
+"0x822FF8D4" = { }  # 1 instructions, gap sweep
+"0x822FFA54" = { }  # 1 instructions, gap sweep
+"0x822FFC6C" = { }  # 1 instructions, gap sweep
+"0x822FFE74" = { }  # 1 instructions, gap sweep
+"0x823017BC" = { }  # 1 instructions, gap sweep
+"0x82302284" = { }  # 1 instructions, gap sweep
+"0x82303D74" = { }  # 1 instructions, gap sweep
+"0x82304414" = { }  # 1 instructions, gap sweep
+"0x823045AC" = { }  # 1 instructions, gap sweep
+"0x82305C00" = { }  # 1 instructions, gap sweep
+"0x82308570" = { }  # 1 instructions, gap sweep
+"0x82308E74" = { }  # 1 instructions, gap sweep
+"0x8230FA88" = { }  # 1 instructions, gap sweep
+"0x82310378" = { }  # 1 instructions, gap sweep
+"0x823190F4" = { }  # 1 instructions, gap sweep
+"0x8231915C" = { }  # 1 instructions, gap sweep
+"0x82319D08" = { }  # 1 instructions, gap sweep
+"0x8231DFE8" = { }  # 1 instructions, gap sweep
+"0x823552B0" = { }  # 1 instructions, gap sweep
+"0x823630B4" = { }  # 1 instructions, gap sweep
+"0x82372E44" = { }  # 1 instructions, gap sweep
+"0x82372E58" = { }  # 1 instructions, gap sweep
+"0x823C1A78" = { }  # 4 instructions, gap sweep
+"0x823FB4A0" = { }  # 4 instructions, gap sweep
+"0x82435AD8" = { }  # 1 instructions, gap sweep
+"0x82449A90" = { }  # 28 in the gap, then the registered tail sub_82449B00, gap sweep
+"0x82462A88" = { }  # 1 instructions, gap sweep
+"0x8246E2B0" = { }  # 1 instructions, gap sweep
+"0x8248697C" = { }  # 1 instructions, gap sweep
+"0x8249968C" = { }  # 1 instructions, gap sweep
+"0x824B20E4" = { }  # 1 instructions, gap sweep
+# "0x824B4638" removed (tools/override_labels_check.py, 2026-11-10): the word before is a bl (4850EC7D): the call's return point.  # 4 instructions, gap sweep
+"0x824CBC48" = { }  # 1 instructions, gap sweep
+"0x824D039C" = { }  # 1 instructions, gap sweep
+"0x824E8F10" = { }  # 1 instructions, gap sweep
+"0x824E8F58" = { }  # 1 instructions, gap sweep
+"0x824E9370" = { }  # 1 instructions, gap sweep
+"0x824E93B8" = { }  # 1 instructions, gap sweep
+"0x825358E0" = { }  # 2 instructions, gap sweep
+"0x8255CC50" = { }  # 1 instructions, gap sweep
+"0x8255CCC0" = { }  # 1 instructions, gap sweep
+"0x8255CDA0" = { }  # 1 instructions, gap sweep
+"0x8255CDE8" = { }  # 1 instructions, gap sweep
+"0x8255CE30" = { }  # 1 instructions, gap sweep
+"0x8255CE64" = { }  # 1 instructions, gap sweep
+"0x8255E3AC" = { }  # 1 instructions, gap sweep
+"0x8255E404" = { }  # 1 instructions, gap sweep
+"0x8255E45C" = { }  # 1 instructions, gap sweep
+"0x8255E4B4" = { }  # 1 instructions, gap sweep
+"0x82567134" = { }  # 1 instructions, gap sweep
+"0x82568338" = { }  # 1 instructions, gap sweep
+# "0x82572B50" removed (tools/override_labels_check.py, 2026-11-10): the word before is a bl (48450615): the call's return point.  # 1 instructions, gap sweep
+"0x82574918" = { }  # 1 instructions, gap sweep
+"0x82574E68" = { }  # 3 instructions, gap sweep
+"0x82580384" = { }  # 1 instructions, gap sweep
+"0x82583DF0" = { }  # 2 instructions, gap sweep
+"0x82583E30" = { }  # 2 instructions, gap sweep
+"0x825912C0" = { }  # 1 instructions, gap sweep
+"0x825912E8" = { }  # 1 instructions, gap sweep
+"0x82593E34" = { }  # 1 instructions, gap sweep
+"0x8259BBCC" = { }  # 1 instructions, gap sweep
+"0x825AB770" = { }  # 2 instructions, gap sweep
+"0x825D08C8" = { }  # 2 instructions, gap sweep
+"0x825D0DA4" = { }  # 1 instructions, gap sweep
+"0x825DEC18" = { }  # 1 instructions, gap sweep
+"0x825E5568" = { }  # 3 instructions, gap sweep
+"0x825E57A4" = { }  # 1 instructions, gap sweep
+"0x8266EA58" = { }  # 4 in the gap, then the registered tail sub_8266EA68, gap sweep
+"0x8266EA70" = { }  # 4 in the gap, then the registered tail sub_8266EA80, gap sweep
+"0x8266EA88" = { }  # 2 instructions, gap sweep
+"0x82670290" = { }  # 1 instructions, gap sweep
+"0x826A26B0" = { }  # 1 instructions, gap sweep
+"0x826DC6C0" = { }  # 1 instructions, gap sweep
+"0x826F0468" = { }  # 34 instructions, gap sweep
+"0x826F6FEC" = { }  # 1 instructions, gap sweep
+"0x8272CB84" = { }  # 1 instructions, gap sweep
+"0x8272F70C" = { }  # 1 instructions, gap sweep
+"0x82759568" = { }  # 1 instructions, gap sweep
+"0x82759590" = { }  # 1 instructions, gap sweep
+"0x82762A40" = { }  # 3 instructions, gap sweep
+"0x8276E318" = { }  # 12 instructions, gap sweep
+"0x827868EC" = { }  # 1 instructions, gap sweep
+"0x82788234" = { }  # 1 instructions, gap sweep
+"0x82788564" = { }  # 1 instructions, gap sweep
+"0x827B9304" = { }  # 1 instructions, gap sweep
+"0x827B9314" = { }  # 1 instructions, gap sweep
+"0x827B9324" = { }  # 1 instructions, gap sweep
+"0x827B9334" = { }  # 1 instructions, gap sweep
+"0x827B9344" = { }  # 1 instructions, gap sweep
+"0x827B9354" = { }  # 1 instructions, gap sweep
+"0x827B9364" = { }  # 1 instructions, gap sweep
+"0x827B9374" = { }  # 1 instructions, gap sweep
+"0x827B9384" = { }  # 1 instructions, gap sweep
+"0x827B9394" = { }  # 1 instructions, gap sweep
+"0x827B93A4" = { }  # 1 instructions, gap sweep
+"0x827B93B4" = { }  # 1 instructions, gap sweep
+"0x827B93C4" = { }  # 1 instructions, gap sweep
+"0x827B93D4" = { }  # 1 instructions, gap sweep
+"0x827B93E4" = { }  # 1 instructions, gap sweep
+"0x827B93F4" = { }  # 1 instructions, gap sweep
+"0x827B9404" = { }  # 1 instructions, gap sweep
+"0x827B9414" = { }  # 1 instructions, gap sweep
+"0x827B9424" = { }  # 1 instructions, gap sweep
+"0x827B9434" = { }  # 1 instructions, gap sweep
+"0x827B9444" = { }  # 1 instructions, gap sweep
+"0x827B9454" = { }  # 1 instructions, gap sweep
+"0x827B9464" = { }  # 1 instructions, gap sweep
+"0x827B9474" = { }  # 1 instructions, gap sweep
+"0x827B9484" = { }  # 1 instructions, gap sweep
+"0x827B9494" = { }  # 1 instructions, gap sweep
+"0x827B94A4" = { }  # 1 instructions, gap sweep
+"0x827B94B4" = { }  # 1 instructions, gap sweep
+"0x827B94C4" = { }  # 1 instructions, gap sweep
+"0x827B94D4" = { }  # 1 instructions, gap sweep
+"0x827B94E4" = { }  # 1 instructions, gap sweep
+"0x827B94F4" = { }  # 1 instructions, gap sweep
+"0x827B9504" = { }  # 1 instructions, gap sweep
+"0x827B9514" = { }  # 1 instructions, gap sweep
+"0x827B9524" = { }  # 1 instructions, gap sweep
+"0x827B9534" = { }  # 1 instructions, gap sweep
+"0x827B9544" = { }  # 1 instructions, gap sweep
+"0x827B9554" = { }  # 1 instructions, gap sweep
+"0x827B9564" = { }  # 1 instructions, gap sweep
+"0x827B9574" = { }  # 1 instructions, gap sweep
+"0x827B9584" = { }  # 1 instructions, gap sweep
+"0x827B9594" = { }  # 1 instructions, gap sweep
+"0x827B95A4" = { }  # 1 instructions, gap sweep
+"0x827B95B4" = { }  # 1 instructions, gap sweep
+"0x827B95C4" = { }  # 1 instructions, gap sweep
+"0x827B95D4" = { }  # 1 instructions, gap sweep
+"0x827B95E4" = { }  # 1 instructions, gap sweep
+"0x827B95F4" = { }  # 1 instructions, gap sweep
+"0x827B9604" = { }  # 1 instructions, gap sweep
+"0x827B9614" = { }  # 1 instructions, gap sweep
+"0x827B9624" = { }  # 1 instructions, gap sweep
+"0x827F5B48" = { }  # 1 instructions, gap sweep
+"0x827FB1C8" = { }  # 1 instructions, gap sweep
+"0x8280493C" = { }  # 1 instructions, gap sweep
+"0x8280FF58" = { }  # 4 instructions, gap sweep
+"0x82812BE4" = { }  # 1 instructions, gap sweep
+"0x82844E28" = { }  # 2 instructions, gap sweep
+"0x8285FBB0" = { }  # 1 instructions, gap sweep
+"0x828846F4" = { }  # 1 instructions, gap sweep
+"0x82891CC8" = { }  # 1 instructions, gap sweep
+"0x828CB7CC" = { }  # 1 instructions, gap sweep
+"0x828FA798" = { }  # 2 instructions, gap sweep
+"0x8291DECC" = { }  # 1 instructions, gap sweep
+"0x82934D3C" = { }  # 1 instructions, gap sweep
+"0x829528E8" = { }  # 1 instructions, gap sweep
+# "0x829629E0" removed (tools/override_labels_check.py, 2026-11-10): the word before (`li r3,8`) runs into it.  # 8 instructions, gap sweep
+# "0x8296B274" removed (tools/override_labels_check.py, 2026-11-10): an epilogue's tail (`ld r31,-16(r1)` before it).  # 1 instructions, gap sweep
+"0x8297E244" = { }  # 1 instructions, gap sweep
+"0x8297E268" = { }  # 1 instructions, gap sweep
+"0x8297E290" = { }  # 1 instructions, gap sweep
+"0x8297E2B8" = { }  # 1 instructions, gap sweep
+"0x82985838" = { }  # 1 instructions, gap sweep
+"0x82985860" = { }  # 1 instructions, gap sweep
+"0x82985888" = { }  # 1 instructions, gap sweep
+# "0x82993B50" removed (tools/override_labels_check.py, 2026-11-10): an epilogue's tail (`ld r30,-24(r1)` before it).  # 2 instructions, gap sweep
+"0x829AF7D8" = { }  # 1 instructions, gap sweep
+"0x829AF838" = { }  # 1 instructions, gap sweep
+"0x829AFB78" = { }  # 1 instructions, gap sweep
+"0x829AFC34" = { }  # 1 instructions, gap sweep
+"0x829BA2C8" = { }  # 1 instructions, gap sweep
+"0x829BA2F8" = { }  # 1 instructions, gap sweep
+"0x829ECA2C" = { }  # 1 instructions, gap sweep
+"0x829EE95C" = { }  # 1 instructions, gap sweep
+"0x82A33400" = { }  # 3 instructions, gap sweep
+"0x82A38C78" = { }  # 1 instructions, gap sweep
+
+# Complete functions in unclaimed gaps without a pointer the pointer sweep sees (tools/gap_sweep.py pass 2): the scratch listing fits in the gap (or continues only into a registered tail it branches
+# to), ends in a terminator, reads no register that is undefined at a function entry. First case:
+# 0x82689770, the first PC boot's "Call to invalid or unregistered function".
+"0x82583DF8" = { }  # 2 instructions, gap sweep
+
+# Complete functions in unclaimed gaps without a pointer the pointer sweep sees (tools/gap_sweep.py pass 3): the scratch listing fits in the gap (or continues only into a registered tail it branches
+# to), ends in a terminator, reads no register that is undefined at a function entry. First case:
+# 0x82689770, the first PC boot's "Call to invalid or unregistered function".
+"0x82583E00" = { }  # 2 instructions, gap sweep
+
+# Complete functions in unclaimed gaps without a pointer the pointer sweep sees (tools/gap_sweep.py pass 4): the scratch listing fits in the gap (or continues only into a registered tail it branches
+# to), ends in a terminator, reads no register that is undefined at a function entry. First case:
+# 0x82689770, the first PC boot's "Call to invalid or unregistered function".
+"0x82583E08" = { }  # 6 instructions, gap sweep

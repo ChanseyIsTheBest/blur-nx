@@ -425,6 +425,9 @@ BANJO_RENUT_HOOK(sub_82240580, D3DDevice_SetDepthStencilSurface_hook);  // D3DDe
 BANJO_RENUT_HOOK(sub_822401A0, D3D_SetSurfaceInfo_hook);  // D3D_SetSurfaceInfo  // katamari-nx: N&B sub_82248F20, D3D_SetSurfaceInfo: sig 0.57/0.19; full viewport 0x820FAEB4  // blur-nx: Katamari sub_824DE7D0, guwange-nx D3D_SetSurfaceInfo 82258420, exact (36 instructions); agrees: 1
 BANJO_RENUT_HOOK(sub_82255078, D3DDevice_SetPredication_hook);  // D3DDevice_SetPredication  // katamari-nx: N&B sub_821F9A48, D3DDevice_SetPredication: sig 0.69 (SetCommandBufferPredication's best is the same function at 0.63: XDK 2.0.5632 has one)  // blur-nx: Katamari sub_824EFA58, guwange-nx D3DDevice_SetPredication 8225B7A8, exact (92 instructions); agrees: 1
 BANJO_RENUT_UNHOOKED_HOOK_SHARED(sub_826411C0, D3DDevice_SetCommandBufferPredication_hook);  // D3DDevice_SetCommandBufferPredication  // katamari-nx: not hooked (D3DDevice_SetCommandBufferPredication: see SetPredication)
+// blur-nx (2026-11-10): Blur's SetCommandBufferPredication is 8224A310 (N&B's 826411C0 by shape, 1.00; the same form;
+// it reads the device's command buffer word at +13728, N&B's +13516 moved as the zones say). docs/blur-notes.md.
+BANJO_RENUT_HOOK(sub_8224A310, D3DDevice_SetCommandBufferPredication_hook);  // D3DDevice_SetCommandBufferPredication
 BANJO_RENUT_HOOK(sub_82244CD0, D3DDevice_SetShaderGPRAllocation_hook);  // D3DDevice_SetShaderGPRAllocation  // katamari-nx: N&B sub_821EFD38, signature 0.78 (next 0.30)  // blur-nx: Katamari sub_824D4CD8, guwange-nx D3DDevice_SetShaderGPRAllocation 8225E3C0, exact (58 instructions); agrees: 1
 BANJO_RENUT_HOOK(sub_82243FE8, D3D_CleanupGprAllocationSetup_hook);  // D3D_CleanupGprAllocationSetup  // katamari-nx: N&B sub_82637208, signature 0.98 (next 0.13)  // blur-nx: Katamari sub_824D3FE0, guwange-nx D3D_CleanupGprAllocationSetup 8225D8E8, exact (70 instructions); agrees: 1
 BANJO_RENUT_HOOK(sub_8224C0D0, D3DDevice_SetScreenExtentQueryMode_hook);  // D3DDevice_SetScreenExtentQueryMode  // katamari-nx: N&B sub_826414C0, signature 1.00 (next 0.75)  // blur-nx: Katamari sub_824E67C8, guwange-nx D3DDevice_SetScreenExtentQueryMode 82267130, exact (28 instructions); agrees: 1
@@ -444,6 +447,11 @@ BANJO_RENUT_HOOK(sub_82244360, D3DDevice_SetVertexShaderConstantB_hook);  // D3D
 BANJO_RENUT_HOOK(sub_822443C0, D3DDevice_SetPixelShaderConstantB_hook);  // D3DDevice_SetPixelShaderConstantB  // katamari-nx: N&B sub_82237208, signature 0.84 (next 0.77)  // blur-nx: Katamari sub_824D44D0, hand: D3DDevice_SetPixelShaderConstantB: the same with 2532; the same caller pattern
 BANJO_RENUT_UNHOOKED_HOOK(sub_826374B0, D3DDevice_SetVertexShaderConstantI_hook);  // D3DDevice_SetVertexShaderConstantI  // katamari-nx: not hooked (signature too weak or ambiguous (sub_824D4588 0.33, next 0.33))
 BANJO_RENUT_UNHOOKED_HOOK(sub_82637500, D3DDevice_SetPixelShaderConstantI_hook);  // D3DDevice_SetPixelShaderConstantI  // katamari-nx: not hooked (signature too weak or ambiguous (sub_824D4588 0.33, next 0.33))
+// blur-nx (2026-11-10): Blur links both (pacman-nx hooked them at the same XDK): SetVertexShaderConstantI 822444A0
+// (`addi r10,r4,2535`, the integer block at +10140) and SetPixelShaderConstantI 822444F8 (`addi r10,r4,2551`), (device,
+// start r4, data r5, count r6); called by game code 8234B6A8 and the effect states 829E8390 / 829E86B0.
+BANJO_RENUT_HOOK(sub_822444A0, D3DDevice_SetVertexShaderConstantI_hook);  // D3DDevice_SetVertexShaderConstantI
+BANJO_RENUT_HOOK(sub_822444F8, D3DDevice_SetPixelShaderConstantI_hook);  // D3DDevice_SetPixelShaderConstantI
 BANJO_RENUT_UNHOOKED_HOOK(sub_8263ED90, D3DDevice_EndIndexedVertices_hook);  // D3DDevice_EndIndexedVertices  // katamari-nx: not hooked (signature too weak or ambiguous (sub_8255A1E8 0.63, next 0.31))
 
 // Render state getters, by their index in N&B's table (off_82E506F0, field 0).

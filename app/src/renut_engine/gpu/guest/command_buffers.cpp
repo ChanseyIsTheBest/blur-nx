@@ -453,7 +453,10 @@ struct HostCommandBuffer {
   uint64_t id = 0;  // banjo-nx (2026-10-26): a number per recording (the objects are pooled), for the census
   // halo3-nx (2026-11-03, banjo_renut_replay_inherits): the device words this recording set, a bit a word, against the
   // device at its Begin; the ranges it did not set, which a replay takes from the running device (BuildInheritRuns).
-  u32 set_words[d3d::kDeviceSnapshotSize / 4 / 32] = {};
+  // blur-nx (2026-11-10): rounded up. Rounded down, a word in the snapshot's last partial 128 bytes indexed one past
+  // the end (XDK 11164's 12,888-byte snapshot: the words 12,800-12,887; Katamari's 12,704: 12,672-12,703, latent):
+  // BuildInheritRuns wrote past the array and the render thread crashed at the first replay (renut11, renut12).
+  u32 set_words[(d3d::kDeviceSnapshotSize / 4 + 31) / 32] = {};
   std::vector<std::pair<u32, u32>> inherit_runs;  // offset, bytes
   bool inherit_built = false;
   // renut-ultimate (audit, 2026-11-07, ultimate_renut_replay_inherit_same): the inherited runs' bytes as op 0 recorded them
