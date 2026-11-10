@@ -1,7 +1,7 @@
 # blur-nx test package: what to test, and how
 
-Draft of 2026-11-10 (finished at packaging time). The package holds the NRO, three settings files, the configs, the
-NRO's ELF and the source snapshot; no game data.
+Written 2026-11-10, finished 2026-11-11 for this package. The package holds the NRO, three settings files, the configs,
+the DKSH shader cache, the NRO's ELF and the source snapshot; no game data.
 
 ## Setting up
 
@@ -16,12 +16,16 @@ This build reads `renut.toml` next to the NRO, the shipped settings with logs. F
 ## What to test first
 
 - It boots through the logos and the attract video to "Press START", and the career menus draw.
-- A race (Barcelona Oval, the first Proving Grounds event): 20 cars, the HUD, power-ups. In Ryujinx the lower part of
-  the race frame was garbage before the tile-resolve fix (`blur_renut_tile_resolve_staging`); please look at the whole
-  screen.
-- The tail lights and bright lights: the PC build still lacks the glow and light trails the emulated renderer shows
-  (under investigation); compare with your memory of the Xbox 360.
-- Frame rate: the log's 10 s lines (`logs/renut_001.log`) give the frame times.
+- A race (Barcelona Oval, the first Proving Grounds event): 20 cars, the HUD, power-ups, the motion blur at the screen
+  edges. Please look at the whole screen (earlier builds drew garbage under the race in Ryujinx).
+- Your car from behind: the rear window shows the car's interior through the glass, the paint reflects the
+  surroundings, and the tail lights throw a red glow that spreads sideways. These were fixed on 2026-11-11 (the
+  environment cube's faces, `blur_renut_ms_slice_resolve`; the occlusion answers the light glows wait for); compare with
+  your memory of the Xbox 360.
+- Frame rate: the log's 10 s lines (`logs/renut_001.log`, "game frames (N fps)") give it. **The game's speed follows
+  its frame rate below 15 fps**: Blur gives each frame at most 1/15 s of game time, so at 10 fps the race runs at 2/3 of
+  real time (from 15 to 60 fps it keeps real time). In Ryujinx the race ran at 10-14 fps (0.67-0.93 of real time); the
+  console's own rate is what decides it.
 
 ## Logs to send
 
@@ -38,4 +42,15 @@ machine copies (`tools/switch_hot_bulk.py --merge`) and any hand-written native 
 
 Copy `renut_ab.toml` over `renut.toml`, start a race and stand still (or stay in one menu) for 10+ minutes; send
 `renut_001.log`. Its "[renut A/B]" lines give each target's frame time with the item off and on; target 1 is the
-do-nothing control (a Vulkan-only key).
+do-nothing control (a Vulkan-only key). The list includes this port's correctness fixes (211-221: the resolve and
+EDRAM fixes, the occlusion answers, the cube-face resolves): their A/B gives each one's cost on the console and, with
+the item off, how the picture looked before it.
+
+## What was tested here
+
+- PC (D3D12, the shipped settings): the race against the SDK's emulated renderer at the same grid spot: the motion
+  blur, the glow, the bloom, the tail lights' glow and the rear window now match; the frame overall is within about 10%
+  of the reference's brightness (the car's light depends on where it stops: in the trees' shade the game lights it
+  less, in both renderers).
+- Ryujinx (this NRO's code, 2026-11-11, emu11): menus, a 9-minute race, 0 verify differences, 0 memory emergencies.
+- Not tested on the console by me (the console was another session's); the configs above are for that.
