@@ -1,25 +1,29 @@
 # katamari-nx: one emulator run of the NRO in the user's patched Ryubing with this port's own data folder
 # (docs/porting-start-here.md of banjo-nx: "Build and test essentials"). Started minimised; refuses to start while any
 # Ryujinx runs or when the free commit memory is under -MinCommitGB; stops only the process it started.
-#   powershell -File tools/run_ryujinx.ps1 -Seconds 300 -Name emu1 [-Toml <a katamari.toml with test keys>]
+#   powershell -File tools/run_ryujinx.ps1 -Seconds 300 -Name emu1 [-Toml <a blur.toml with test keys>]
 # renut-ultimate (2026-11-07): its own data folder (ryu-data\renut-ultimate, made from katamari-nx's), and the NRO of
 # app\out\<-Build> copied to its SD at each run (katamari-nx's folder and NRO are left alone).
-param([int]$Seconds = 240, [string]$Name = "emu", [string]$Toml = "", [double]$MinCommitGB = 12, [string]$Build = "switch")
+# blur-nx (2026-11-10, the request): this port's own data folder (ryu-data\blur: katamari's system folders, keys and
+# firmware, not its sdcard), the SD's /switch/blur-nx, at most two Ryujinx runs across all ports (start only when fewer
+# than two run), 6 GB of free commit memory or more.
+param([int]$Seconds = 240, [string]$Name = "emu", [string]$Toml = "", [double]$MinCommitGB = 6, [string]$Build = "switch")
 $root = Split-Path -Parent $PSScriptRoot
 $ryu = "D:\New folder\Ryubing-src\ryubing\build\Ryujinx.exe"
-$data = "D:\New folder\ryu-data\renut-ultimate"
+$data = "D:\New folder\ryu-data\blur"
 # Ryujinx starts an NRO without argv: the app then takes REX_SWITCH_FALLBACK_EXE (app/CMakeLists.txt) as its own path.
-$sd = Join-Path $data "sdcard\switch\katamari-nx"
-$nro = Join-Path $sd "katamari-nx.nro"
+$sd = Join-Path $data "sdcard\switch\blur-nx"
+$nro = Join-Path $sd "blur-nx.nro"
 $out = Join-Path $root "out\emu_runs\$Name"
-if (Get-Process -Name Ryujinx -ErrorAction SilentlyContinue) { Write-Output "a Ryujinx is running (another port's?): not starting"; exit 2 }
+$running = @(Get-Process -Name Ryujinx -ErrorAction SilentlyContinue).Count
+if ($running -ge 2) { Write-Output "$running Ryujinx runs already (other ports'): not starting"; exit 2 }
 $os = Get-CimInstance Win32_OperatingSystem
 $freeCommit = ($os.TotalVirtualMemorySize - ($os.TotalVirtualMemorySize - $os.FreeVirtualMemory)) / 1MB
 if ($freeCommit -lt $MinCommitGB) { Write-Output ("free commit memory {0:N1} GB < {1} GB: not starting" -f $freeCommit, $MinCommitGB); exit 3 }
 $built = Join-Path $root "app\out\$Build\renut.nro"
 if (-not (Test-Path $built)) { Write-Output "no NRO at $built"; exit 4 }
 Copy-Item $built $nro -Force
-if ($Toml) { Copy-Item $Toml (Join-Path $sd "katamari.toml") -Force }
+if ($Toml) { Copy-Item $Toml (Join-Path $sd "blur.toml") -Force }
 New-Item -ItemType Directory -Force $out | Out-Null
 $logs = Join-Path $sd "logs"
 if (Test-Path $logs) { Remove-Item -Recurse -Force $logs }

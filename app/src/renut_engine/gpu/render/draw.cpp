@@ -3425,7 +3425,30 @@ inline u32 SlotTextureVa(const GuestDevice &device, u32 r) {
   }
   if (!g_fetch_owner[r] || !banjo::renut_gpu::FetchOverPointerOn())
     return 0;
-  return DeviceTextureFetch(device.dev(), r).IsTexture() ? g_fetch_owner[r] : 0;
+  const TextureFetch fetch = DeviceTextureFetch(device.dev(), r);
+  if (!fetch.IsTexture())
+    return 0;
+  // renut-ultimate (port 63, 2026-11-10, renut_fetch_owner_same_data; Viva Pinata's finding): the last texture only while
+  // the fetch constant still describes its data (textures.cpp SameData: format, endian and base address in dword 1, the
+  // size in dword 2, the dimension in dword 5). A fetch constant naming other data (Viva Pinata: object BCCA0550, a
+  // 1280x720 resolve destination, with a fetch of a 16x64 texture at 0F99B000) was bound through the old texture's
+  // host texture, which textures.cpp then remade for the fetch, throwing the resolve away (the title logo's dark shadow,
+  // "[flash] resolve destination ... dropped"). Without a header pointer the slot takes port 37's fetch-only path: the
+  // fetch's own texture, and a resolve's content found by its address (ResolvedAlias).
+  if (banjo::renut_gpu::FetchOwnerSameDataOn()) {
+    const TextureFetch owner = TextureFetch::FromHeader(GuestPtr<const d3d::BaseTexture>(g_fetch_owner[r])->Format);
+    if (owner.dword[1] != fetch.dword[1] || owner.dword[2] != fetch.dword[2] ||
+        ((owner.dword[5] ^ fetch.dword[5]) & 0x600u) != 0) {
+      static std::atomic<uint32_t> logged{0};
+      if (logged.fetch_add(1, std::memory_order_relaxed) < 8)
+        RGPU_INFO("[renut] slot {} after SetTexture(NULL): the fetch constant names other data than its last texture "
+                  "{:08X} (fetch {:08X} {:08X}, header {:08X} {:08X}): sampled as the fetch alone "
+                  "(renut_fetch_owner_same_data)", r, g_fetch_owner[r], fetch.dword[1], fetch.dword[2], owner.dword[1],
+                  owner.dword[2]);
+      return 0;
+    }
+  }
+  return g_fetch_owner[r];
 }
 
 // banjo-nx (deko3d renderer, docs/deko3d-renderer.md): the sampler words hold the sampler id where a texture handle has
@@ -14451,8 +14474,8 @@ void ClearStateLocked(const u8 *device_state, u32 flags, const ClearRect *rect,
 
   // D3D clamps clears to the viewport (CDevice viewport floats at 0x3170).
   ClearRect r = rect ? *rect : ClearRect{0, 0, int32_t(targets.width), int32_t(targets.height)};
-  const float vx = device.F32(0x3160), vy = device.F32(0x3164);  // katamari-nx: 0x3170->0x3160, 0x3174->0x3164
-  const float vw = device.F32(0x3168), vh = device.F32(0x316C);  // katamari-nx: 0x3178->0x3168, 0x317C->0x316C
+  const float vx = device.F32(0x3218), vy = device.F32(0x321C);  // katamari-nx: 0x3170->0x3160, 0x3174->0x3164 (blur-nx: 0x3160->0x3218, 0x3164->0x321C)
+  const float vw = device.F32(0x3220), vh = device.F32(0x3224);  // katamari-nx: 0x3178->0x3168, 0x317C->0x316C (blur-nx: 0x3168->0x3220, 0x316C->0x3224)
   if (vw > 0.0f && vh > 0.0f) {
     int32_t vx2 = int32_t(vx + vw), vy2 = int32_t(vy + vh);
     // A target grown for tiling: D3D bounds the viewport by the tile-sized

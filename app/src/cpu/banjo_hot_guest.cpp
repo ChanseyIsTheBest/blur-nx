@@ -50,12 +50,16 @@ extern "C" const bool g_banjo_store_cards = false;
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <string>
+#include <system_error>
+#include <thread>
 #include <vector>
 
 #include <fmt/format.h>
 
 #include <rex/cvar.h>
+#include <rex/filesystem.h>
 #include <rex/logging.h>
 
 #include "cpu/banjo_enhancements.h"
@@ -127,133 +131,19 @@ REXCVAR_DEFINE_BOOL(banjo_hand_xaudio_mix, true, "Banjo/Enhancements",
                     "(one for the range); checked by the guard of the router's hook")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-// katamari-nx (2026-10-30): Beautiful Katamari's own hand-written natives (cpu/hot/banjo_hand_natives.h, the end).
-REXCVAR_DEFINE_BOOL(katamari_hand_matrix_copy, true, "Katamari/Enhancements",
-                    "Hand-written native of the game's 4x4 matrix copy (sub_82759C98, the hottest guest function of "
-                    "the PC profile): the 64 bytes moved as they are instead of sixteen float loads and stores. "
-                    "Declines a signalling NaN and a forward overlap; checked by the guards of the hooks that contain it")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(katamari_hand_matrix_multiply, true, "Katamari/Enhancements",
-                    "Hand-written native of the game's two 4x4 matrix multiplies (sub_827598C0 in place, sub_82759780 "
-                    "with three operands): the same sixteen dot products on registers, each row loaded and stored once "
-                    "instead of the emulated unaligned vector loads and byte-by-byte stores; every register the "
-                    "original writes is written. Checked by the guards of the hooks that contain them")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(katamari_hand_matrix_translation, true, "Katamari/Enhancements",
-                    "Hand-written native of the game's translation-matrix builder (sub_82759D20): the 16 words "
-                    "written at once. Declines a signalling NaN and an overlap; checked by the guards of its hooks")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-
-REXCVAR_DEFINE_BOOL(katamari_hand_matrix_identity, true, "Katamari/Enhancements",
-                    "Hand-written native of the game's identity-matrix builder (sub_827595D0): the 16 words written "
-                    "at once; checked by the guards of the hooks that contain it")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(katamari_hand_matrix_compare, true, "Katamari/Enhancements",
-                    "Hand-written native of the game's matrix comparison within a tolerance (sub_82759A00): the same "
-                    "single-precision differences and compares in registers, the stack temporary written once; "
-                    "checked by the guards of the hooks that contain it")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(katamari_hand_copy_words, true, "Katamari/Enhancements",
-                    "Hand-written native of the C runtime's word copy (sub_827E73A8): overlapping 16/8/4/2-byte moves "
-                    "instead of byte and word loops; declines a forward overlap; checked by the guards of its hooks")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(katamari_hand_string_hash, true, "Katamari/Enhancements",
-                    "Hand-written native of the game's string hash (sub_8266AF60, Jenkins' one-at-a-time): the bytes "
-                    "walked through a host pointer with the same 64-bit adds and 32-bit shifts; checked by the guards "
-                    "of the hooks that contain it")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(katamari_hand_vec4_update, true, "Katamari/Enhancements",
-                    "Hand-written native of the game's 4-float parameter set with change detection (sub_8271FAD0): "
-                    "the four compares and the writes in registers; checked by the guards of the hooks that contain it")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-
-REXCVAR_DEFINE_BOOL(katamari_hand_matrix_product, true, "Katamari/Enhancements",
-                    "Hand-written native of the game's 4x4 matrix product r3 = r4 x r5 (sub_827596B0): the original's sixteen dot products on locals, one write of the result; checked by the guards of the hooks that contain it")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(katamari_hand_vector_set, true, "Katamari/Enhancements",
-                    "Hand-written native of the game's four-vector and scale set (sub_8270FE40): sixteen words, the scale and the flag in three writes; checked by the guards of the hooks that contain it")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(katamari_hand_sphere_box, true, "Katamari/Enhancements",
-                    "Hand-written native of the job threads' sphere test against a box (sub_82316A78): no flush-mode switch in the middle (scalar steps mode-free, vector steps checked for denormals), one write of the stack temporary; checked by the guards of the hooks that contain it")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(katamari_hand_rotate_vectors, true, "Katamari/Enhancements",
-                    "Hand-written native of the game's 3x3 rotation of N vectors (sub_8275A828): the matrix read once instead of for every vector; checked by the guards of the hooks that contain it")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(katamari_hand_transform_points, true, "Katamari/Enhancements",
-                    "Hand-written native of the game's 4x4 point transform with the divide by w (sub_8275AA88): the separate-output path, one formula per point; the in-place path stays generated; checked by the guards of the hooks that contain it")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(katamari_hand_integrate, true, "Katamari/Enhancements",
-                    "Hand-written native of the game's integration step of N bodies (sub_8276E3D8): the array's address read once instead of after every store; checked by the guards of the hooks that contain it")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(katamari_hand_sine, true, "Katamari/Enhancements",
-                    "Hand-written native of the game's sine (sub_824E97F0): the range reduction and the polynomial without the context and stack traffic, the stack temporaries written once; checked by the guards of the hooks that contain it")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-// katamari-nx (2026-11-01, rc10, the user: "optimise these two sub_82277E70 and sub_822683D0 by hand").
-REXCVAR_DEFINE_BOOL(katamari_hand_transform_chain, true, "Katamari/Enhancements",
-                    "Hand-written native of the objects' world transform (sub_82277E70): after its two real calls, "
-                    "the matrix chain (copies, products, rotations, two translate calls) in registers instead of "
-                    "through guest memory, every byte and register the original leaves; no guard can repeat it, so it "
-                    "checks itself against the matrix natives in the original order (see the _verify key)")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(katamari_hand_transform_chain_verify, false, "Katamari/Enhancements",
-                    "Check every call of katamari_hand_transform_chain against the matrix natives in the original's "
-                    "order (slow). Off: the first 2000 calls of the run, then one in 256. A difference logs "
-                    "\"[hot] DIFFERENCE sub_82277E70\" and switches the register path off")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(katamari_hand_box_test, true, "Katamari/Enhancements",
-                    "Hand-written native of the visibility manager's box test (sub_82265C08, the hot loop of "
-                    "sub_822683D0): the eight corners without the store / 4-byte store / reload of each through the "
-                    "stack, the loop's invariant merges once, and the next object of the walk prefetched; checked by "
-                    "the guards of the hooks that contain it")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(katamari_hand_translate_multiply, true, "Katamari/Enhancements",
-                    "Hand-written native of the game's translate-then-multiply (sub_8223A970): the matrix copy, the "
-                    "translation matrix and the product in registers, the frame's bytes as the original leaves them; "
-                    "checked by the guards of the hooks that contain it")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// blur-nx (2026-11-10): no natives of Blur's own yet (only from a console profile).
 
 namespace banjo::hand {
 
 uint8_t g_state[kNatives] = {};
 
 namespace {
-constexpr const char* kNames[kNatives] = {"memcpy", "memset", "constant writers", "state flush writers",
-                                          "XAudio voice filter", "XAudio channel mix", "matrix copy",
-                                          "matrix multiplies", "translation matrix", "identity matrix",
-                                          "matrix comparison", "word copy", "string hash",
-                                          "4-float parameter set", "matrix product", "four-vector set", "sphere-in-box test", "vector rotation", "point transform", "body integration", "sine", "transform chain", "box test", "translate and multiply"};
-constexpr const char* kKeys[kNatives] = {"banjo_hand_memcpy", "banjo_hand_memset", "banjo_hand_constants",
-                                         "banjo_hand_state_flush", "banjo_hand_audio_filter",
-                                         "banjo_hand_xaudio_mix", "katamari_hand_matrix_copy",
-                                         "katamari_hand_matrix_multiply", "katamari_hand_matrix_translation",
-                                         "katamari_hand_matrix_identity", "katamari_hand_matrix_compare",
-                                         "katamari_hand_copy_words", "katamari_hand_string_hash",
-                                         "katamari_hand_vec4_update", "katamari_hand_matrix_product", "katamari_hand_vector_set", "katamari_hand_sphere_box", "katamari_hand_rotate_vectors", "katamari_hand_transform_points", "katamari_hand_integrate", "katamari_hand_sine", "katamari_hand_transform_chain", "katamari_hand_box_test", "katamari_hand_translate_multiply"};
+// blur-nx (2026-11-10): banjo-nx's memcpy only (rr6-nx's list less its own three). Each native adds its enum
+// value, its name, its key and its case here.
+constexpr const char* kNames[kNatives] = {"memcpy"};
+constexpr const char* kKeys[kNatives] = {"banjo_hand_memcpy"};
 bool Own(uint32_t which) {
-  return which == kMemcpy           ? bool(REXCVAR_GET(banjo_hand_memcpy))
-         : which == kMemset         ? bool(REXCVAR_GET(banjo_hand_memset))
-         : which == kConstants      ? bool(REXCVAR_GET(banjo_hand_constants))
-         : which == kFlush          ? bool(REXCVAR_GET(banjo_hand_state_flush))
-         : which == kAudioFilter    ? bool(REXCVAR_GET(banjo_hand_audio_filter))
-         : which == kXAudioMix      ? bool(REXCVAR_GET(banjo_hand_xaudio_mix))
-         : which == kMatCopy        ? bool(REXCVAR_GET(katamari_hand_matrix_copy))
-         : which == kMatMul         ? bool(REXCVAR_GET(katamari_hand_matrix_multiply))
-         : which == kMatTranslation ? bool(REXCVAR_GET(katamari_hand_matrix_translation))
-         : which == kMatIdentity    ? bool(REXCVAR_GET(katamari_hand_matrix_identity))
-         : which == kMatCompare     ? bool(REXCVAR_GET(katamari_hand_matrix_compare))
-         : which == kCopyWords      ? bool(REXCVAR_GET(katamari_hand_copy_words))
-         : which == kStringHash     ? bool(REXCVAR_GET(katamari_hand_string_hash))
-         : which == kMatProduct     ? bool(REXCVAR_GET(katamari_hand_matrix_product))
-         : which == kVecSet         ? bool(REXCVAR_GET(katamari_hand_vector_set))
-         : which == kSphereBox      ? bool(REXCVAR_GET(katamari_hand_sphere_box))
-         : which == kRotate         ? bool(REXCVAR_GET(katamari_hand_rotate_vectors))
-         : which == kTransform      ? bool(REXCVAR_GET(katamari_hand_transform_points))
-         : which == kIntegrate      ? bool(REXCVAR_GET(katamari_hand_integrate))
-         : which == kSine           ? bool(REXCVAR_GET(katamari_hand_sine))
-         : which == kXformChain     ? bool(REXCVAR_GET(katamari_hand_transform_chain))
-         : which == kBoxTest        ? bool(REXCVAR_GET(katamari_hand_box_test))
-         : which == kXlateMul       ? bool(REXCVAR_GET(katamari_hand_translate_multiply))
-                                    : bool(REXCVAR_GET(katamari_hand_vec4_update));
+  return which == kMemcpy ? bool(REXCVAR_GET(banjo_hand_memcpy)) : false;
 }
 // banjo_hot_count: calls by size, bucket 0 = size 0, bucket k = sizes [2^(k-1), 2^k).
 std::atomic<uint64_t> g_sizes[kNatives][34];
@@ -668,6 +558,7 @@ void Check(Hook& h, PPCContext& ctx, uint8_t* base, uint32_t& counter) {
       h.compared.fetch_add(1, std::memory_order_relaxed);
       ::me::native::g_verify_native_checks.fetch_add(1, std::memory_order_relaxed);  // the "[verify]" line
       if (attempt > 1) h.not_repeated.fetch_add(1, std::memory_order_relaxed);
+      if (attempt > kAttempts) REXLOG_INFO("[hot] {} settled: equal at pass {}, so another thread was writing its inputs", h.name, attempt);
       return;
     }
     if (attempt < kAttempts) {
@@ -682,6 +573,22 @@ void Check(Hook& h, PPCContext& ctx, uint8_t* base, uint32_t& counter) {
       }
       continue;
     }
+    // rr6-nx (2026-11-03): it repeated, but three passes in a row take microseconds and a decoder fills a buffer for
+    // milliseconds (Ryujinx, machine under load: three audio functions, r5 an output ring). So the same pass again after
+    // waiting, up to kSettleAttempts times, 1 ms apart: a wrong copy differs every time, a race stops when the writer does.
+    constexpr int kSettleAttempts = 200;
+    if (outcome == Outcome::kDifferent && attempt < kAttempts + kSettleAttempts) {
+      ctx = t.in;
+      size_t off = 0;
+      for (const Region& r : t.ranges) {
+        std::memcpy(Raw(base, r.addr), t.before.data() + off, r.len);
+        off += r.len;
+      }
+      ctx.fpscr.setcsr(hw_entry);
+      if (attempt == kAttempts) REXLOG_INFO("[hot] {} differs three passes in a row, waiting for it to settle: {}", h.name, diff);
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      continue;
+    }
     // It repeated.
     h.compared.fetch_add(1, std::memory_order_relaxed);
     ::me::native::g_verify_native_checks.fetch_add(1, std::memory_order_relaxed);
@@ -692,7 +599,7 @@ void Check(Hook& h, PPCContext& ctx, uint8_t* base, uint32_t& counter) {
     REXLOG_ERROR("[hot] DIFFERENCE {} ({}): {} ({} passes in a row); inputs r3={:#x} r4={:#x} r5={:#x} r6={:#x} "
                  "r7={:#x} f1={:#x} f2={:#x}; {} bytes in {} written ranges; native copy switched off for the rest of "
                  "the run",
-                 h.name, h.key, diff, kAttempts, in.r3.u64, in.r4.u64, in.r5.u64, in.r6.u64, in.r7.u64, in.f1.u64,
+                 h.name, h.key, diff, attempt, in.r3.u64, in.r4.u64, in.r5.u64, in.r6.u64, in.r7.u64, in.f1.u64,
                  in.f2.u64, t.bytes, t.ranges.size());
     if (outcome == Outcome::kPathsDiffer) h.orig(ctx, base);  // nothing has run for real yet
     return;
@@ -732,7 +639,7 @@ void Report() {
       if (calls)
         REXLOG_INFO("[hot] hand-written native of the {}: {} calls so far, by size ({}):{}", ::banjo::hand::kNames[k],
                     calls,
-                    k == ::banjo::hand::kConstants ? "vectors" : k == ::banjo::hand::kFlush ? "words written" : "bytes",
+                    "bytes",
                     sizes);
     }
     return;
@@ -773,6 +680,26 @@ void Report() {
     REXLOG_INFO("[hot] {} {}: about {} calls so far, {} compared with the original, {} not comparable (they reach a "
                 "call outside the copy), {} differences, {} more that did not repeat (inputs changed by another thread)",
                 h->name, state == kOn ? "ON" : "off", h->uses.load(std::memory_order_relaxed), c, n, d, r);
+  }
+  // rr6-nx (2026-11-03): with banjo_cpu_verify, every copy's counts, for tools/verified_copies.py: the summary's totals
+  // cannot say which copies were compared. Written whole and renamed, so a run that ends here leaves the last full one.
+  // rr6-nx (2026-11-08): also with the guard's sampling on (banjo_hot_guard_calls): a verify run's slower menus put
+  // the scripted route out of step before the race, so the race's copies are checked in that mode.
+  if (REXCVAR_GET(banjo_cpu_verify) || REXCVAR_GET(banjo_hot_guard_calls) > 0) {
+    const auto logs = rex::filesystem::GetExecutableFolder() / "logs";
+    const auto path = logs / "rr6_hot_counts.txt", temp = logs / "rr6_hot_counts.tmp";
+    if (FILE* f = std::fopen(temp.string().c_str(), "w")) {
+      for (Hook* h = g_hooks; h; h = h->next) {
+        std::fprintf(f, "%s %d %d %llu %llu %llu %llu\n", h->name, int(h->bulk), int(h->state.load(std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(h->compared.load(std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(h->not_comparable.load(std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(h->not_repeated.load(std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(h->differences.load(std::memory_order_relaxed)));
+      }
+      std::fclose(f);
+      std::error_code ec;
+      std::filesystem::rename(temp, path, ec);
+    }
   }
   REXLOG_INFO("[hot] native copies: {} reached, {} on ({} direct, no guard); bulk copies (banjo_cpu_native_bulk {}): {} "
               "of {} reached, {} on; {} calls compared so far, {} not comparable, {} differed once and not when "

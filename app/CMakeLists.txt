@@ -76,10 +76,10 @@ endif()
 
 # katamari-nx (2026-10-30): banjo-nx's app without the files written for N&B's addresses (its cheats and mid-asm
 # hooks, title update and DLC, the D3D hook layer of banjo-nx's PM4 renderer, its XAudio and hand-written natives, the
-# shader harvest): src/katamari_keys.cpp defines the keys of those files that the kept ones still read.
+# shader harvest): src/blur_keys.cpp defines the keys of those files that the kept ones still read.
 set(RENUT_SOURCES
     src/main.cpp
-    src/katamari_keys.cpp
+    src/blur_keys.cpp
     # katamari-nx (2026-10-31): DLC packages in the "dlc" folder next to the NRO installed at start (reNut upstream's).
     src/renut_engine/dlc_install.cpp
 	src/renut_engine/FPS.cpp
@@ -105,8 +105,7 @@ set(RENUT_SOURCES
     # the start-up check of every instruction form that only one processor has.
     src/cpu/banjo_codegen_checks.cpp
     src/cpu/banjo_forms_selfcheck.cpp
-    # katamari-nx (2026-11-01): diagnostic of the game state's stage fields (katamari_diag_game_state, off).
-    src/cpu/katamari_stage_diag.cpp
+    # blur-nx (2026-11-10): katamari-nx's stage diagnostic (src/cpu/katamari_stage_diag.cpp) went with its game.
     # katamari-nx: the native copies of hot game functions (banjo_hot_guest.cpp and its shards), from this game's PC
     # profile (docs/katamari-notes.md, "Hot functions"): src/cpu/hot/localized.txt and hand.txt.
     src/cpu/banjo_hot_guest.cpp
@@ -159,7 +158,7 @@ rexglue_setup_target(renut GPU_PLUGINS xenos)
 # banjo-nx (2026-10-17): Ryujinx starts NROs without argv[0]; the SDK then takes the NRO's usual place on the SD
 # (sdk/src/core/filesystem_posix.cpp). A console's hbloader always passes the path, so nothing changes there.
 if(REXGLUE_PLATFORM_SWITCH AND TARGET rexcore)
-    target_compile_definitions(rexcore PRIVATE REX_SWITCH_FALLBACK_EXE="/switch/katamari-nx/katamari-nx.nro")
+    target_compile_definitions(rexcore PRIVATE REX_SWITCH_FALLBACK_EXE="/switch/blur-nx/blur-nx.nro")
 endif()
 
 # banjo-nx (2026-10-16): Renut's Direct3D-level renderer as a second renderer, chosen at boot (banjo_renderer = "renut";
@@ -604,21 +603,21 @@ if(REXGLUE_PLATFORM_SWITCH)
     # (tools/switch-cpu-profile.py). It must come from the same build as the NRO that was profiled.
     target_link_options(renut PRIVATE "LINKER:-Map=${CMAKE_BINARY_DIR}/renut.map")
     # katamari-nx (2026-11-02, the user: only these settings in the toml, the rest hardcoded; sa2-nx's design): the fixed
-    # settings compiled in (src/renut_app.h BuiltInConfig), and the player's katamari.toml, written next to the NRO when
-    # it is missing (DefaultConfigFile). KATAMARI_BUILTIN_CONFIG=OFF: test builds that read a full renut.toml.
-    option(KATAMARI_BUILTIN_CONFIG "Switch: the fixed settings compiled in, the player's options in katamari.toml" ON)
-    if(KATAMARI_BUILTIN_CONFIG)
-        file(READ "${CMAKE_CURRENT_SOURCE_DIR}/katamari_switch_defaults.toml" KATAMARI_BUILTIN_TEXT)
-        file(READ "${CMAKE_CURRENT_SOURCE_DIR}/katamari_switch.toml" KATAMARI_PLAYER_TEXT)
-        configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/katamari_builtin_config.h.in"
-                       "${CMAKE_CURRENT_BINARY_DIR}/builtin_config/katamari_builtin_config.h" @ONLY)
+    # settings compiled in (src/renut_app.h BuiltInConfig), and the player's blur.toml, written next to the NRO when
+    # it is missing (DefaultConfigFile). BLUR_BUILTIN_CONFIG=OFF: test builds that read a full renut.toml.
+    option(BLUR_BUILTIN_CONFIG "Switch: the fixed settings compiled in, the player's options in blur.toml" ON)
+    if(BLUR_BUILTIN_CONFIG)
+        file(READ "${CMAKE_CURRENT_SOURCE_DIR}/blur_switch_defaults.toml" BLUR_BUILTIN_TEXT)
+        file(READ "${CMAKE_CURRENT_SOURCE_DIR}/blur_switch.toml" BLUR_PLAYER_TEXT)
+        configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/blur_builtin_config.h.in"
+                       "${CMAKE_CURRENT_BINARY_DIR}/builtin_config/blur_builtin_config.h" @ONLY)
         target_include_directories(renut PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/builtin_config")
-        target_compile_definitions(renut PRIVATE KATAMARI_BUILTIN_CONFIG=1)
+        target_compile_definitions(renut PRIVATE BLUR_BUILTIN_CONFIG=1)
         set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-                     "${CMAKE_CURRENT_SOURCE_DIR}/katamari_switch_defaults.toml"
-                     "${CMAKE_CURRENT_SOURCE_DIR}/katamari_switch.toml")
+                     "${CMAKE_CURRENT_SOURCE_DIR}/blur_switch_defaults.toml"
+                     "${CMAKE_CURRENT_SOURCE_DIR}/blur_switch.toml")
     endif()
-    set(RENUT_ICON "${CMAKE_CURRENT_SOURCE_DIR}/../tools/switch/icon/katamari_icon.jpg")
+    set(RENUT_ICON "${CMAKE_CURRENT_SOURCE_DIR}/../tools/switch/icon/blur_icon.jpg")
     set(RENUT_ICON_ARG)
     if(EXISTS "${RENUT_ICON}")
         set(RENUT_ICON_ARG ICON "${RENUT_ICON}")
@@ -626,9 +625,9 @@ if(REXGLUE_PLATFORM_SWITCH)
     # katamari-nx (2026-11-02, the user's request): author ChanseyIsTheBest, the user's icon (the cover art).
     # 2026-11-05: version 1.0.1, the game's memory and the NRO's code on 2 MB blocks, and the boot's cvars.
     rexglue_switch_add_nro(renut
-        NAME "Beautiful Katamari"
+        NAME "Blur"
         AUTHOR "ChanseyIsTheBest"
-        VERSION "1.0.1"
+        VERSION "0.1.0"
         ${RENUT_ICON_ARG})
 endif()
 

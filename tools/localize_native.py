@@ -1058,6 +1058,8 @@ def write_list(entries, out_dir, bulk=()):
                           f'edit): shard {k} of {SHARDS},', f'// {size // 1024} KB of copies, compiled by '
                           f'app/src/cpu/banjo_hot_shard_{k}.cpp.'] + lines) + '\n'
         path = os.path.join(out_dir, f'banjo_hot_bulk_{k}.inc')
+        # blur-nx (2026-11-10): a fresh tree has no generated/hot yet (the first build of a new port stopped here).
+        os.makedirs(out_dir, exist_ok=True)
         try:
             same = open(path, encoding='utf-8').read() == text
         except OSError:

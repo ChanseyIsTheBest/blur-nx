@@ -29,12 +29,9 @@
 #include "renut_engine/gpu/banjo_renut_capture.h"
 #endif
 #include "cpu/banjo_enhancements.h"
-#if defined(KATAMARI_BUILTIN_CONFIG)
-#include "katamari_builtin_config.h"  // generated from app/katamari_switch_defaults.toml and katamari_switch.toml (CMake)
+#if defined(BLUR_BUILTIN_CONFIG)
+#include "blur_builtin_config.h"  // generated from app/blur_switch_defaults.toml and blur_switch.toml (CMake)
 #endif
-namespace katamari::stage_diag {
-void Start();  // src/cpu/katamari_stage_diag.cpp
-}
 #include "native/nfsmw_nativo_captura.h"
 #if !REX_PLATFORM_SWITCH
 #include "profiler/nfsmw_perfil_pc.h"
@@ -74,18 +71,18 @@ public:
     }
 
     // katamari-nx (2026-11-02, sa2-nx's design): the Switch build's fixed settings, compiled in and applied before
-    // katamari.toml, which holds only the player's options (a key added there still overrides these: test runs).
+    // blur.toml, which holds only the player's options (a key added there still overrides these: test runs).
     std::string_view BuiltInConfig() const override {
-#if defined(KATAMARI_BUILTIN_CONFIG)
-        return kKatamariBuiltInConfig;
+#if defined(BLUR_BUILTIN_CONFIG)
+        return kBlurBuiltInConfig;
 #else
         return {};
 #endif
     }
-    // Without a katamari.toml next to the NRO, the player's default one is written there.
+    // Without a blur.toml next to the NRO, the player's default one is written there.
     std::string_view DefaultConfigFile() const override {
-#if defined(KATAMARI_BUILTIN_CONFIG)
-        return kKatamariPlayerConfig;
+#if defined(BLUR_BUILTIN_CONFIG)
+        return kBlurPlayerConfig;
 #else
         return {};
 #endif
@@ -215,8 +212,7 @@ public:
         renut::dlc::InstallPackages(runtime());
         // One log line with every enhancement and whether it is active (src/cpu/banjo_enhancements.h).
         banjo::LogEnhancements();
-        // katamari-nx (2026-11-01): katamari_diag_game_state (off): the stage fields of the game state, as they change.
-        katamari::stage_diag::Start();
+        // blur-nx (2026-11-10): katamari-nx's stage diagnostic went with its game.
         // PC: function-level CPU profile (banjo_pc_profile_s = N seconds per report; 0 = off; from futari-nx).
         banjo::pc_profiler::Start();
         // Switch: per-thread CPU accounting, the optional sampler and the stall watchdog.
@@ -262,12 +258,12 @@ public:
     }
 
     // A game_root folder next to the executable is used when no path was given.
-    // On the Switch that is sdmc:/switch/katamari-nx/game_root (the extracted disc).
+    // On the Switch that is sdmc:/switch/blur-nx/game_root (the extracted disc).
     void OnConfigurePaths(rex::PathConfig& paths) override {
-#if defined(KATAMARI_BUILTIN_CONFIG)
+#if defined(BLUR_BUILTIN_CONFIG)
         // The player's settings file. Not renut.toml: the test builds' full one, left on an SD card, would override
         // every built-in setting.
-        paths.config_path = rex::filesystem::GetExecutableFolder() / "katamari.toml";
+        paths.config_path = rex::filesystem::GetExecutableFolder() / "blur.toml";
 #endif
         if (paths.game_data_root.empty()) {
             const auto folder = rex::filesystem::GetExecutableFolder();
@@ -275,6 +271,16 @@ public:
             const auto extracted = folder / "game_root";
             if (!folder.empty() && std::filesystem::is_directory(extracted, ec)) {
                 paths.game_data_root = extracted;
+            }
+        }
+        // blur-nx (2026-11-10, pacman-nx's form): title update 2's data files (gamedata/, loc.pak, AvatarAwards) in a
+        // folder of their own, as on a console, mounted as UPDATE:. The runtime applies game_root/default.xexp itself.
+        if (paths.update_data_root.empty()) {
+            const auto folder = rex::filesystem::GetExecutableFolder();
+            std::error_code ec;
+            const auto update = folder / "update";
+            if (!folder.empty() && std::filesystem::is_directory(update, ec)) {
+                paths.update_data_root = update;
             }
         }
         renut::dlc::SetUserDataRoot(paths.user_data_root);  // the folder the DLC installer checks for installed ones

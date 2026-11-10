@@ -81,11 +81,15 @@ def main():
     ap.add_argument('--nb-image', required=True)
     ap.add_argument('--image', required=True)
     ap.add_argument('--out', default=None)
+    # blur-nx (2026-11-10): another reference than N&B's title update 3 (Katamari, the base: 0x82AD8E48 x101 and
+    # 0x82AD9308 x20, docs/katamari-notes.md)
+    ap.add_argument('--ref-render', type=lambda v: int(v, 16), default=NB_RENDER)
+    ap.add_argument('--ref-sampler', type=lambda v: int(v, 16), default=NB_SAMPLER)
     a = ap.parse_args()
     nbimg = open(a.nb_image, 'rb').read()
     img = open(a.image, 'rb').read()
     out = []
-    for kind, addr, n in (('render', NB_RENDER, NB_RENDER_N), ('sampler', NB_SAMPLER, NB_SAMPLER_N)):
+    for kind, addr, n in (('render', a.ref_render, NB_RENDER_N), ('sampler', a.ref_sampler, NB_SAMPLER_N)):
         nb = table(nbimg, addr, n)
         hits = find(img, nb, 8 if kind == 'render' else 6)
         print(f'{kind}: N&B 0x{addr:08X} x{n}; candidates', [(f'0x{h:08X}', r, l) for h, r, l in hits[:6]])

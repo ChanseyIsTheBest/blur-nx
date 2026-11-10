@@ -1,0 +1,40 @@
+# blur-nx (2026-11-10): Renut's hooks placed by hand in Blur (XDK 2.0.11164), read by tools/blur_hook_map.py before the
+# other routes. One line per hook: the address on the base's hook line (Beautiful Katamari's, or N&B's where Katamari
+# left it unhooked), Blur's address or - (leave unhooked), the evidence. Call chains from tools/blur_call_index.py on
+# app/generated (Blur) and the base's app/generated (Katamari); instructions from tools/ppc_dis.py. pacman-nx's hand list
+# (git 7f0e95737, tools/renut_hook_map_pacman.txt: the same XDK) names the shapes.
+#
+# Device creation. Blur's device init is sub_82253B10 (Katamari's sub_824E18D0): RtlInitializeCriticalSection x2,
+# ExGetXConfigSetting, SetRingBufferParameters 82249DA8, ..., XenonGpu_Initialize, InitializePresentationParameters,
+# InitializeApiState 822533A0, KickOff 82249A30, ..., ResetAllState 8223FDA0, in Katamari's order.
+824D01C8  82247AB8  D3DDevice_AddRef: guwange-nx's AddRef is exact-shape in two places (82247AB8, 82332B60); 82247AB8 sits right before CBlocker_Check 82247AD0, as Katamari's 824D01C8 before 824D0290; 82332B60 is game code
+824ED278  82255A10  D3D_XenonGpu_Initialize: its only call is KickOff 82249A30, as Katamari's 824ED278; the device init calls it before InitializePresentationParameters
+824E1408  82253608  D3D_InitializePresentationParameters: VdQueryVideoMode, CreateTexture 82242650, CreateSurface 82242770, SetRenderTarget 82240230, CreateSurface, SetDepthStencilSurface 82240580, memcpy 82953D90, then the four calls of the gamma setup: Katamari's sequence (loose shape 0.78, next 0.00)
+824DE218  8223FBB0  D3DDevice_SetGammaRamp: InitializePresentationParameters' fourth call after memcpy, in Katamari's order (sub_824EB2B8, sub_824E6148, SetGammaRamp, sub_824E61A0, SetPWLGamma); calls sub_8224BB88 (-> sub_8224BA08, the only VdGetCurrentDisplayGamma caller)
+824DE2F8  8223FC80  D3DDevice_SetPWLGamma: the last call of InitializePresentationParameters, as Katamari's
+824E1B50  82253DE0  D3D_CDevice_Uninitialize: UnsetAll 82247E58, BlockUntilIdle 82249CD8, VdSetSystemCommandBufferGpuIdentifierAddress, VdSetGraphicsInterruptCallback, SetRingBufferParameters, ExRegisterTitleTerminateNotification, VdShutdownEngines: Katamari's calls; called by D3DDevice_Release 82247BF8
+824E0518  82249CD8  D3DDevice_BlockUntilIdle: loose shape 0.88 (next 0.57), 29 -> 30 instructions; called by Uninitialize as Katamari's
+824E6410  -         D3DDevice_GetDeviceCaps: not linked: no 304-byte copy (li r5,304) in Direct3D's range (8223D000-82256000); guwange-nx found none either
+8255A200  -         D3D_CDevice_BeginRingManual: not linked (no shape match; pacman-nx and Katamari the same)
+# Draws and tiling
+824D9758  82243058  D3DDevice_DrawVerticesUP: BeginVertices 82242BC0 then memcpy, as Katamari's (loose shape 0.78, next 0.00)
+824D92B8  82242BC0  D3DDevice_BeginVertices: the callee list of Katamari's 824D92B8 in order (eight calls of one packet helper 8224F560, KickOff 82249A30, 82248938, 82248C40); called by DrawVerticesUP
+824DA9C0  -         D3DDevice_DrawIndexedTessellatedVertices: not linked (no candidate)
+824EFBC8  822551E8  BeginTiling (Katamari's raw hook, the full public form): `stw r5,12924(r3)` (TileCount +0x327C, guwange-nx's), `fmr f31,f1` (ClearZ), r9 ClearStencil; calls memcpy, SetViewport 82240100, SetScissorRect 8223F768, ClearF 822477D8, KickOff, ResetAllState 8223FDA0, as Katamari's 824EFBC8; called once, from game code sub_8232C798
+824F0150  82255558  EndTiling (Katamari's raw hook): SetPredication 82255078, Resolve 82251A80 x2, InsertCallback 82249D50, KickOff, SetViewport, ResetAllState: Katamari's callee list (loose shape 0.76, next 0.00); called once, from game code sub_8232C8B0
+# Resources
+824DB448  822452E8  D3D_UnlockResource: the tail call of VertexBuffer_Unlock 822456F8 (`lwz r11,24(r3); li r5,0; rlwinm r4,r11,0,0,29; b 0x822452E8`) and of SurfaceUnlockRect 82240A00
+824DB210  82246230  D3D_LockResource: LockSurface's third callee, as Katamari's 824DB210
+824D1918  82241C48  D3D_LockSurface: called by Lock2DSurface 82241D20 and Lock3DSurface 82241DB0 (and only them); calls GetSubresourceLayout 82241760, BlockSizeOfGpuFormat 82240A88, LockResource 82246230: Katamari's
+824D1A70  82241DB0  D3D_Lock3DSurface: the tail of LockSurface's two callers, next to Lock2DSurface (exact, guwange-nx) as in Katamari (loose 0.66, next 0.00)
+824D0E90  82241190  D3D_GetLevelLayout: between GetMipTailLevelOffsetCoords 82241038 and Get2DSurfaceDesc 82241560, as Katamari's 824D0E90 between 824D0D38 and 824D1258 (loose 0.63, next 0.00)
+824D1458  82241760  D3D_GetSubresourceLayout: called by LockSurface and the three surface getters; after Get3DSurfaceDesc 82241660 as in Katamari (loose 0.54, next 0.00)
+824D1B18  82241E60  D3D_SetTextureHeader: calls GetMaxMipLevels 82240B20 and FindTextureSize 82240CC8, Katamari's two callees; after Lock3DSurface as in Katamari
+824D2090  822423D8  D3DTexture_GetSurfaceLevel: after GetLevelCount 822423C8 as in Katamari; a 176-byte frame (Katamari's GetSurfaceLevel and GetVolumeLevel 176, GetCubeMapSurface 192)
+824D2160  82242490  D3DCubeTexture_GetCubeMapSurface: the 192-byte frame and one more saved register (bl 0x82953808) of Katamari's GetCubeMapSurface; second in the order
+824D2228  82242578  D3DVolumeTexture_GetVolumeLevel: 176-byte frame, third in the order, before LineTexture_LockRect 82242630 and CreateTexture 82242650
+824D6010  -         D3DDevice_CreatePixelShader: not linked: CreateVertexShader 82245118 counts in the word at 0x82C82B60, and nothing loads the word before it (guwange-nx: the pixel counter is the vertex one - 4)
+824A3D40  -         D3DDevice_SetTexture_Inline: N&B's inline form; no match (pacman-nx the same)
+# State
+824D4470  82244360  D3DDevice_SetVertexShaderConstantB: the loop (`addic. r6,r6,-1`) that ORs bits into the block at `addi r11,r11,2528` and sets the dirty bit at +32; called from game code 8234B6A8 and three neighbours 829E82A8 / 82D0 / 8328, as Katamari's from 82738260 and 82803A10 / 3A38 / 3A98
+824D44D0  822443C0  D3DDevice_SetPixelShaderConstantB: the same with 2532; the same caller pattern

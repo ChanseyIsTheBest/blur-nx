@@ -1,12 +1,12 @@
 # katamari-nx: the Switch package (the request's step 7), as banjo-nx's builds/ folders:
 #   builds/<date>_<time>_<name>/
-#     COPY_TO_SD_switch_katamari-nx/   katamari-nx.nro, katamari.toml (dist's renut.toml; named renut.toml in a
-#                                      KATAMARI_BUILTIN_CONFIG=OFF build), configs/ (renut.toml, renut_play.toml,
+#     COPY_TO_SD_switch_katamari-nx/   blur-nx.nro, blur.toml (dist's renut.toml; named renut.toml in a
+#                                      BLUR_BUILTIN_CONFIG=OFF build), configs/ (renut.toml, renut_play.toml,
 #                                      renut_ab.toml and the rest), deko3d_shaders.bin (the prebuilt DKSH cache),
 #                                      game_root/ (your game files)
 #     COPY_TO_SD_ROOT/atmosphere/contents/05D6EA1333487100/exefs/main.npdm   (the four-core forwarder NPDM; only with
 #                                      -FourCore since rc6: the user runs on three cores)
-#     katamari-nx.elf                  the unstripped ELF of this NRO (profiles map to it)
+#     blur-nx.elf                  the unstripped ELF of this NRO (profiles map to it)
 #     source_<commit>.tgz              the source snapshot (git archive of the commit; no game data, no generated code)
 #     README.txt, PACKAGE_NOTES.txt
 # Nothing of the game's data goes in by default (the NRO holds the recompiled code; the DKSH cache is compiled shader
@@ -28,11 +28,11 @@ $stamp = Get-Date -Format "yyyy-MM-dd_HHmm"
 $out = Join-Path (Split-Path -Parent $root) "builds\${stamp}_$Name"
 $sd = Join-Path $out "COPY_TO_SD_switch_katamari-nx"
 New-Item -ItemType Directory -Force $sd, (Join-Path $sd "configs"), (Join-Path $sd "game_root") | Out-Null
-Copy-Item $nro (Join-Path $sd "katamari-nx.nro")
+Copy-Item $nro (Join-Path $sd "blur-nx.nro")
 $dist = Join-Path $root "dist\switch\katamari-nx"
 # The one toml the NRO reads (src/renut_app.h, OnConfigurePaths): under any other name it does nothing on the console.
-$builtin = Select-String -Path (Join-Path $b "CMakeCache.txt") -Pattern "^KATAMARI_BUILTIN_CONFIG:BOOL=ON" -Quiet
-Copy-Item (Join-Path $dist "renut.toml") (Join-Path $sd $(if ($builtin) { "katamari.toml" } else { "renut.toml" }))
+$builtin = Select-String -Path (Join-Path $b "CMakeCache.txt") -Pattern "^BLUR_BUILTIN_CONFIG:BOOL=ON" -Quiet
+Copy-Item (Join-Path $dist "renut.toml") (Join-Path $sd $(if ($builtin) { "blur.toml" } else { "renut.toml" }))
 Copy-Item (Join-Path $dist "renut.toml"), (Join-Path $dist "renut_play.toml"), (Join-Path $dist "renut_ab.toml") (Join-Path $sd "configs")
 Copy-Item (Join-Path $dist "configs\*.toml") (Join-Path $sd "configs")
 $cache = Join-Path $root "out\deko3d_shaders\deko3d_shaders.bin"
@@ -58,7 +58,7 @@ if ($FourCore) {
     New-Item -ItemType Directory -Force $npdm | Out-Null
     Copy-Item (Join-Path $root "tools\forwarder\katamari_main.npdm") (Join-Path $npdm "main.npdm")
 }
-if (Test-Path $elf) { Copy-Item $elf (Join-Path $out "katamari-nx.elf") }
+if (Test-Path $elf) { Copy-Item $elf (Join-Path $out "blur-nx.elf") }
 Copy-Item (Join-Path $root "dist\switch\README.txt") $out
 if ($Notes) { Copy-Item $Notes (Join-Path $out "PACKAGE_NOTES.txt") }
 Push-Location $root
@@ -66,7 +66,7 @@ try {
     $sha = (& git rev-parse --short=12 HEAD).Trim()
     & git archive --format=tar.gz -o (Join-Path $out "source_$sha.tgz") HEAD
 } finally { Pop-Location }
-$md5 = (Get-FileHash -Algorithm MD5 (Join-Path $sd "katamari-nx.nro")).Hash.ToLower()
+$md5 = (Get-FileHash -Algorithm MD5 (Join-Path $sd "blur-nx.nro")).Hash.ToLower()
 Write-Output "package: $out"
-Write-Output ("NRO {0:N1} MB, md5 {1}; commit {2}" -f ((Get-Item (Join-Path $sd "katamari-nx.nro")).Length / 1MB), $md5, $sha)
+Write-Output ("NRO {0:N1} MB, md5 {1}; commit {2}" -f ((Get-Item (Join-Path $sd "blur-nx.nro")).Length / 1MB), $md5, $sha)
 Get-ChildItem -Recurse $out | Where-Object { -not $_.PSIsContainer } | Select-Object FullName, Length | Format-Table -AutoSize
