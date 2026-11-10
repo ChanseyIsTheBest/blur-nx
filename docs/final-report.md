@@ -5,7 +5,8 @@ renut_nx_ultimate_base. Details in `docs/blur-notes.md`, the hour-by-hour log in
 
 ## The package
 
-`D:\blur\builds\2026-11-11_0608_blur-nx_test` (commit `14c556d9`, NRO md5 `fa9fcf64c98796e2ebd94793cc3569c0`):
+`D:\blur\builds\2026-11-11_0815_blur-nx_test` (source `92b5375d`; the NRO built from `14c556d9`, the same code, only
+tomls and docs changed since; NRO md5 `fa9fcf64c98796e2ebd94793cc3569c0`; the game's gamma ramp off, the user's call):
 `COPY_TO_SD_switch_blur-nx/` (the NRO, `renut.toml` = the shipped settings with logs, `configs/` with `renut_play.toml`
 (diagnostics off), `renut_ab.toml` (30 s halves, target 1 the do-nothing control), the picture-changing options as
 their own configs, `renut_profile.toml` (the console profile), `renut_verify.toml`; the prebuilt DKSH shader cache,
