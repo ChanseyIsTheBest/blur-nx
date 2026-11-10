@@ -15210,7 +15210,10 @@ void ResolveStateLocked(const u8 *device_state, u32 flags, const ClearRect *sour
                         "{})", dest_texture_va, u32(dest->host_format), u32(surface->format), dest_level, dest_slice);
             dest->resolve_signature = 0;
           }
-        } else if (multisampled && dest->extra_levels && IsVulkan()) {
+        } else if (multisampled && ((dest->extra_levels && IsVulkan()) ||
+                                    ((slice != 0 || z != 0) && banjo::renut_gpu::MsSliceResolveOn()))) {
+          // blur-nx (2026-11-11, blur_renut_ms_slice_resolve, A/B 221): also a slice or depth other than 0 (a cube face,
+          // an array layer): plume's region resolve writes slice 0 only, so the staging image and a copy into the slice.
           // A destination with host levels takes it through a single-level
           // target (ResolveStagingLocked): plume's Vulkan resolve writes every
           // level of its destination (D3D12's writes level 0 only, and

@@ -35,6 +35,14 @@ struct EdramSpanFields
     uint tile_width;
 };
 
+// No division by a run-time integer (deko3d's GPU has none; uam's emulation through floats loses precision): a tile row's
+// width is one of two constants, a sample count 1 or 2 (shifts), and the tiles across a row are divided in floats, exact
+// here (offsets under 2048 tiles, rows a few dozen across: the quotient's error is far under the 0.5 / columns margin).
+uint DivideExact(uint value, uint divisor)
+{
+    return uint(floor((float(value) + 0.5) / float(divisor)));
+}
+
 EdramSpanFields UnpackSpan(uint bits)
 {
     EdramSpanFields s;
@@ -58,22 +66,36 @@ float4 main(float4 position : SV_Position) : SV_Target0
     const EdramSpanFields dst = UnpackSpan(asuint(g_Push.scale.x));
     const EdramSpanFields src = UnpackSpan(asuint(g_Push.scale.y));
     const uint2 pixel = uint2(position.xy);
-    // The destination sample's place in its own sample grid.
-    uint2 sample_xy = pixel * uint2(dst.samples_x, dst.samples_y);
+    // The destination sample's place in its own sample grid (samples across and down are 1 or 2: shifts).
+    const uint2 dst_shift = uint2(dst.samples_x - 1u, dst.samples_y - 1u);
+    uint2 sample_xy = pixel << dst_shift;
     if (dst.samples_x == 2u)
         sample_xy += uint2(sample_index & 1u, sample_index >> 1);
     else if (dst.samples_y == 2u)
         sample_xy.y += sample_index & 1u;
     const uint w = dst.tile_width;
-    const uint tile = (dst.base + (sample_xy.y / 16u) * dst.columns + sample_xy.x / w) & 2047u;
-    const uint2 in_tile = uint2(sample_xy.x % w, sample_xy.y % 16u);
+    uint tile_x, in_tile_x;
+    if (w == 40u)
+    {
+        tile_x = sample_xy.x / 40u;
+        in_tile_x = sample_xy.x - tile_x * 40u;
+    }
+    else
+    {
+        tile_x = sample_xy.x / 80u;
+        in_tile_x = sample_xy.x - tile_x * 80u;
+    }
+    const uint tile = (dst.base + (sample_xy.y >> 4) * dst.columns + tile_x) & 2047u;
+    const uint2 in_tile = uint2(in_tile_x, sample_xy.y & 15u);
     // The same tile and place in the source view.
     const uint rel = (tile - src.base) & 2047u;
     const uint src_rows = asuint(g_Push.param0);
     if (src.columns == 0u || rel >= src.columns * src_rows)
         discard;
-    const uint2 src_sample = uint2((rel % src.columns) * w + in_tile.x, (rel / src.columns) * 16u + in_tile.y);
-    const uint2 src_pixel = src_sample / uint2(src.samples_x, src.samples_y);
+    const uint src_row = DivideExact(rel, src.columns);
+    const uint src_column = rel - src_row * src.columns;
+    const uint2 src_sample = uint2(src_column * w + in_tile.x, (src_row << 4) + in_tile.y);
+    const uint2 src_pixel = src_sample >> uint2(src.samples_x - 1u, src.samples_y - 1u);
     const uint2 src_size = uint2(asuint(g_Push.translate.x), asuint(g_Push.translate.y));
     if (src_pixel.x >= src_size.x || src_pixel.y >= src_size.y)
         discard;

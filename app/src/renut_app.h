@@ -29,6 +29,7 @@
 #include "renut_engine/gpu/banjo_renut_capture.h"
 #endif
 #include "cpu/banjo_enhancements.h"
+#include "blur_write_watch.h"  // blur-nx (2026-11-11): blur_diag_cube_lights_s (PC diagnostic)
 #if defined(BLUR_BUILTIN_CONFIG)
 #include "blur_builtin_config.h"  // generated from app/blur_switch_defaults.toml and blur_switch.toml (CMake)
 #endif
@@ -237,6 +238,8 @@ public:
 #endif
         // The PGO-instrumented build (BANJO_PGO=generate) saves its counts to pgo/ every 2 minutes (nothing otherwise).
         banjo::pgo::Start();
+        // blur-nx (2026-11-11, diagnostic, PC): blur_diag_cube_lights_s wraps the ambient cube filler (blur_write_watch.cpp).
+        blur::write_watch::InstallCubeFillerWrapper();
     }
 
     // The PGO-instrumented build saves its counts when the game loses focus (HOME menu): it may be closed from there.

@@ -720,6 +720,13 @@ REXCVAR_DEFINE_BOOL(blur_renut_resolve_exp_bias, true, "Banjo/Renut",
                     "Blur resolves its light-glow chain with +11 and reads it with -11, so the glows were 2048 times too "
                     "dim. Off: no bias")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(blur_renut_ms_slice_resolve, true, "Banjo/Renut",
+                    "blur-nx (2026-11-11, A/B 221): a multisampled resolve into a slice (a cube face, an array layer) or "
+                    "a volume's depth other than 0 goes through a single-sampled staging image and a copy into that "
+                    "slice. plume's region resolve has no slice: every face landed in face 0. Blur renders its 256x256 "
+                    "environment cube 4x and resolves the six faces: five were black, and the car glass and paint that "
+                    "reflect it came out dark (the black rear window). Off: as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(blur_renut_edram_inherit, true, "Banjo/Renut",
                     "blur-nx (2026-11-11, A/B 220): before a draw that keeps part of its target (a write mask without "
                     "every channel, or blending), the target takes what other views wrote over its EDRAM tiles since "
@@ -1079,6 +1086,7 @@ const char *AbName(int target) {
   case 218: return "an EDRAM wipe written over through another view is left out (blur_renut_wipe_overwritten)";
   case 219: return "a colour resolve's exponent bias applied (blur_renut_resolve_exp_bias)";
   case 220: return "a target kept in part takes what other views wrote over its EDRAM (blur_renut_edram_inherit)";
+  case 221: return "a multisampled resolve into a slice other than 0 goes through staging (blur_renut_ms_slice_resolve)";
   default: {
     // sasrt-nx (2026-11-08): the GPU round's items (sasrt_gpu_round.h: 90 and up).
     const char *name = sasrt::gpu_round::AbName(target);
@@ -1809,6 +1817,11 @@ bool WipeOverwrittenOn() {
 bool ResolveExpBiasOn() {
   static const bool on = REXCVAR_GET(blur_renut_resolve_exp_bias);
   return KeyOn<219>(on);
+}
+// blur-nx (2026-11-11): render/draw.cpp ResolveStateLocked's multisampled slice resolves, A/B 221.
+bool MsSliceResolveOn() {
+  static const bool on = REXCVAR_GET(blur_renut_ms_slice_resolve);
+  return KeyOn<221>(on);
 }
 // blur-nx (2026-11-11): render/draw.cpp InheritEdramBeforeDrawLocked, A/B 220.
 bool EdramInheritOn() {

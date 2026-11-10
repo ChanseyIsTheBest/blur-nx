@@ -80,6 +80,8 @@ endif()
 set(RENUT_SOURCES
     src/main.cpp
     src/blur_keys.cpp
+    # blur-nx (2026-11-11): blur_diag_cube_writer, a write watch on a guest buffer (Windows PC only; empty elsewhere).
+    src/blur_write_watch.cpp
     # katamari-nx (2026-10-31): DLC packages in the "dlc" folder next to the NRO installed at start (reNut upstream's).
     src/renut_engine/dlc_install.cpp
 	src/renut_engine/FPS.cpp
@@ -636,6 +638,7 @@ endif()
 if(WIN32)
     target_compile_options(renut PRIVATE -gline-tables-only -gcodeview)
     target_link_options(renut PRIVATE "LINKER:/DEBUG:FULL")
+    target_link_libraries(renut PRIVATE dbghelp)  # blur-nx (2026-11-11): blur_write_watch.cpp names a write's function
     # blur-nx (2026-11-10): the renderer's objects too, so a render-thread crash names its file and line (the first
     # ones here named only the nearest public symbol, KeepConstantF4Pending + 0x64DD). Debug info only.
     if(TARGET banjo_renut_gpu)

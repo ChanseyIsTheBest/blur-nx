@@ -455,6 +455,25 @@ in both, a floor), occlusion answers (the cube is the same with them fixed or of
 memexport (no readback in the race). Next: the writer of the staging buffer, found with a write watch on the guest page
 (host page protection, the PDB naming the recompiled function).
 
+**The black rear window, found (03:00-05:30).** Tracing the 8x8 ambient cube's difference led through the game's own code
+with two new PC diagnostics (`app/src/blur_write_watch.cpp`): a write watch (a guest page write-protected, a vectored
+handler naming the writing recompiled function and its generated line from the PDB, re-armed by single-stepping) and
+wrappers put in the indirect-call table (`Memory::SetFunction`) around the cube filler `sub_8216AE98` and the light
+writer `sub_8216CA28`, which log their inputs under either renderer. The cube is a sum of the scene's lights; light 0's
+colour is base x min(2 x scale, 1), the scale the fourth float of the lighting object's +2672 vector, which the game
+adapts every frame (`sub_8216FA88`): about 0.137 in the race intro, 0.43-0.44 on the grid, 0.12-0.3 once racing, in both
+renderers alike. The earlier same-spot captures had caught the reference in its intro phase and ours on the grid: the
+cube's difference was the phase, not a renderer fault.
+
+The window itself: at the same pixel the car interior draws alike in both (0.05), but the glass over it outputs RGB 0.03
+here against 0.27 in the reference (alpha the same). The glass and the paint reflect the 256x256 environment cube the
+game renders every frame, 4x, and resolves face by face into slices 0-5. Here five faces were black: plume's region
+resolve has no slice argument, so every multisampled resolve landed in slice 0. `blur_renut_ms_slice_resolve` (A/B 221,
+on): a multisampled resolve into a slice or depth other than 0 goes through the single-sampled staging image and a copy
+into its slice (the path Vulkan already used for destinations with levels). The six faces are now the reference's within
+a few levels; the rear window shows the interior (67/70/58 against 87/89/77; the rest is the lighting phase and the
+car's place), the paint is brighter.
+
 **Machine copies: on hold (the user, 21:12: "I'll tell you when", waiting on the SASRT session).** The SASRT
 session's generator patch (copies of functions with guest atomics) is applied to `tools/localize_native.py`; nothing
 runs it until post-codegen runs again.
@@ -479,6 +498,7 @@ native, empty machine-copy lists. `katamari_*` names in CMake and the app became
 | The base's XDK notes for XDK 11164 and later: Lock2DSurface / LockSurface / LockResource / BeginCommandBuffer have the first release's unused argument, SetGammaRamp / SetPWLGamma a flags argument | a port at 11164 or later from the base meets them all (pacman-nx met three at 21250) | the table above |
 | `FastCensusDraw` / `FastCensusReport` share a mutex | with a queued backend (deko3d) the census map was replaced by the report thread under the render thread's insert: Ryujinx crashed with a pointer made of text | emu2, emu3 here; `render/draw.cpp` `g_fast_census_mutex` |
 | Occlusion queries answered as the emulated GPU answers them (`D3DQuery_GetData` hook), each block at the address GetData forms (`QueryBlockPhysical`: the 0xE0000000 range's 4 KB offset) | Renut runs no GPU packets, so a query's ZPASS counts never come and GetData says "not ready" for ever: whatever a game hides by a query is never drawn (Blur's light glows); an answer at the pointer's own page is never read | `d3d/hooks/state.cpp` here; the SDK's `ExecutePacketType3_EVENT_WRITE_ZPD`; `blur_renut_diag_query_log` |
+| Multisampled resolves into a slice other than 0 through a staging image (`blur_renut_ms_slice_resolve`) | plume's region resolve has no slice: every cube face / array layer resolved from a multisampled target landed in slice 0 | Blur's environment cube (five black faces, the black rear window); `render/draw.cpp` |
 | Views of one EDRAM take each other's writes (`blur_renut_edram_inherit`) | each view is its own host target; a draw that keeps part of its target (a write mask, blending) showed what that host target last held, not the EDRAM | Blur's environment panorama alpha (11 -> 251 of 255, the reference's), its glow chain; `edram_inherit.hlsli` |
 | A partial resolve keeps a destination of another format (`blur_renut_resolve_keep_dest`) | the console converts into the destination's format; Renut remade the destination (empty) | Blur's 640x360 image here |
 | Multisampled region resolves on deko3d through a whole-target staging image (`blur_renut_tile_resolve_staging`) | plume's deko3d region resolve blits the multisampled image; in Ryujinx only the first tile of a tiled frame arrives | emu4 here |

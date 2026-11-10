@@ -30,6 +30,7 @@
 
 #include "renut_engine/gpu/banjo_renut_select.h"
 #include "renut_engine/gpu/banjo_renut_tuning.h"  // blur-nx (2026-11-11): ResolveTraceDiagOn
+#include "blur_write_watch.h"  // blur-nx (2026-11-11): blur_diag_cube_writer
 #include <rex/types.h>
 
 #include "renut_engine/gpu/guest/command_buffers.h"
@@ -761,6 +762,9 @@ void LockSurface(u32 texture, u32 slice, u32 level, u32 flags, u32 &address, u32
   address = LockResource(texture, level, dword1 & ~0xFFFu, LoadU32(texture + 0x30) & ~0xFFFu,
                          sub.address - sub.tail_offset, sub.level_bytes, flags) +
             sub.tail_offset;
+  // blur-nx (2026-11-11, diagnostic): the 8x8 ambient cube's writer (blur_diag_cube_writer, blur_write_watch.cpp).
+  if (const u32 dword2 = LoadU32(texture + 0x24); (dword2 & 0x1FFF) == 7 && ((dword2 >> 13) & 0x1FFF) == 7 && !level)
+    blur::write_watch::NoteCubeLock(texture, slice, address);
 }
 
 // blur-nx (2026-11-10): XDK 2.0.11164's form, with the unused second argument (Lock2DSurface 82241D20 passes its
