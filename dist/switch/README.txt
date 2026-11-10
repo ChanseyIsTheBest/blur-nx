@@ -35,7 +35,8 @@ renut_ab.toml     the same with an in-run A/B list, 30 s halves, target 1 as the
                   "[renut A/B]" lines give each target's time.
 configs/          one key away from renut.toml each, for you to decide on: renut_1080_docked.toml (1080 lines docked;
                   not pixel-identical), renut_dynamic.toml (dynamic resolution), renut_smaa.toml (SMAA on the 3D),
-                  renut_gamma_off.toml (without the display's gamma ramp: brighter darks, saves its present cost); and
+                  renut_gamma_on.toml (with the game's display gamma ramp: darker mid-tones; costs a little at present);
+                  and
                   test settings: renut_verify.toml (every verify mode: slow), renut_pgo.toml, renut_profile.toml (the
                   console profile, below).
 

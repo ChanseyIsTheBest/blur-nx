@@ -508,6 +508,12 @@ stands; the games' timing gives no moment with both cars in one place (the run-u
 `out/compare/` (1-5). `tools/run_pc.ps1 -Max` sets the capture count (a second nfsmw_captura_max in -Extra is a CLI
 error that drops every flag: a reference run then draws nothing).
 
+**The gamma ramp: off from 2026-11-11 (the user's call).** Shown the race with the game's ramp on and off beside the
+reference, the user judged it off more accurate to their eye. The numbers do not decide it (frame average 53 on, 68 off,
+60 the reference; the title screen matched closer on), so the shipped tomls and the player's built-in config now have
+`banjo_renut_game_gamma = false` and `configs/renut_gamma_on.toml` puts it back. It also saves the ramp's present cost
+(rr6-nx: 0.4-0.6 ms a frame on the console).
+
 **Machine copies: on hold (the user, 21:12: "I'll tell you when", waiting on the SASRT session).** The SASRT
 session's generator patch (copies of functions with guest atomics) is applied to `tools/localize_native.py`; nothing
 runs it until post-codegen runs again.

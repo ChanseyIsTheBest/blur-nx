@@ -53,7 +53,10 @@ SHIPPED = {
     # 2026-11-10: the display's gamma ramp (the device's default, from VdGetCurrentDisplayGamma), which the 360's display and
     # the reference apply. Title screen against the reference: mean difference 2.9 / 7.6 / 9.0 off, 0.3 / 1.3 / 1.5 on.
     # rr6-nx measured its present cost on the console at 0.4-0.6 ms a frame (the base's open item): the user's decision.
-    'banjo_renut_game_gamma': 'true  # the ramp of the reference and the 360 display; configs/renut_gamma_off.toml: without it',
+    # 2026-11-11, the user's decision: off. In the race the reference sits between (frame average 53 with the ramp, 68
+    # without, 60 the reference) and the user judged the race without it more accurate to their eye.
+    'banjo_renut_game_gamma': "false  # the user's call (2026-11-11): the race without the game's ramp looked more "
+                              "accurate to them; configs/renut_gamma_on.toml: with it",
     # 2026-11-10: banjo-nx ships SMAA on (its user's call); it smooths edges, not the game's picture: off here,
     # configs/renut_smaa.toml for the user to decide on. Banjo's fur-shell cuts (also its user's calls) act only on Banjo's
     # four fur shaders (render/draw.cpp, by pixel shader hash): inert for Blur, set to the game's own all the same.
@@ -95,9 +98,10 @@ CONFIGS = {
                                '1080 lines docked (not pixel-identical: the user\'s decision)'),
     'renut_dynamic.toml': ({'banjo_renut_dynamic_resolution': 'true'},
                            'banjo-nx\'s dynamic resolution (not pixel-identical: the user\'s decision)'),
-    'renut_gamma_off.toml': ({'banjo_renut_game_gamma': 'false'},
-                             "without the display's gamma ramp (brighter darks than the reference; saves the ramp's "
-                             "present cost)"),
+    'renut_gamma_on.toml': ({'banjo_renut_game_gamma': 'true'},
+                            "the game's own gamma ramp (SetGammaRamp) applied at present (the title screen matched the "
+                            "reference closer with it; the race is brighter without it, which the user judged more "
+                            "accurate)"),
     'renut_smaa.toml': ({'banjo_renut_smaa': 'true'},
                         "SMAA 1x on the 3D image before the HUD (smooths edges: not the game's picture; costs GPU time)"),
     'renut_profile.toml': ({'switch_profile_stacks': 'true'},

@@ -64,8 +64,10 @@ to send, the console profile, the A/B). No game data anywhere; the game folder i
 
 ## Decisions taken (recorded in the notes)
 
-- The game's gamma ramp on (it is the reference's and the 360's picture); SMAA off (not the game's picture); both as
-  configs the other way. `renut_post_process_precision = "Game"`.
+- The game's gamma ramp off (the user's call, 2026-11-11: the race looked more accurate to them without it; by the
+  numbers the reference sits between, frame average 53 with the ramp, 68 without, 60 the reference); SMAA off (not the
+  game's picture); both as configs the other way (`renut_gamma_on.toml`, `renut_smaa.toml`).
+  `renut_post_process_precision = "Game"`.
 - Every correctness fix on by default with its own key and in the in-run A/B list.
 - PC comparisons use the shipped settings (`make_blur_tomls.py` writes a PC test copy beside `renut.exe`): the earlier
   PC runs had the build's defaults.
