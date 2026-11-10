@@ -16,6 +16,9 @@
 
 #include "renut_engine/gpu/d3d/d3d_native.h"
 #include "renut_engine/gpu/guest/guest_memory.h"
+#include "renut_engine/gpu/banjo_renut_tuning.h"  // blur-nx (2026-11-10): OcclusionQueriesOn
+#include "renut_engine/gpu/log.h"
+#include <algorithm>
 
 using namespace renut::gpu;
 
@@ -428,6 +431,70 @@ BANJO_RENUT_UNHOOKED_HOOK_SHARED(sub_826411C0, D3DDevice_SetCommandBufferPredica
 // blur-nx (2026-11-10): Blur's SetCommandBufferPredication is 8224A310 (N&B's 826411C0 by shape, 1.00; the same form;
 // it reads the device's command buffer word at +13728, N&B's +13516 moved as the zones say). docs/blur-notes.md.
 BANJO_RENUT_HOOK(sub_8224A310, D3DDevice_SetCommandBufferPredication_hook);  // D3DDevice_SetCommandBufferPredication
+
+// blur-nx (2026-11-10, blur_renut_occlusion_queries, A/B 213): D3DQuery_GetData (sub_8224CD70; D3DQuery_Issue is
+// sub_8224CAE8, the two functions holding the 0xFFFFFEED constant). An occlusion query (type 9 at +4, issued: +20 bit
+// 0x40) has up to 30 sample-count blocks (physical addresses at +28, their number at +148), 64 bytes each: the END
+// counts at +0, the BEGIN counts at +32, little-endian as the GPU writes them; GetData sums END - BEGIN of ZPass_A / B
+// (+16, +20) and says "not ready" while the last block's +16 and +20 still hold Issue(END)'s 0xFFFFFEED. Before it
+// reads them, a block still holding it gets what the reference's GPU writes at the ZPASS event (the SDK's
+// command_processor.cpp, ExecutePacketType3_EVENT_WRITE_ZPD): the block zeroed, Total_A and ZPass_A = 1000. The issue's
+// fence word (+24), which GetData compares with the GPU's read pointer, is cleared: the counts are in.
+REX_IMPORT(__imp__sub_8224CD70, GameD3DQueryGetData, u32(u32, u32, u32, u32));
+namespace {
+constexpr u32 kQuerySentinel = 0xFFFFFEEDu;
+constexpr u32 kQueryFakeSamples = 1000;  // the SDK's query_occlusion_fake_sample_count
+u32 QueryBe(const u8 *p) { return u32(p[0]) << 24 | u32(p[1]) << 16 | u32(p[2]) << 8 | u32(p[3]); }
+void QueryLe(u8 *p, u32 v) {
+  p[0] = u8(v);
+  p[1] = u8(v >> 8);
+  p[2] = u8(v >> 16);
+  p[3] = u8(v >> 24);
+}
+}  // namespace
+u32 D3DQuery_GetData_hook(u32 query, u32 data, u32 size, u32 flags) {
+  {  // blur-nx (2026-11-10): what GetData is asked (the first calls, then every 4096th): the hook never answered
+    static uint32_t calls = 0;
+    const uint32_t n = ++calls;
+    if (const u8 *q = GuestPtr<u8>(query); q && (n <= 12 || (n & 4095) == 0)) {
+      const u32 first = QueryBe(q + 28);
+      const u8 *block = first ? GuestPhysicalPtr<u8>(first) : nullptr;
+      RGPU_INFO("[renut] D3DQuery_GetData call {}: query {:08X} type {} flags {:02X} fence {:08X} blocks {} first block "
+                "{:08X}: +16 {:08X} +20 {:08X} +48 {:08X}; size {} flags {}", n, query, QueryBe(q + 4), q[20],
+                QueryBe(q + 24), QueryBe(q + 148), first, block ? QueryBe(block + 16) : 0, block ? QueryBe(block + 20) : 0,
+                block ? QueryBe(block + 48) : 0, size, flags);
+    }
+  }
+  if (banjo::renut_gpu::OcclusionQueriesOn()) {
+    if (u8 *q = GuestPtr<u8>(query); q && QueryBe(q + 4) == 9 && (q[20] & 0x40)) {
+      const u32 blocks = std::min<u32>(QueryBe(q + 148), 30);
+      bool answered = false;
+      for (u32 i = 0; i < blocks; ++i) {
+        const u32 physical = QueryBe(q + 28 + 4 * i);
+        if (!physical)
+          continue;
+        u8 *block = GuestPhysicalPtr<u8>(physical);
+        // Every issued query, not only blocks holding the sentinel: under Renut Issue(END) leaves the blocks as they
+        // were (zeros at first, then whatever the memory held: the PC log of 2026-11-10, query1), so GetData read 0
+        // or garbage samples. The reference's answer for every query is 1000 passed.
+        (void)kQuerySentinel;
+        std::memset(block, 0, 64);
+        QueryLe(block + 0, kQueryFakeSamples);   // Total_A
+        QueryLe(block + 16, kQueryFakeSamples);  // ZPass_A
+        answered = true;
+      }
+      if (answered) {
+        std::memset(q + 24, 0, 4);
+        static uint32_t logged = 0;
+        if (logged++ < 4)
+          RGPU_INFO("[renut] occlusion query {:08X}: {} block(s) answered with {} samples passed, as the reference's "
+                      "GPU does (blur_renut_occlusion_queries)", query, blocks, kQueryFakeSamples);
+      }
+    }
+  }
+  return GameD3DQueryGetData(query, data, size, flags);
+}
+BANJO_RENUT_HOOK(sub_8224CD70, D3DQuery_GetData_hook);  // D3DQuery_GetData
 BANJO_RENUT_HOOK(sub_82244CD0, D3DDevice_SetShaderGPRAllocation_hook);  // D3DDevice_SetShaderGPRAllocation  // katamari-nx: N&B sub_821EFD38, signature 0.78 (next 0.30)  // blur-nx: Katamari sub_824D4CD8, guwange-nx D3DDevice_SetShaderGPRAllocation 8225E3C0, exact (58 instructions); agrees: 1
 BANJO_RENUT_HOOK(sub_82243FE8, D3D_CleanupGprAllocationSetup_hook);  // D3D_CleanupGprAllocationSetup  // katamari-nx: N&B sub_82637208, signature 0.98 (next 0.13)  // blur-nx: Katamari sub_824D3FE0, guwange-nx D3D_CleanupGprAllocationSetup 8225D8E8, exact (70 instructions); agrees: 1
 BANJO_RENUT_HOOK(sub_8224C0D0, D3DDevice_SetScreenExtentQueryMode_hook);  // D3DDevice_SetScreenExtentQueryMode  // katamari-nx: N&B sub_826414C0, signature 1.00 (next 0.75)  // blur-nx: Katamari sub_824E67C8, guwange-nx D3DDevice_SetScreenExtentQueryMode 82267130, exact (28 instructions); agrees: 1

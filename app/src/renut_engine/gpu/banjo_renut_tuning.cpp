@@ -668,6 +668,23 @@ REXCVAR_DEFINE_BOOL(blur_renut_resolve_keep_dest, true, "Banjo/Renut",
                     "(empty) and the post pass that reads last frame's image read nothing. Off: the destination is made "
                     "again in the source's format (Renut's rule)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(blur_renut_occlusion_queries, true, "Banjo/Renut",
+                    "blur-nx (2026-11-10, A/B 213): occlusion queries answered as the reference's GPU answers them. "
+                    "D3DQuery_Issue(END) writes 0xFFFFFEED into the query's sample counts and a ZPASS event the GPU "
+                    "replaces it with the counts at; Renut runs no GPU packets, so the counts never came and "
+                    "D3DQuery_GetData said \"not ready\" for ever: Blur's light glows (the tail lights' red spill) and "
+                    "whatever else it hides by a query were never drawn. On: GetData of an issued occlusion query finds "
+                    "the blocks still holding 0xFFFFFEED and writes what the emulated GPU writes (the SDK's "
+                    "command_processor.cpp, EVENT_WRITE_ZPD: zeroed, 1000 samples passed). Off: Renut as it was")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(blur_renut_tile_resolve_staging, true, "Banjo/Renut",
+                    "blur-nx (2026-11-10, A/B 214, deko3d): a multisampled colour target resolved a region at a time (Blur "
+                    "resolves its 1280x720 4x scene in three tiles) is resolved whole into a single-sampled staging "
+                    "image once, and each region is copied from it. plume's deko3d region resolve is a 2D-engine blit "
+                    "of the multisampled image: in Ryujinx only the tile at the top arrived, the rest of the frame was "
+                    "whatever the memory held. The staging is resolved again only when the target was drawn or "
+                    "cleared since (a tile's own clear after its resolve does not count). Off: the blit")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(banjo_renut_push_point_only, true, "Banjo/Enhancements",
                     "Renut's renderer (Vulkan): with the constants in uniform buffers, the push constant (the three "
                     "constant addresses) is read only by the point sprites' geometry shader, so only point-list draws "
@@ -1008,6 +1025,8 @@ const char *AbName(int target) {
   case 210: return "the 2_10_10_10_FLOAT / 8_8_8_8 views of one EDRAM reinterpreted (blur_renut_view_reinterpret)";
   case 211: return "an EXPAND resolve sampled as its FLOAT twin through the resolve's texture (blur_renut_expand_alias)";
   case 212: return "a partial resolve keeps a destination of another format and converts (blur_renut_resolve_keep_dest)";
+  case 213: return "occlusion queries answered as the reference's GPU does (blur_renut_occlusion_queries)";
+  case 214: return "multisampled region resolves through a whole-target staging image (blur_renut_tile_resolve_staging)";
   default: {
     // sasrt-nx (2026-11-08): the GPU round's items (sasrt_gpu_round.h: 90 and up).
     const char *name = sasrt::gpu_round::AbName(target);
@@ -1703,6 +1722,16 @@ bool ExpandAliasOn() {
 bool ResolveKeepDestOn() {
   static const bool on = REXCVAR_GET(blur_renut_resolve_keep_dest);
   return KeyOn<212>(on);
+}
+// blur-nx (2026-11-10): D3DQuery_GetData's answer (d3d/hooks/state.cpp), A/B 213.
+bool OcclusionQueriesOn() {
+  static const bool on = REXCVAR_GET(blur_renut_occlusion_queries);
+  return KeyOn<213>(on);
+}
+// blur-nx (2026-11-10): render/draw.cpp TileResolveStagedLocked, A/B 214.
+bool TileResolveStagingOn() {
+  static const bool on = REXCVAR_GET(blur_renut_tile_resolve_staging);
+  return KeyOn<214>(on);
 }
 bool ScanOutHandOverOn() {
   static const bool on = REXCVAR_GET(banjo_deko3d_scanout_handover);

@@ -324,6 +324,9 @@ void FlushResolveMipsLocked(HostTexture &t);
 // (plume's Vulkan resolve writes every level of its destination, from levels
 // the source does not have). Its texture and layout only; kept for reuse.
 HostTexture *ResolveStagingLocked(const HostTexture *dest);
+// blur-nx (2026-11-10, blur_renut_tile_resolve_staging): a single-sampled target of this format and host size (a scratch
+// target) to resolve a whole multisampled target into.
+HostTexture *ResolveSourceStagingLocked(plume::RenderFormat format, uint32_t width, uint32_t height);
 
 // Bindless sampler slot matching the device fetch constant's sampler state.
 // 'lod_scale' (TextureBinding::lod_scale): a texture with host levels, which

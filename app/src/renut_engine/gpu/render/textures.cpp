@@ -1832,6 +1832,11 @@ HostTexture *ResolveStagingLocked(const HostTexture *dest) {
   return scratch ? &scratch->target : nullptr;
 }
 
+HostTexture *ResolveSourceStagingLocked(plume::RenderFormat format, uint32_t width, uint32_t height) {
+  ScratchTarget *scratch = GetScratchTarget(format, width, height);  // blur-nx (2026-11-10)
+  return scratch ? &scratch->target : nullptr;
+}
+
 void UpdateResolveMipsLocked(HostTexture *texture, const plume::RenderRect &rect) {
   auto &s = State();
   plume::RenderCommandList *cmd = Video::CommandListLocked();

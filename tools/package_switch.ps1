@@ -1,6 +1,7 @@
+# blur-nx (2026-11-10): Blur's names and paths (dist\switch\blur-nx, COPY_TO_SD_switch_blur-nx); the rest as katamari-nx wrote it.
 # katamari-nx: the Switch package (the request's step 7), as banjo-nx's builds/ folders:
 #   builds/<date>_<time>_<name>/
-#     COPY_TO_SD_switch_katamari-nx/   blur-nx.nro, blur.toml (dist's renut.toml; named renut.toml in a
+#     COPY_TO_SD_switch_blur-nx/   blur-nx.nro, blur.toml (dist's renut.toml; named renut.toml in a
 #                                      BLUR_BUILTIN_CONFIG=OFF build), configs/ (renut.toml, renut_play.toml,
 #                                      renut_ab.toml and the rest), deko3d_shaders.bin (the prebuilt DKSH cache),
 #                                      game_root/ (your game files)
@@ -12,8 +13,8 @@
 # Nothing of the game's data goes in by default (the NRO holds the recompiled code; the DKSH cache is compiled shader
 # code). katamari-nx (2026-10-31, the user's request, for their own SD card): -GameRoot copies the extracted disc into
 # game_root and -Dlc the DLC packages into dlc (installed at the first start). Never into git, never uploaded.
-#   powershell -File tools/package_switch.ps1 -Name pgo_lto [-Build app\out\switch-pgo-use] [-Notes <file>]
-#       [-GameRoot D:\beautifulkatamari\game] [-Dlc D:\beautifulkatamari\dlc]
+#   powershell -File tools/package_switch.ps1 -Name test1 [-Build app\out\switch] [-Notes <file>]
+#       [-GameRoot D:\blur\game] [-Dlc <folder>]
 param([string]$Name = "package", [string]$Build = "app\out\switch", [string]$Notes = "", [string]$GameRoot = "",
       [string]$Dlc = "", [switch]$FourCore)
 $ErrorActionPreference = "Stop"
@@ -26,10 +27,10 @@ $elf = Join-Path $b "renut"
 if (-not (Test-Path $nro)) { throw "no NRO at $nro" }
 $stamp = Get-Date -Format "yyyy-MM-dd_HHmm"
 $out = Join-Path (Split-Path -Parent $root) "builds\${stamp}_$Name"
-$sd = Join-Path $out "COPY_TO_SD_switch_katamari-nx"
+$sd = Join-Path $out "COPY_TO_SD_switch_blur-nx"
 New-Item -ItemType Directory -Force $sd, (Join-Path $sd "configs"), (Join-Path $sd "game_root") | Out-Null
 Copy-Item $nro (Join-Path $sd "blur-nx.nro")
-$dist = Join-Path $root "dist\switch\katamari-nx"
+$dist = Join-Path $root "dist\switch\blur-nx"
 # The one toml the NRO reads (src/renut_app.h, OnConfigurePaths): under any other name it does nothing on the console.
 $builtin = Select-String -Path (Join-Path $b "CMakeCache.txt") -Pattern "^BLUR_BUILTIN_CONFIG:BOOL=ON" -Quiet
 Copy-Item (Join-Path $dist "renut.toml") (Join-Path $sd $(if ($builtin) { "blur.toml" } else { "renut.toml" }))
@@ -44,14 +45,14 @@ if ($GameRoot) {
     if ($LASTEXITCODE -ge 8) { throw "robocopy of the game files failed ($LASTEXITCODE)" }
 } else {
     Set-Content -Path (Join-Path $sd "game_root\PUT_YOUR_GAME_FILES_HERE.txt") -Encoding ascii -Value `
-        "Extract your own Beautiful Katamari disc here: default.xex, the .dat files, data/ and the rest (README.txt)."
+        "Extract your own Blur disc here: default.xex and the rest of the disc (README.txt). Title update 2's default.xexp next to default.xex; its other files in ../update (README.txt)."
 }
 New-Item -ItemType Directory -Force (Join-Path $sd "dlc") | Out-Null
 if ($Dlc) {
     Copy-Item (Join-Path $Dlc "*") (Join-Path $sd "dlc") -Force
 } else {
     Set-Content -Path (Join-Path $sd "dlc\PUT_THE_DLC_PACKAGES_HERE.txt") -Encoding ascii -Value `
-        "Optional: Beautiful Katamari's DLC packages (Xbox 360 LIVE files, content type 2) here; installed at the first start."
+        "Optional: DLC packages (Xbox 360 LIVE files, content type 2) here; installed at the first start. Blur-nx has not been tested with any."
 }
 if ($FourCore) {
     $npdm = Join-Path $out "COPY_TO_SD_ROOT\atmosphere\contents\05D6EA1333487100\exefs"

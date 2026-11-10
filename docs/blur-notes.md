@@ -277,6 +277,13 @@ in both (the same scripted presses from a save at the grid, or a capture at a fi
 made from guest memory over a resolve destination ("sample GUEST"): the traced race frames show none left but
 ordinary textures in memory a resolve once used.
 
+**The request's list, item by item (20:05).** Depth bias per draw: dynamic state, set when the game's words change
+(rr6-nx's `rr6_depth_bias`, on; never in the pipeline key). Sampler LOD bias: the fetch constant's (MipMapLodBias / 32)
+in each sampler. Foliage alpha: alpha test and alpha to coverage are applied (the depth-only census: 0 depth-only draws
+with a pixel shader drawn without them). Resolves sampled as textures: the two fixes above, and the trace's "sample
+GUEST" check in the race. User clip plane: Blur uses plane 0 on 16 vertex shaders (the PC log's "user clip plane"
+lines: applied); the rear-view mirror draws.
+
 **The EDRAM views of one surface (`blur_renut_view_reinterpret`, A/B 210, off).** Blur draws a 1280x720 4x MSAA
 target as 2_10_10_10_FLOAT (7e3) and resolves it through an 8_8_8_8 view (and once at 320x180 the other way: drawn as
 16_16_16_16_FLOAT, resolved as 8_8_8_8): the console reads the same EDRAM words, Renut's views are separate host
@@ -290,6 +297,47 @@ pale. Not proven, so off; the key and the A/B stay for the console's log and a l
 the menus (single player, career, Proving Grounds), the tutorial videos, car select and a Barcelona Oval race with
 its HUD, power-ups, smoke and track: 120 fps on the RTX 3060 (the PC's vsync), render thread 0.3 ms and GPU 2.3 ms a
 frame at the title, no errors in the log.
+
+## The Switch build in Ryujinx (2026-11-10)
+
+**emu2 (20:01, host-mapped memory):** the logos, the profile screen at 94 s, the showroom loading; Ryujinx itself died
+2 minutes in ("Fatal error. 0xC0000005" in its translator: in host-mapped mode a bad access in the NRO kills the
+emulator, no crash log). **emu3 (20:10, the software page table in `ryu-data\blur\Config.json`, Blur's own folder;
+the host-mapped file kept as `Config.json.hostmapped`):** further, to 328 s of game: the Bizarre Creations logo, a
+loading screen, the Bink video, the career menus, Proving Grounds, the showroom car: all drawn right, 0 verify
+differences. Then "Invalid memory access at 0x0000736472616328" (the bytes of "(cards": a pointer made of text) at
+`renut+0x20792a0`, `FastCensusDraw` (addr2line on `app/out/switch/renut`), called from `DrawStateLocked`.
+
+**The cause: a race in a diagnostic.** `banjo_renut_diag_fast_census` (on in the test toml for the guide's census)
+counts field combinations in an `unordered_map` from `FastCensusDraw`; `FastCensusReport` walks it and replaces it.
+On the PC the draws run on the game's thread, where the report runs too (`StatsGameFrame`); with deko3d's queued
+backend the draws run on the render thread, so the report replaced the map under an insert. Both now hold one mutex
+(`render/draw.cpp`, `g_fast_census_mutex`; diagnostics only). A base port (below).
+
+**emu4 (20:40, host-mapped memory, the census fixed):** 10 minutes, no crash, 0 verify differences; title, career
+menu, the Barcelona Oval intro and the race. In the race most frames are garbage below the top ~256 rows (colourful
+noise): Blur resolves its 1280x720 4x scene in three tiles (rows 0-256, 256-512, 512-720), and plume's deko3d region
+resolve is a 2D-engine blit of the multisampled image, of which only the top tile arrived in Ryujinx (no warning in
+either log; whether the console's 2D engine does the same is not known). `blur_renut_tile_resolve_staging` (A/B 214,
+deko3d, on): the target resolved whole into a single-sampled staging image (plume's own resolve), each tile copied
+from it; the staging is made again only when the target was drawn or cleared since (a tile's own clear-after does
+not count), so once a frame (`render/draw.cpp` `TileResolveStagedLocked`).
+
+**Occlusion queries (20:30).** `D3DQuery_GetData` (`sub_8224CD70`) is called about 130 times a second in a race, every
+one an occlusion query (type 9), and under Renut its sample blocks never hold D3D's 0xFFFFFEED sentinel or any GPU
+count (zeros, then leftover memory): the game read 0 or garbage samples. `blur_renut_occlusion_queries` (A/B 213, on)
+answers every issued occlusion query as the emulated GPU does (1000 samples passed). Post-codegen had made GetData's
+two callers direct `__imp__` calls, so they were pointed at the hooked entry in the generated code
+(`renut_recomp.104.cpp`, `renut_recomp.26.cpp`; post-codegen writes the same once it runs again). The glow did not
+come back with it (`query2`).
+
+**The glow and the dark rear window, with RenderDoc (20:40, D3D12 through renderdoccmd; the Vulkan layer's capture
+crashed the app).** The scene pass is right (the rear window shows the interior). The 640x360 half-float image the
+composite adds is a motion-blur pass (`ps_bbd6c08b4ae59fb0`: g_tDepth, g_tColour, g_tNoise, a reprojection matrix,
+steps along the motion) whose colour input is the 640x360 texture itself (last frame's result) plus a 1x1 resolve
+into its corner from a temporary surface on the stack (0x7010F6B0, cleared, 1x1 in its header); it is all zero, so the
+blurred highlights (the tail lights' spill) add nothing. Where the console puts the scene into that image is not yet
+found: the next thing to look at.
 
 ## What belonged to Katamari, taken out (`tools/blur_strip_katamari.py`)
 
@@ -309,3 +357,7 @@ native, empty machine-copy lists. `katamari_*` names in CMake and the app became
 | On the PC, a game folder given on the command line skips the path wizard (`renut_app.h`) | with no saved path config, Renut's PC build waits for a click on a dialog: a new port's first runs look like a hang after "Swapchain: 3 images" | runs pc1-renut3 here |
 | XenosRecomp's dump reader accepts two-binding vertex shaders (container flags 0x20, words 0x1C / 0x20 set) | they were skipped without a message: ~1,000 of Blur's run-time vertex shaders never reached the cache | `app/thirdparty/reblue-XenosRecomp/XenosRecomp/main.cpp`; the installer's wasm translator would need it too |
 | The base's XDK notes for XDK 11164 and later: Lock2DSurface / LockSurface / LockResource / BeginCommandBuffer have the first release's unused argument, SetGammaRamp / SetPWLGamma a flags argument | a port at 11164 or later from the base meets them all (pacman-nx met three at 21250) | the table above |
+| `FastCensusDraw` / `FastCensusReport` share a mutex | with a queued backend (deko3d) the census map was replaced by the report thread under the render thread's insert: Ryujinx crashed with a pointer made of text | emu2, emu3 here; `render/draw.cpp` `g_fast_census_mutex` |
+| Occlusion queries answered as the emulated GPU answers them (`D3DQuery_GetData` hook) | Renut runs no GPU packets, so a query's ZPASS counts never come and GetData says "not ready" for ever: whatever a game hides by a query is never drawn (Blur's light glows) | `d3d/hooks/state.cpp` here; the SDK's `ExecutePacketType3_EVENT_WRITE_ZPD` |
+| A partial resolve keeps a destination of another format (`blur_renut_resolve_keep_dest`) | the console converts into the destination's format; Renut remade the destination (empty) | Blur's 640x360 image here |
+| Multisampled region resolves on deko3d through a whole-target staging image (`blur_renut_tile_resolve_staging`) | plume's deko3d region resolve blits the multisampled image; in Ryujinx only the first tile of a tiled frame arrives | emu4 here |

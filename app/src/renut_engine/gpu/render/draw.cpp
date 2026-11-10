@@ -11317,9 +11317,14 @@ struct FastCensus {
   std::unordered_map<u32, uint64_t> combos;
   uint64_t last_seq = 0;
 } g_fast_census;
+// blur-nx (2026-11-10, the Ryujinx crashes emu2 / emu3: FastCensusDraw read a pointer made of log text): with a queued
+// backend (deko3d) the draws reach FastCensusDraw on the render thread while FastCensusReport, on the game's frame
+// thread (StatsGameFrame), walks and replaces the same map. Both now hold this. Diagnostics only (the census key).
+std::mutex g_fast_census_mutex;
 
 void FastCensusDraw(const DrawCall &call, const ShaderRecord &vs, const ShaderRecord *ps, u32 export_count,
                     const ReplayConstants *replay) {
+  std::lock_guard census_lock(g_fast_census_mutex);
   FastCensus &c = g_fast_census;
   ++c.draws;
   const ChainHint &h = g_chain_hint;
@@ -13132,6 +13137,7 @@ void UnleashedCensusDraw(const GuestDevice &device, const DrawCall &call, u32 te
 
 // banjo-nx (2026-10-26, banjo_renut_diag_fast_census): the 10 s line.
 std::string FastCensusReport() {
+  std::lock_guard census_lock(g_fast_census_mutex);  // blur-nx (2026-11-10): see g_fast_census_mutex
   FastCensus &c = g_fast_census;
   if (!c.draws)
     return {};
@@ -14679,6 +14685,54 @@ static uint64_t ResolveSignature(const HostSurface *surface, const ClearRect &sr
   return h ? h : 1;
 }
 
+// blur-nx (2026-11-10, blur_renut_tile_resolve_staging, A/B 214): plume's deko3d region resolve is a 2D-engine blit of the
+// multisampled image; Blur resolves its 1280x720 4x scene in three tiles and in Ryujinx only the top tile arrived (the
+// rest was whatever the destination's memory held). Here the target is resolved whole into a single-sampled staging
+// image (the API's own resolve) and the region is copied from it. Every draw is in the target before the first tile's
+// resolve (Renut draws the frame once, not once a tile), so the staging is made once a frame: again only when the
+// target's writes changed, a tile's own clear after its resolve excepted (ResolveStateLocked moves the mark past it).
+struct TileStage {
+  const HostSurface *surface = nullptr;
+  const HostTexture *stage = nullptr;
+  uint64_t generation = 0, writes = 0;
+} g_tile_stage;
+uint64_t g_tile_stage_resolves = 0, g_tile_stage_copies = 0;
+
+bool TileResolveStagedLocked(HostSurface *surface, HostTexture *dest, const plume::RenderRect &rect, uint32_t host_x,
+                             uint32_t host_y) {
+  if (!surface->texture || !dest->texture || dest->dimension != TextureDimension::Tex2D || dest->stacked)
+    return false;
+  const uint32_t sw = surface->scale.Size(surface->width), sh = surface->scale.Size(surface->height);
+  if (host_x == 0 && host_y == 0 && rect.left == 0 && rect.top == 0 && uint32_t(rect.right) == sw &&
+      uint32_t(rect.bottom) == sh && dest->alloc_width == sw && dest->alloc_height == sh)
+    return false;  // whole: plume's own resolve, no blit
+  HostTexture *stage = ResolveSourceStagingLocked(surface->format, sw, sh);
+  if (!stage || !stage->texture)
+    return false;
+  plume::RenderCommandList *cmd = State().command_list;
+  TileStage &ts = g_tile_stage;
+  if (ts.surface != surface || ts.stage != stage || ts.generation != surface->generation ||
+      ts.writes != surface->writes) {
+    TransitionSurfaceLocked(surface, plume::RenderTextureLayout::RESOLVE_SOURCE);
+    TransitionTextureLocked(stage, plume::RenderTextureLayout::RESOLVE_DEST);
+    cmd->resolveTexture(stage->texture.get(), surface->texture.get());
+    ts.surface = surface;
+    ts.stage = stage;
+    ts.generation = surface->generation;
+    ts.writes = surface->writes;
+    if (++g_tile_stage_resolves <= 4)
+      RGPU_INFO("[renut] multisampled region resolve through a staging image ({}x{} format {}; "
+                "blur_renut_tile_resolve_staging)", sw, sh, u32(surface->format));
+  }
+  ++g_tile_stage_copies;
+  TransitionTextureLocked(stage, plume::RenderTextureLayout::COPY_SOURCE);
+  TransitionTextureLocked(dest, plume::RenderTextureLayout::COPY_DEST);
+  const plume::RenderBox box(rect.left, rect.top, rect.right, rect.bottom);
+  cmd->copyTextureRegion(plume::RenderTextureCopyLocation::Subresource(dest->texture.get(), 0, 0),
+                         plume::RenderTextureCopyLocation::Subresource(stage->texture.get()), host_x, host_y, 0, &box);
+  return true;
+}
+
 void ResolveStateLocked(const u8 *device_state, u32 flags, const ClearRect *source_rect,
                         u32 dest_texture_va, const d3d::TextureFetchConstant *dest_format,
                         i32 dest_x, i32 dest_y, u32 dest_level, u32 dest_slice,
@@ -14742,6 +14796,7 @@ void ResolveStateLocked(const u8 *device_state, u32 flags, const ClearRect *sour
   }
   plume::RenderCommandList *cmd = s.command_list;
   static uint32_t depth_logged = 0;
+  bool tile_staged = false;  // blur-nx (2026-11-10): this resolve copied from g_tile_stage
 
   // The source rect within the target and the destination level.
   auto fit = [&](const HostTexture *dest, ClearRect &src) {
@@ -14883,6 +14938,10 @@ void ResolveStateLocked(const u8 *device_state, u32 flags, const ClearRect *sour
                 plume::RenderTextureCopyLocation::Subresource(staging->texture.get()), host_x,
                 host_y, z, &box);
           }
+        } else if (multisampled && IsDeko3D() && slice == 0 && z == 0 && dest_level == 0 &&
+                   banjo::renut_gpu::TileResolveStagingOn() &&
+                   TileResolveStagedLocked(surface, dest, rect, host_x, host_y)) {
+          tile_staged = true;  // blur-nx (2026-11-10, blur_renut_tile_resolve_staging)
         } else if (multisampled) {
           TransitionSurfaceLocked(surface, plume::RenderTextureLayout::RESOLVE_SOURCE);
           TransitionTextureLocked(dest, plume::RenderTextureLayout::RESOLVE_DEST);
@@ -14952,6 +15011,10 @@ void ResolveStateLocked(const u8 *device_state, u32 flags, const ClearRect *sour
     const u32 clear_flags = ((flags & 0x100) ? 1u : 0u) | ((flags & 0x200) ? 0x30u : 0u);
     ClearTargets(t, clear_flags, rect, clear_color ? clear_color : kBlack, clear_depth,
                  clear_stencil);
+    // blur-nx (2026-11-10, blur_renut_tile_resolve_staging): the clear is of the region just copied out of the staging
+    // image; the next tiles copy other rows, which the staging still holds as they were drawn.
+    if (tile_staged && g_tile_stage.surface == surface)
+      g_tile_stage.writes = surface->writes;
     // kameo-nx (2026-11-04, banjo_renut_resolve_clears_both): the flags name what to clear whichever surface was resolved,
     // and the other one is the device's. Kameo's imposter renderer resolves each model's colour with 0x300 so the next starts
     // clean; with only the colour cleared each model was depth-tested against the last one's depth. Noted by Kameo:

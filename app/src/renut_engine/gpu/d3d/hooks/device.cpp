@@ -82,6 +82,9 @@ REX_IMPORT(__imp__RtlInitializeCriticalSection, RtlInitializeCriticalSection, vo
 REX_IMPORT(__imp__KeQueryPerformanceFrequency, KeQueryPerformanceFrequency, u32());
 REX_IMPORT(__imp__KeGetCurrentProcessType, KeGetCurrentProcessType, u32());
 REX_IMPORT(__imp__VdGetCurrentDisplayGamma, VdGetCurrentDisplayGamma, void(u32, u32));
+#if defined(_WIN32)
+namespace banjo::renderdoc { void GameFrame(); }  // me/banjo_renderdoc.cpp (banjo_renderdoc_game_s)
+#endif
 
 namespace {
 
@@ -884,6 +887,11 @@ void D3DDevice_RunCommandBuffer_hook(u32 device_va, u32 command_buffer,
 // goes on with the next one, waiting only when it is more than
 // render_thread::kMaxFramesAhead ahead.
 void D3DDevice_Swap_hook(u32 device_va, u32 front_buffer, u32 /*parameters*/) {
+#if defined(_WIN32)
+  // blur-nx (2026-11-10): banjo_renderdoc_game_s counted at Renut's Swap (Blur has no appMainDraw hook): a PC RenderDoc
+  // capture of three game frames by time, with RenderDoc's Vulkan layer loaded (VK_LAYER_PATH / VK_INSTANCE_LAYERS).
+  ::banjo::renderdoc::GameFrame();
+#endif
   // banjo-nx (2026-10-20, from sa2-nx, banjo_renut_core_layout, the Switch): once, the guest main thread alone on core 0,
   // the other guest threads on cores 1-2 (preferring 2: the render thread is pinned to core 1 at a higher priority).
   // Before, every guest thread could run on any core, time-sliced at their priority (0x3B).
