@@ -402,6 +402,8 @@ bool StackSurfaceHeadersOn();    // blur_renut_stack_surface_headers (215, blur-
 bool SampleGridResolveOn();      // blur_renut_sample_grid_resolve (216, blur-nx)
 bool SurfaceSizeGuardOn();       // blur_renut_surface_size_guard (217, blur-nx)
 bool WipeOverwrittenOn();        // blur_renut_wipe_overwritten (218, blur-nx)
+bool ResolveExpBiasOn();         // blur_renut_resolve_exp_bias (219, blur-nx)
+bool EdramInheritOn();           // blur_renut_edram_inherit (220, blur-nx)
 bool ScanOutHandOverOn();        // banjo_deko3d_scanout_handover (74)
 bool DepthHandOverSampledOn();   // banjo_deko3d_depth_handover_sampled (75)
 bool DepthReadLayoutOn();        // banjo_deko3d_depth_read_layout (76)
@@ -455,6 +457,8 @@ int DiagBuildDelayMs();
 void ResolveTraceFrameStart();  // banjo_renut_diag_resolve_trace: the render thread's frame boundary
 // banjo-nx (2026-10-19, render-thread proposal 22): inline (read per resolve, per bind and per target change).
 extern std::atomic<bool> g_trace_frame;
+bool QueryLogOn();  // blur-nx (2026-11-11): blur_renut_diag_query_log
+bool ResolveTraceDiagOn();  // blur-nx (2026-11-11): banjo_renut_diag_resolve_trace set (any frame)
 inline bool ResolveTraceOn() { return g_trace_frame.load(std::memory_order_relaxed); }  // this frame is traced  // banjo_renut_diag_build_delay_ms (a test): a wait before every pipeline build
 
 // Around the plume device (backend/video.cpp): before it is created, after, and at shutdown once the prebuild has

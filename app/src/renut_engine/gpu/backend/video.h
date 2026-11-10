@@ -199,6 +199,16 @@ struct VideoState {
   // above, keyed with bit 31 set).
   std::unique_ptr<plume::RenderShader> view_reinterpret_ps;
   std::unique_ptr<plume::RenderShader> view_reinterpret_ms_ps;  // per sample, for multisampled views
+  // blur-nx (2026-11-10, blur_renut_sample_grid_resolve) and its pipelines by destination format.
+  std::unique_ptr<plume::RenderShader> sample_grid_resolve_ps;
+  std::unordered_map<uint32_t, std::unique_ptr<plume::RenderPipeline>> sample_grid_pipelines;
+  // blur-nx (2026-11-11, blur_renut_edram_inherit): the source / destination sample forms, and the pipelines by
+  // destination format and both sample counts.
+  std::unique_ptr<plume::RenderShader> edram_inherit_ps;
+  std::unique_ptr<plume::RenderShader> edram_inherit_src_ms_ps;
+  std::unique_ptr<plume::RenderShader> edram_inherit_dst_ms_ps;
+  std::unique_ptr<plume::RenderShader> edram_inherit_ms_ms_ps;
+  std::unordered_map<uint32_t, std::unique_ptr<plume::RenderPipeline>> edram_inherit_pipelines;
   std::unique_ptr<plume::RenderPipeline> depth_resolve_pipeline[2];
   // banjo-nx (2026-10-19, banjo_renut_depth_words_lazy): the same with the words target's writes masked off.
   std::unique_ptr<plume::RenderPipeline> depth_resolve_float_pipeline[2];

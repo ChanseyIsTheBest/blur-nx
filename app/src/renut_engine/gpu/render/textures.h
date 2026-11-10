@@ -327,14 +327,12 @@ HostTexture *ResolveStagingLocked(const HostTexture *dest);
 // blur-nx (2026-11-10, blur_renut_tile_resolve_staging): a single-sampled target of this format and host size (a scratch
 // target) to resolve a whole multisampled target into.
 HostTexture *ResolveSourceStagingLocked(plume::RenderFormat format, uint32_t width, uint32_t height);
+// blur-nx (2026-11-10, blur_renut_resolve_exp_bias): that staging target's bindless slot, to draw from it.
+uint32_t ResolveSourceStagingSlotLocked(plume::RenderFormat format, uint32_t width, uint32_t height);
 // blur-nx (2026-11-10, diagnostic): called by the Lock hooks (any thread). The first CPU lock of each texture a resolve
 // wrote is logged: Renut's resolves stay on the GPU (only 1x1 32-bit float ones are read back), so the CPU reads what
 // it wrote there itself.
 void NoteCpuLockOfResolve(u32 texture_va, u32 level, u32 guest_format);
-// blur-nx (2026-11-10, blur_renut_sample_grid_resolve): draws the box x box average of the texture in source_slot into
-// dest's region (dest pixel p from source texels box * p .. box * p + box - 1: the mip shader). The caller rebinds its
-// draw state after.
-bool DrawBoxDownsampleLocked(uint32_t source_slot, HostTexture *dest, const plume::RenderRect &dest_rect, uint32_t box);
 
 // Bindless sampler slot matching the device fetch constant's sampler state.
 // 'lod_scale' (TextureBinding::lod_scale): a texture with host levels, which

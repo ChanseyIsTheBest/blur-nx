@@ -712,6 +712,25 @@ REXCVAR_DEFINE_BOOL(blur_renut_wipe_overwritten, true, "Banjo/Renut",
                     "EDRAM the resolve reads. Blur clears its 640x360 view, draws the scene through the 1280x720 one "
                     "and resolves the 640x360 view: the wipe blackened the frame. Off: as vivapinata-nx wrote it")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(blur_renut_resolve_exp_bias, true, "Banjo/Renut",
+                    "blur-nx (2026-11-10, A/B 219): a colour resolve's exponent bias, as the console applies it: the "
+                    "Resolve flags' top six bits (D3DRESOLVE_EXPONENTBIAS, signed; D3D puts them in RB_COPY_DEST_INFO's "
+                    "copy_dest_exp_bias, which the SDK's resolve applies) scale the colour by 2^bias. Renut copied "
+                    "without it while sasrt_renut_texture_exp_adjust applies the fetch's exponent adjust that undoes it: "
+                    "Blur resolves its light-glow chain with +11 and reads it with -11, so the glows were 2048 times too "
+                    "dim. Off: no bias")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(blur_renut_edram_inherit, true, "Banjo/Renut",
+                    "blur-nx (2026-11-11, A/B 220): before a draw that keeps part of its target (a write mask without "
+                    "every channel, or blending), the target takes what other views wrote over its EDRAM tiles since "
+                    "its own last write, through the console's tile and sample layout (edram_inherit_ps.hlsl). On the "
+                    "console every view of the same EDRAM sees one memory; here each view is its own host target. "
+                    "Blur draws its 256x128 environment panorama into a 512x256 4x target cleared to alpha 1, then "
+                    "draws its RGB through a 320x256 view of the same EDRAM and resolves that: the alpha the ground, "
+                    "car glass and car paint read is that clear's. Without it the view's alpha was whatever its own "
+                    "host target last held (old HUD pixels): the ground and car about half as bright, the rear window "
+                    "black. Off: each view keeps only what it drew")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(banjo_renut_push_point_only, true, "Banjo/Enhancements",
                     "Renut's renderer (Vulkan): with the constants in uniform buffers, the push constant (the three "
                     "constant addresses) is read only by the point sprites' geometry shader, so only point-list draws "
@@ -1058,6 +1077,8 @@ const char *AbName(int target) {
   case 216: return "a 4x view of a 1x surface resolves as its 2x2 box (blur_renut_sample_grid_resolve)";
   case 217: return "no host target for a surface header over 8192 wide or tall (blur_renut_surface_size_guard)";
   case 218: return "an EDRAM wipe written over through another view is left out (blur_renut_wipe_overwritten)";
+  case 219: return "a colour resolve's exponent bias applied (blur_renut_resolve_exp_bias)";
+  case 220: return "a target kept in part takes what other views wrote over its EDRAM (blur_renut_edram_inherit)";
   default: {
     // sasrt-nx (2026-11-08): the GPU round's items (sasrt_gpu_round.h: 90 and up).
     const char *name = sasrt::gpu_round::AbName(target);
@@ -1784,6 +1805,16 @@ bool WipeOverwrittenOn() {
   static const bool on = REXCVAR_GET(blur_renut_wipe_overwritten);
   return KeyOn<218>(on);
 }
+// blur-nx (2026-11-10): render/draw.cpp ResolveStateLocked's exponent bias, A/B 219.
+bool ResolveExpBiasOn() {
+  static const bool on = REXCVAR_GET(blur_renut_resolve_exp_bias);
+  return KeyOn<219>(on);
+}
+// blur-nx (2026-11-11): render/draw.cpp InheritEdramBeforeDrawLocked, A/B 220.
+bool EdramInheritOn() {
+  static const bool on = REXCVAR_GET(blur_renut_edram_inherit);
+  return KeyOn<220>(on);
+}
 bool ScanOutHandOverOn() {
   static const bool on = REXCVAR_GET(banjo_deko3d_scanout_handover);
   return KeyOn<74>(on);
@@ -2166,6 +2197,22 @@ std::atomic<bool> g_trace_frame{false};  // banjo-nx (2026-10-19): read inline b
 namespace {
 std::chrono::steady_clock::time_point g_trace_last{};
 }  // namespace
+
+// blur-nx (2026-11-11): the option itself (any frame), for the game threads' diagnostics (d3d/hooks/resource.cpp).
+bool ResolveTraceDiagOn() {
+  static const bool on = REXCVAR_GET(banjo_renut_diag_resolve_trace);
+  return on;
+}
+
+REXCVAR_DEFINE_BOOL(blur_renut_diag_query_log, false, "Banjo/Diagnostics",
+                    "blur-nx (2026-11-11): what the game's D3DQuery_GetData returns to it, in Renut's renderer and in the "
+                    "emulated one alike (d3d/hooks/state.cpp): every 10 s, each query's calls, not-ready answers and "
+                    "sample counts (last, least, most), to compare the two renderers' occlusion answers")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+bool QueryLogOn() {
+  static const bool on = REXCVAR_GET(blur_renut_diag_query_log);
+  return on;
+}
 
 void ResolveTraceFrameStart() {
   if (!REXCVAR_GET(banjo_renut_diag_resolve_trace)) {

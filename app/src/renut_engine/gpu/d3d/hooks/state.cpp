@@ -20,6 +20,10 @@
 #include "renut_engine/gpu/log.h"
 #include "renut_engine/gpu/render/surfaces.h"  // blur-nx (2026-11-10): NoteSurfaceHeader
 #include <algorithm>
+#include <chrono>         // blur-nx (2026-11-11): blur_renut_diag_query_log
+#include <mutex>
+#include <unordered_map>
+#include <vector>
 
 using namespace renut::gpu;
 
@@ -448,6 +452,11 @@ namespace {
 constexpr u32 kQuerySentinel = 0xFFFFFEEDu;
 constexpr u32 kQueryFakeSamples = 1000;  // the SDK's query_occlusion_fake_sample_count
 u32 QueryBe(const u8 *p) { return u32(p[0]) << 24 | u32(p[1]) << 16 | u32(p[2]) << 8 | u32(p[3]); }
+// blur-nx (2026-11-11): a query block's physical address as the game's GetData (sub_8224CD70) forms it from the pointer at
+// query +28: (p & 0x1FFFFFFF) + (((p >> 20) + 0x200) & 0x1000), read through the 0xC0000000 mapping. A pointer in the
+// 0xE0000000 range (Blur's blocks: E6D8DFC0) is a page further on (the console's 4 KB offset of that range). The answers
+// were written at the pointer's own page: GetData read the sentinel there and said not ready to every query.
+u32 QueryBlockPhysical(u32 p) { return (p & 0x1FFFFFFFu) + ((((p >> 20) + 0x200u) & 0x1000u)); }
 void QueryLe(u8 *p, u32 v) {
   p[0] = u8(v);
   p[1] = u8(v >> 8);
@@ -461,7 +470,7 @@ u32 D3DQuery_GetData_hook(u32 query, u32 data, u32 size, u32 flags) {
     const uint32_t n = ++calls;
     if (const u8 *q = GuestPtr<u8>(query); q && (n <= 12 || (n & 4095) == 0)) {
       const u32 first = QueryBe(q + 28);
-      const u8 *block = first ? GuestPhysicalPtr<u8>(first) : nullptr;
+      const u8 *block = first ? GuestPhysicalPtr<u8>(QueryBlockPhysical(first)) : nullptr;
       RGPU_INFO("[renut] D3DQuery_GetData call {}: query {:08X} type {} flags {:02X} fence {:08X} blocks {} first block "
                 "{:08X}: +16 {:08X} +20 {:08X} +48 {:08X}; size {} flags {}", n, query, QueryBe(q + 4), q[20],
                 QueryBe(q + 24), QueryBe(q + 148), first, block ? QueryBe(block + 16) : 0, block ? QueryBe(block + 20) : 0,
@@ -476,7 +485,7 @@ u32 D3DQuery_GetData_hook(u32 query, u32 data, u32 size, u32 flags) {
         const u32 physical = QueryBe(q + 28 + 4 * i);
         if (!physical)
           continue;
-        u8 *block = GuestPhysicalPtr<u8>(physical);
+        u8 *block = GuestPhysicalPtr<u8>(QueryBlockPhysical(physical));
         // Every issued query, not only blocks holding the sentinel: under Renut Issue(END) leaves the blocks as they
         // were (zeros at first, then whatever the memory held: the PC log of 2026-11-10, query1), so GetData read 0
         // or garbage samples. The reference's answer for every query is 1000 passed.
@@ -497,7 +506,60 @@ u32 D3DQuery_GetData_hook(u32 query, u32 data, u32 size, u32 flags) {
   }
   return GameD3DQueryGetData(query, data, size, flags);
 }
+// blur-nx (2026-11-11): D3DQuery_GetData with blur_renut_diag_query_log: the answer the game gets, under Renut's renderer
+// (the hook above) and under the emulated one (the game's own D3D on the SDK's GPU, which counts real samples with host
+// occlusion queries) alike, so the two can be compared query by query.
+namespace {
+struct QueryStats {
+  u32 calls = 0, not_ready = 0, last = 0, least = 0xFFFFFFFFu, most = 0;
+};
+std::mutex g_query_log_mutex;
+std::unordered_map<u32, QueryStats> g_query_log;
+std::chrono::steady_clock::time_point g_query_log_last{};
+
+void NoteQueryAnswer(u32 query, u32 data, u32 size, u32 result) {
+  std::lock_guard lock(g_query_log_mutex);
+  QueryStats &q = g_query_log[query];
+  ++q.calls;
+  if (result != 0) {
+    ++q.not_ready;
+  } else if (data && size >= 4) {
+    if (const u8 *d = GuestPtr<u8>(data)) {
+      q.last = QueryBe(d);
+      q.least = std::min(q.least, q.last);
+      q.most = std::max(q.most, q.last);
+    }
+  }
+  const auto now = std::chrono::steady_clock::now();
+  if (g_query_log_last == std::chrono::steady_clock::time_point{})
+    g_query_log_last = now;
+  if (now - g_query_log_last < std::chrono::seconds(10))
+    return;
+  g_query_log_last = now;
+  std::vector<std::pair<u32, QueryStats>> all(g_query_log.begin(), g_query_log.end());
+  std::sort(all.begin(), all.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+  RGPU_INFO("[query] D3DQuery_GetData in the last 10 s ({}): {} queries", banjo::renut_gpu::Active() ? "Renut" : "emulated",
+            all.size());
+  for (const auto &[address, s] : all)
+    RGPU_INFO("[query]   {:08X}: {} calls, {} not ready; samples last {} least {} most {}", address, s.calls, s.not_ready,
+              s.last, s.least == 0xFFFFFFFFu ? 0u : s.least, s.most);
+  g_query_log.clear();
+}
+}  // namespace
+#if KATAMARI_RENUT_HOOKS
+REX_EXTERN(__imp__sub_8224CD70);
+extern "C" REX_FUNC(sub_8224CD70) {
+  const u32 query = ctx.r3.u32, data = ctx.r4.u32, size = ctx.r5.u32;
+  if (::banjo::renut_gpu::Active())
+    ::rex::ppc::HostToGuestFunction<D3DQuery_GetData_hook>(ctx, base);
+  else
+    __imp__sub_8224CD70(ctx, base);
+  if (banjo::renut_gpu::QueryLogOn())
+    NoteQueryAnswer(query, data, size, ctx.r3.u32);
+}
+#else
 BANJO_RENUT_HOOK(sub_8224CD70, D3DQuery_GetData_hook);  // D3DQuery_GetData
+#endif
 BANJO_RENUT_HOOK(sub_82244CD0, D3DDevice_SetShaderGPRAllocation_hook);  // D3DDevice_SetShaderGPRAllocation  // katamari-nx: N&B sub_821EFD38, signature 0.78 (next 0.30)  // blur-nx: Katamari sub_824D4CD8, guwange-nx D3DDevice_SetShaderGPRAllocation 8225E3C0, exact (58 instructions); agrees: 1
 BANJO_RENUT_HOOK(sub_82243FE8, D3D_CleanupGprAllocationSetup_hook);  // D3D_CleanupGprAllocationSetup  // katamari-nx: N&B sub_82637208, signature 0.98 (next 0.13)  // blur-nx: Katamari sub_824D3FE0, guwange-nx D3D_CleanupGprAllocationSetup 8225D8E8, exact (70 instructions); agrees: 1
 BANJO_RENUT_HOOK(sub_8224C0D0, D3DDevice_SetScreenExtentQueryMode_hook);  // D3DDevice_SetScreenExtentQueryMode  // katamari-nx: N&B sub_826414C0, signature 1.00 (next 0.75)  // blur-nx: Katamari sub_824E67C8, guwange-nx D3DDevice_SetScreenExtentQueryMode 82267130, exact (28 instructions); agrees: 1

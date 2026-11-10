@@ -121,6 +121,9 @@ struct HostSurface {
   uint64_t edram_wiped_generation = 0, edram_wiped_writes = 0;
   float edram_wiped_color[4] = {};
   uint64_t blur_wiped_seq = 0;  // blur-nx (2026-11-10, blur_renut_wipe_overwritten): g_surface_write_seq at the wipe
+  // blur-nx (2026-11-11, blur_renut_edram_inherit): g_blur_color_write_last when this target last looked for other views'
+  // writes over its EDRAM (InheritEdramBeforeDrawLocked, render/draw.cpp): none since, it need not look again.
+  uint64_t blur_inherit_checked = 0;
 
   // gpu_profile labels of draws with it as the first target: color only,
   // color with depth, depth only. Made on first use.
@@ -175,6 +178,18 @@ HostSurface *GrowDepthToColourLocked(u32 surface_va, HostSurface *depth, uint32_
 // 32-bit colour target over the EDRAM base and pitch of depth target 'depth' written after both its own last write and the
 // write it was last restored from, or nullptr.
 extern uint64_t g_surface_write_seq;
+// blur-nx (2026-11-11, blur_renut_edram_inherit): the write_seq of the latest write to any colour target (draws, clears, view
+// syncs and inheritances; not depth): a target whose own write_seq and blur_inherit_checked are both at least this has
+// no other view's write over its EDRAM to take.
+extern uint64_t g_blur_color_write_last;
+// blur-nx (2026-11-11, blur_renut_edram_inherit): a colour target's EDRAM span for edram_inherit.hlsli (base, tiles across,
+// samples across and down, 40-sample tiles packed as its g_Push.scale fields say) and its rows of tiles; false for a
+// depth target or none.
+bool EdramInheritSpanLocked(const HostSurface *surface, u32 &bits, u32 &rows);
+// blur-nx (2026-11-11, blur_renut_edram_inherit): the other colour targets whose EDRAM tiles meet 'target''s and that were
+// written after it (write_seq), oldest first, with the same EDRAM format and at the guest's scale like it; 'skipped'
+// counts the ones over it written after it that are of another format or scale (not taken).
+void EdramInheritSourcesLocked(const HostSurface *target, std::vector<HostSurface *> &out, u32 &skipped);
 HostSurface *DepthRestoreSourceLocked(const HostSurface *depth);
 
 // The host target for the D3DSurface at 'surface_va', created or rebuilt as
@@ -194,8 +209,9 @@ struct StackHeaderSet {
 };
 void CaptureStackHeaders(const u8 *device, StackHeaderSet &out);
 void SetReplayStackHeaders(const StackHeaderSet *set);
-// blur-nx (2026-11-10, blur_renut_sample_grid_resolve): for a 4x colour surface, the single-sampled target over the same
-// EDRAM base with the same host format and scale and twice its pitch (the same sample grid), or nullptr.
+// blur-nx (2026-11-10, blur_renut_sample_grid_resolve): for a 4x or 2x colour surface, the single-sampled target over the
+// same EDRAM base with the same host format and scale whose pixels are its samples (4x: twice the pitch; 2x: the same
+// pitch, twice the rows), or nullptr.
 HostSurface *SampleGridAliasLocked(const HostSurface *surface);
 // blur-nx (2026-11-10, blur_renut_wipe_overwritten): whether a colour target over the same EDRAM base tile in another view
 // was written (drawn or cleared) after write sequence 'seq'.

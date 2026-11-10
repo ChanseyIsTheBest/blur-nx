@@ -370,6 +370,91 @@ With the four: the race draws with its motion blur (the soft screen edges of the
 the reference's (`glow5`: means 55-65 against 67). The tail lights' wide red spill is still to compare at the same
 moment (the reference's car was braking).
 
+**emu9 (22:50, the Switch build with the four keys):** the race in Ryujinx draws clean (no garbage), with its HUD and
+power-up effects; 0 memory emergencies, 0 verify differences; the 2x2 resolve and the stale-wipe rule act on deko3d too.
+
+**Done properly (the user, 22:55: "no shortcuts, as long as you need"; 23:00-).**
+- The stack headers travel with every operation that replays a device snapshot: queued draws (whole and delta
+  captures), queued clears and resolves (in the pooled capture), and recorded command buffers (a list on the buffer by
+  op index, filled in `NewOp`, set at the four replay sites); the last-bound table is only a counted fallback ("stack
+  surface ... read with its last bound header": none expected).
+- EDRAM tiles exactly (`render/surfaces.cpp` `EdramSpanOf`): 80x16 samples a tile (40x16 for the 64-bit formats), 4x
+  samples 2x2 a pixel, 2x 1x2, a surface's tiles row by row from its base modulo 2048. The wipe-overwritten check is a
+  tile-range intersection (was: the same base tile), and vivapinata-nx's wipe marks a target only when the clear fills
+  every one of its tiles whole (was: the same base and a tile count no greater than the clear's).
+- The sample-grid resolve has its own shader (`sample_grid_resolve_ps.hlsl`): any source rect and destination point,
+  4x (2x2) and 2x (1x2) views; the mip shader's box (origin only, 4x only) is gone.
+- GetData's callers: the code regenerated and post-codegen run again (no hand edit of generated code). Deleting
+  `generated/codegen.build.stamp` alone reruns rexglue, but rexglue keeps its own input fingerprint in
+  `generated/codegen.stamp` and writes nothing when the inputs are unchanged: only post-codegen ran again (23:02, the
+  hand edit still there). A true regeneration deletes both stamps (build 40).
+
+**The tail lights' glow (23:40-00:00), from the two captures side by side.** In the reference the red spill is not in
+the scene: it is a layer the final pass adds (an additive full-screen draw of a 320x180 texture, after the HUD, then
+~20 single-point draws with no pixel shader: the lights' visibility tests for the next frame's queries). The game
+draws its light glows (30-40 sprites) into a 320x180 4x 8-bit target, resolves it, and blurs it down a chain
+(320x180 -> 160x90 -> 80x45 -> 40x22 and back) whose half-float steps are resolved with flags 0x2C000000 into
+k_16_16_16_16 destinations. The flags' top six bits are D3DRESOLVE_EXPONENTBIAS, +11: the game's D3D (the generated
+`sub_82251A80`: `flags >> 26` packed with the destination format and moved into RB_COPY_DEST_INFO, copy_dest_exp_bias
+at bits 16-21 by the layout in the SDK's `registers.h`) scales the resolved colour by 2^11 so the faint glow survives
+16-bit fixed point; the fetch that reads it back has an exponent adjust of -11. Renut applied the fetch's adjust
+(`sasrt_renut_texture_exp_adjust`, on: the "does not apply" in its log line is stale) but not the resolve's bias: the
+glow came out 2048 times too dim. `blur_renut_resolve_exp_bias` (A/B 219): the bias applied in every colour resolve
+path (a scaled copy draw; a multisampled source through a staging image; the sample-grid draw; the deko3d hand-over,
+which cannot scale, left out when there is a bias; the skip signature includes it).
+
+**Still open from the same comparison:** Renut gives a resolve destination the source surface's host format; the
+console converts into the destination texture's own format (Blur's glow chain resolves 2_10_10_10 into k_8_8_8_8 and
+half floats into k_16_16_16_16, fixed point with its clamp). The bias makes the values right in range; the 8-bit
+quantisation and the fixed-point clamp are not reproduced yet.
+
+**The same spot, both renderers (2026-11-11, 00:30-03:00).** Earlier race captures were at different places on the
+track, so their inputs could not be compared. Both renderers now run the reference's own input timeline (START at 140 s,
+A at 150-224 s; ours waits at the title) and RenderDoc captures both at 240-290 s (`grid_capture.ps1`, `rdc_trigger.py`):
+the car is on the same grid spot in both. The reference draws its frame in three predicated tiles of a 1280x512 host
+target; its draws are paired with ours by aligning the vertex counts of its middle tile with ours (537 of 850 matched).
+
+**A correction to the test runs: the PC ran the build's defaults.** The PC app reads `renut.toml` beside `renut.exe`,
+and there was none: every PC run so far had the build's defaults, enhancements included (`renut_post_process_precision`
+"High", 8-bit post targets at 16 bits). `tools/make_blur_tomls.py` now also writes `app/out/pc/renut.toml`: the shipped
+settings with the PC back end (D3D12; the shipped deko3d means Vulkan off the Switch) and no Switch shader-miss folder.
+Not shipped. All comparisons from here on are of the picture players get.
+
+**`blur_renut_edram_inherit` (A/B 220, on): one EDRAM, many views.** Blur draws its 256x128 environment panorama
+(which the ground, car glass and car paint read) into a 512x256 4x target cleared to alpha 1, then draws the panorama's
+RGB through a 320x256 single-sampled view of the same EDRAM (write mask RGB) and resolves that. On the console the view's
+alpha is the clear's (and the panorama's, over its first 64 tiles: the reference's two black squares); here the view is
+its own host target, whose alpha held old HUD pixels (mean 11 of 255 against the reference's 251). Before a draw that
+keeps part of its target (a write mask without every channel of the format, or blending), the target now takes what other
+views wrote over its EDRAM tiles since its own last write, oldest first, through the console's layout: tiles of 80x16
+32-bit samples (40x16 for 64-bit formats), rows `columns` tiles across from the base, 4x pixels as 2x2 samples and 2x as
+1x2 (`edram_inherit.hlsli`, four forms: single-sampled or multisampled on either side). Only views of the same EDRAM
+format at the guest's scale; a source whose tiles a newer one covers is skipped; predicated-tiling targets (more than
+2048 tiles) never. O(1) when nothing else was written. The environment texture's alpha is now 251.0, the reference's
+exactly; the glow blur chain (320x180 -> 160x90 -> 80x45, blended) takes what the previous step left as on the console.
+About 1.4 copies a frame on the PC.
+
+**The occlusion queries were never answered (my bug in A/B 213).** A log of what `D3DQuery_GetData` returns to the game in
+both renderers (`blur_renut_diag_query_log`, a custom entry for `sub_8224CD70` that runs under either) showed every
+call under Renut "not ready", all race long, and every call in the reference ready with 1000 samples. The game's GetData
+forms a block's address as `(p & 0x1FFFFFFF) + (((p >> 20) + 0x200) & 0x1000)` through the 0xC0000000 mapping: a pointer
+in the 0xE0000000 range (Blur's blocks are at E6D8xxxx) is one 4 KB page further on, the console's offset of that range.
+The hook wrote its answer at the pointer's own page; GetData read the sentinel 0xFFFFFEED at the real block and said not
+ready. Fixed (`QueryBlockPhysical`): every query now answered as the reference's, 1000 samples. **The tail lights' red
+glow now spreads sideways as in the reference**: the light glows were hidden as "not visible" while no query answered.
+
+**Still open: the car's interior and paint.** The rear window shows the interior in the reference (pixel 82,87,75) and
+almost black here (2,5,4); the paint is darker too. The interior's draw is the same shader in both (its constants agree:
+Renut folds the read-only ones the reference reads from its buffer, 0.75, 10, 0.25, 30, 15), the same textures except one:
+the 8x8 ambient cube the CPU fills every frame (two cubes, six faces each, locked and copied in through D3D's
+LockSurface by the game's texture updater `sub_82332B98`, from a staging buffer). Ours has the same shape with other
+scales: the light lobe about 0.46 of the reference's (its brightest texels 0x98 where the reference clamps at 0xFF), the
+sky term in alpha about 3.5 times. The same CPU code runs in both renderers, so one of its inputs differs. Ruled out:
+resolves read by the CPU (the reference without resolve readback gives the same cube), the luminance readback (0.027571
+in both, a floor), occlusion answers (the cube is the same with them fixed or off), frame rate (30 fps capped: the same),
+memexport (no readback in the race). Next: the writer of the staging buffer, found with a write watch on the guest page
+(host page protection, the PDB naming the recompiled function).
+
 **Machine copies: on hold (the user, 21:12: "I'll tell you when", waiting on the SASRT session).** The SASRT
 session's generator patch (copies of functions with guest atomics) is applied to `tools/localize_native.py`; nothing
 runs it until post-codegen runs again.
@@ -393,6 +478,8 @@ native, empty machine-copy lists. `katamari_*` names in CMake and the app became
 | XenosRecomp's dump reader accepts two-binding vertex shaders (container flags 0x20, words 0x1C / 0x20 set) | they were skipped without a message: ~1,000 of Blur's run-time vertex shaders never reached the cache | `app/thirdparty/reblue-XenosRecomp/XenosRecomp/main.cpp`; the installer's wasm translator would need it too |
 | The base's XDK notes for XDK 11164 and later: Lock2DSurface / LockSurface / LockResource / BeginCommandBuffer have the first release's unused argument, SetGammaRamp / SetPWLGamma a flags argument | a port at 11164 or later from the base meets them all (pacman-nx met three at 21250) | the table above |
 | `FastCensusDraw` / `FastCensusReport` share a mutex | with a queued backend (deko3d) the census map was replaced by the report thread under the render thread's insert: Ryujinx crashed with a pointer made of text | emu2, emu3 here; `render/draw.cpp` `g_fast_census_mutex` |
-| Occlusion queries answered as the emulated GPU answers them (`D3DQuery_GetData` hook) | Renut runs no GPU packets, so a query's ZPASS counts never come and GetData says "not ready" for ever: whatever a game hides by a query is never drawn (Blur's light glows) | `d3d/hooks/state.cpp` here; the SDK's `ExecutePacketType3_EVENT_WRITE_ZPD` |
+| Occlusion queries answered as the emulated GPU answers them (`D3DQuery_GetData` hook), each block at the address GetData forms (`QueryBlockPhysical`: the 0xE0000000 range's 4 KB offset) | Renut runs no GPU packets, so a query's ZPASS counts never come and GetData says "not ready" for ever: whatever a game hides by a query is never drawn (Blur's light glows); an answer at the pointer's own page is never read | `d3d/hooks/state.cpp` here; the SDK's `ExecutePacketType3_EVENT_WRITE_ZPD`; `blur_renut_diag_query_log` |
+| Views of one EDRAM take each other's writes (`blur_renut_edram_inherit`) | each view is its own host target; a draw that keeps part of its target (a write mask, blending) showed what that host target last held, not the EDRAM | Blur's environment panorama alpha (11 -> 251 of 255, the reference's), its glow chain; `edram_inherit.hlsli` |
 | A partial resolve keeps a destination of another format (`blur_renut_resolve_keep_dest`) | the console converts into the destination's format; Renut remade the destination (empty) | Blur's 640x360 image here |
 | Multisampled region resolves on deko3d through a whole-target staging image (`blur_renut_tile_resolve_staging`) | plume's deko3d region resolve blits the multisampled image; in Ryujinx only the first tile of a tiled frame arrives | emu4 here |
+| The base's notes: a regeneration deletes `codegen.stamp` as well as `codegen.build.stamp` | with only the build stamp gone, rexglue sees its input fingerprint unchanged and writes nothing; post-codegen runs again over the files as they are | build 39 here |

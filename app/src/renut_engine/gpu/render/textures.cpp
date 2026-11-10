@@ -437,6 +437,15 @@ bool Upload(HostTexture &t, const TextureFetch &fetch, bool defer_read) {
                 plume::RenderTextureBarrier(t.texture.get(), plume::RenderTextureLayout::COPY_DEST));
   t.layout = plume::RenderTextureLayout::COPY_DEST;
 
+  // blur-nx (2026-11-11): in the trace frame, every upload of a small cube from guest memory (Blur's 8x8 ambient cube,
+  // filled by the CPU every frame): its guest address, physical base and first texel words, to find what writes it.
+  if (banjo::renut_gpu::ResolveTraceOn() && fetch.Dimension() == TextureDimension::Cube && t.width <= 16) {
+    const u32 base = fetch.BasePage() << 12;
+    const auto *w = GuestPhysicalPtr<const u32>(base);
+    RGPU_INFO("[trace] upload cube {:08X} ({}x{}, format {}, base {:08X}); first words {:08X} {:08X} {:08X} {:08X}",
+              t.guest_va, t.width, t.height, u32(fetch.Format()), base, w ? w[0] : 0u, w ? w[1] : 0u, w ? w[2] : 0u,
+              w ? w[3] : 0u);
+  }
   const bool is_3d_data = fetch.Dimension() == TextureDimension::Tex3D;
   // Host array layers (cube faces, stacked layers); a stacked texture's extra
   // layer (StackedLayers) repeats its last one.
@@ -1468,8 +1477,9 @@ TextureBinding BindTextureLocked(u32 texture_va, const TextureFetch &device_fetc
   HostTexture &t = *slot;
   if (banjo::renut_gpu::ResolveTraceOn() && t.gpu_written && t.trace_frame != g_frame) {
     t.trace_frame = g_frame;  // banjo-nx (package 28): banjo_renut_diag_resolve_trace
-    RGPU_INFO("[trace] sample resolved {:08X} ({}x{} levels {} fmt {})", texture_va, t.width, t.height,
-              t.extra_levels ? 1 + t.extra_levels : 1, u32(t.host_format));
+    RGPU_INFO("[trace] sample resolved {:08X} ({}x{} levels {} fmt {}; fetch format {}, exponent adjust {})", texture_va,
+              t.width, t.height, t.extra_levels ? 1 + t.extra_levels : 1, u32(t.host_format), u32(fetch.Format()),
+              fetch.ExpAdjust());  // blur-nx (2026-11-11): the fetch's own format and adjust
   }
   // blur-nx (2026-11-10): in the trace frame, a texture made from guest memory whose memory starts in a resolve
   // destination's (the same page, or within the destination's first width x height x 8 bytes): what the resolve
@@ -1488,6 +1498,18 @@ TextureBinding BindTextureLocked(u32 texture_va, const TextureFetch &device_fetc
         break;
       }
     }
+  }
+  // blur-nx (2026-11-11): in the trace frame, a small texture made from guest memory (Blur's 8x8 ambient cube, which
+  // the CPU fills every frame): its header, dimension, physical base and first texel words, to find what writes it.
+  if (banjo::renut_gpu::ResolveTraceOn() && !t.gpu_written && t.width <= 16 && t.height <= 16 &&
+      t.trace_frame != g_frame) {
+    t.trace_frame = g_frame;
+    const u32 base = fetch.BasePage() << 12;
+    const auto *w = GuestPhysicalPtr<const u32>(base);
+    RGPU_INFO("[trace] sample GUEST small {:08X} (format {}, {}x{}x{}, dimension {}, base {:08X}, dwords {:08X} {:08X} "
+              "{:08X} {:08X} {:08X} {:08X}); first words {:08X} {:08X} {:08X} {:08X}", texture_va, u32(fetch.Format()),
+              t.width, t.height, t.depth, u32(t.dimension), base, desc[0], desc[1], desc[2], desc[3], desc[4], desc[5],
+              w ? w[0] : 0u, w ? w[1] : 0u, w ? w[2] : 0u, w ? w[3] : 0u);
   }
   // One that could not be made is not marked used: it goes once idle, and the
   // next bind tries again (the bindless table may have room by then).
@@ -1865,35 +1887,9 @@ void NoteCpuLockOfResolve(u32 texture_va, u32 level, u32 guest_format) {
               size & 0xFFFF, size >> 16, level, guest_format, n);
 }
 
-bool DrawBoxDownsampleLocked(uint32_t source_slot, HostTexture *dest, const plume::RenderRect &dest_rect, uint32_t box) {
-  auto &s = State();
-  plume::RenderCommandList *cmd = Video::CommandListLocked();
-  plume::RenderPipeline *pipeline = dest ? MipPipeline(dest->host_format) : nullptr;
-  if (!cmd || !pipeline || !s.texture_mip_ps || source_slot == kInvalidDescriptor || !dest->texture ||
-      !dest->render_target || dest->dimension != TextureDimension::Tex2D || dest->stacked)
-    return false;
-  if (!dest->copy_framebuffer) {
-    const plume::RenderTexture *targets[] = {dest->texture.get()};
-    dest->copy_framebuffer = s.device->createFramebuffer(plume::RenderFramebufferDesc(targets, 1));
-    if (!dest->copy_framebuffer)
-      return false;
-  }
-  TransitionTextureLocked(dest, plume::RenderTextureLayout::COLOR_WRITE);
-  cmd->setFramebuffer(dest->copy_framebuffer.get());
-  cmd->setGraphicsPipelineLayout(s.utility_layout.get());
-  cmd->setPipeline(pipeline);
-  cmd->setGraphicsDescriptorSet(s.texture_set.get(), 0);
-  cmd->setGraphicsDescriptorSet(s.sampler_set.get(), 1);
-  cmd->setViewports(plume::RenderViewport(0.0f, 0.0f, float(dest->alloc_width), float(dest->alloc_height)));
-  cmd->setScissors(dest_rect);
-  UtilityPush push{};
-  push.scale[0] = push.scale[1] = 1.0f;
-  push.texture_index = source_slot;
-  push.sampler_index = kPointClampSamplerSlot;
-  push.param0 = float(box);
-  cmd->setGraphicsPushConstants(0, &push, 0, sizeof(push));
-  cmd->drawInstanced(3, 1, 0, 0);
-  return true;
+uint32_t ResolveSourceStagingSlotLocked(plume::RenderFormat format, uint32_t width, uint32_t height) {
+  ScratchTarget *scratch = GetScratchTarget(format, width, height);  // blur-nx (2026-11-10)
+  return scratch ? ScratchSlot(*scratch) : kInvalidDescriptor;
 }
 
 HostTexture *ResolveSourceStagingLocked(plume::RenderFormat format, uint32_t width, uint32_t height) {

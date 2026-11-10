@@ -26,8 +26,10 @@
 #include <unordered_set>
 
 #include <rex/hook.h>
+#include <rex/system/thread_state.h>  // blur-nx (2026-11-11): the guest call chain of a diagnostic lock
 
 #include "renut_engine/gpu/banjo_renut_select.h"
+#include "renut_engine/gpu/banjo_renut_tuning.h"  // blur-nx (2026-11-11): ResolveTraceDiagOn
 #include <rex/types.h>
 
 #include "renut_engine/gpu/guest/command_buffers.h"
@@ -725,6 +727,32 @@ void LockSurface(u32 texture, u32 slice, u32 level, u32 flags, u32 &address, u32
   const Subresource sub = SubresourceLayout(texture, slice, level);
   const u32 dword1 = LoadU32(texture + 0x20);
   NoteCpuLockOfResolve(texture, level, dword1 & 0x3F);  // blur-nx (2026-11-10, diagnostic)
+  // blur-nx (2026-11-11, diagnostic, with banjo_renut_diag_resolve_trace): who locks an 8x8 texture (Blur's ambient cube,
+  // which the CPU fills every frame and comes out dimmer than the reference's): the first 24 locks, with the guest call
+  // chain from the stack's back chain (each frame's saved LR at its back pointer - 8).
+  if (banjo::renut_gpu::ResolveTraceDiagOn()) {
+    const u32 dword2 = LoadU32(texture + 0x24);
+    if ((dword2 & 0x1FFF) == 7 && ((dword2 >> 13) & 0x1FFF) == 7) {
+      static std::atomic<uint32_t> logged{0};
+      if (logged.fetch_add(1, std::memory_order_relaxed) < 24) {
+        u32 chain[8] = {};
+        if (PPCContext *ctx = rex::runtime::current_ppc_context()) {
+          chain[0] = u32(ctx->lr);
+          u32 sp = ctx->r1.u32;
+          for (int i = 1; i < 8 && sp; ++i) {
+            const u32 back = LoadU32(sp);
+            if (!back || back <= sp || back - sp > 0x10000)
+              break;
+            chain[i] = LoadU32(back - 8);
+            sp = back;
+          }
+        }
+        RGPU_INFO("[trace] lock 8x8 texture {:08X} (dword1 {:08X} dword2 {:08X}) slice {} level {} flags {:X}; "
+                  "calls {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}", texture, dword1, dword2, slice, level,
+                  flags, chain[0], chain[1], chain[2], chain[3], chain[4], chain[5], chain[6], chain[7]);
+      }
+    }
+  }
   u32 block_width, block_height;
   BlockSize(dword1 & 0x3F, block_width, block_height);
   row_pitch = sub.row_pitch * block_height;

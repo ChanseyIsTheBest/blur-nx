@@ -134,6 +134,9 @@ struct DrawCapture {
   i32 dest_x = 0, dest_y = 0;
   d3d::TextureFetchConstant dest_format{};
   u32 held = 0;  // bangaio-nx (2026-10-29): the bytes it holds, set when it goes back to the pool (CapturePool::Give)
+  // blur-nx (2026-11-10, blur_renut_stack_surface_headers): the headers of the stack surfaces bound as targets when this
+  // draw, clear or resolve was captured (render/surfaces.h); count 0 nearly always.
+  StackHeaderSet stack_headers;
 };
 
 // banjo-nx (banjo_renut_capture_pool): a draw's capture comes from a pool and goes back to it once the render thread
@@ -619,6 +622,7 @@ void QueueCapture(DrawCapture *capture) {
       call.up_indices = capture->indices.data();
     const u8 *device = DeviceForDraw(*capture);
     banjo::renut_gpu::CountDrawSource(0);
+    SetReplayStackHeaders(capture->stack_headers.count ? &capture->stack_headers : nullptr);  // blur-nx (2026-11-10)
     if (capture->binding) {  // halo3-nx (2026-11-03): after a replay's, this draw's own
       ApplyBindingLocked(capture->binding);
       capture->binding = 0;
@@ -632,6 +636,7 @@ void QueueCapture(DrawCapture *capture) {
       DrawStateLocked(device, call);
     }
     g_chain_hint = {};  // banjo-nx (from sa2-nx): only for the draw itself
+    SetReplayStackHeaders(nullptr);  // blur-nx (2026-11-10)
     g_capture_pool.Give(capture, true);
   });
 }
@@ -646,6 +651,7 @@ DrawCapture *Capture(u32 device_va, const DrawCall &call) {
   const auto *bytes = reinterpret_cast<const u8 *>(device);
   capture->state.assign(bytes, bytes + d3d::kDeviceSnapshotSize);
   capture->snapshot = SnapshotKind::Whole;  // banjo-nx (from sa2-nx)
+  CaptureStackHeaders(bytes, capture->stack_headers);  // blur-nx (2026-11-10)
   capture->verify.clear();
   capture->call = call;
   capture->call.up_vertices = nullptr;
@@ -665,6 +671,7 @@ DrawCapture *CaptureDelta(u32 device_va, const DrawCall &call) {
   capture->call.up_vertices = nullptr;
   capture->call.up_indices = nullptr;
   const auto *bytes = reinterpret_cast<const u8 *>(device);
+  CaptureStackHeaders(bytes, capture->stack_headers);  // blur-nx (2026-11-10)
   if (c.device.load(std::memory_order_relaxed) != device) {
     // The chain's first draw (or a frame's): the whole device, which the render thread takes as its own.
     for (auto &mask : device->m_Pending)
@@ -944,10 +951,9 @@ void QueueClear(u32 device_va, u32 flags, const ClearRect *rect, const float col
   args->flags = flags;
   args->depth = depth;
   args->stencil = stencil;
-  StackHeaderSet stack_headers;  // blur-nx (2026-11-10, blur_renut_stack_surface_headers)
-  CaptureStackHeaders(device, stack_headers);
-  render_thread::Queue([args, stack_headers] {
-    SetReplayStackHeaders(stack_headers.count ? &stack_headers : nullptr);
+  CaptureStackHeaders(device, args->stack_headers);  // blur-nx (2026-11-10, blur_renut_stack_surface_headers)
+  render_thread::Queue([args] {
+    SetReplayStackHeaders(args->stack_headers.count ? &args->stack_headers : nullptr);
     ClearStateLocked(args->state.data(), args->flags, args->has_rect ? &args->rect : nullptr, args->color,
                      args->depth, args->stencil);
     SetReplayStackHeaders(nullptr);
@@ -984,10 +990,9 @@ void QueueResolve(u32 device_va, u32 flags, const ClearRect *source_rect, u32 de
   args->dest_slice = dest_slice;
   args->depth = clear_depth;
   args->stencil = clear_stencil;
-  StackHeaderSet stack_headers;  // blur-nx (2026-11-10, blur_renut_stack_surface_headers)
-  CaptureStackHeaders(device, stack_headers);
-  render_thread::Queue([args, stack_headers] {
-    SetReplayStackHeaders(stack_headers.count ? &stack_headers : nullptr);
+  CaptureStackHeaders(device, args->stack_headers);  // blur-nx (2026-11-10, blur_renut_stack_surface_headers)
+  render_thread::Queue([args] {
+    SetReplayStackHeaders(args->stack_headers.count ? &args->stack_headers : nullptr);
     ResolveStateLocked(args->state.data(), args->flags, args->has_rect ? &args->rect : nullptr,
                        args->dest_texture_va, args->has_dest_format ? &args->dest_format : nullptr,
                        args->dest_x, args->dest_y, args->dest_level, args->dest_slice,

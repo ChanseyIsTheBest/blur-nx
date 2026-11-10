@@ -147,6 +147,18 @@ def main():
     for name, (keys, what) in CONFIGS.items():
         write(os.path.join(a.out, 'configs', name), what, apply(shipped, keys))
     print('written to', a.out)
+    # blur-nx (2026-11-11): the PC test build's renut.toml (the app reads renut.toml beside renut.exe): the shipped
+    # settings, so a PC comparison with the reference is of the picture players get. Without it the PC ran the build's
+    # defaults, enhancements included (renut_post_process_precision "High": the 8-bit post targets at 16 bits). The
+    # one Switch path (the shader-miss folder on sdmc:) is left empty, and the back end is the PC's default, D3D12
+    # (deko3d means Vulkan off the Switch; RenderDoc's captures here are D3D12). Not shipped; app/out is the build folder.
+    pc = os.path.join(ROOT, 'app', 'out', 'pc')
+    if os.path.isdir(pc):
+        write(os.path.join(pc, 'renut.toml'), 'the PC test copy of the shipped settings (D3D12, the shader-miss folder '
+              'off)', apply(shipped, {'banjo_shader_misses': '""  # PC test copy: the Switch folder is not on the PC',
+                                      'renut_gpu_backend': '"d3d12"  # PC test copy: the PC default (deko3d on the '
+                                                           'Switch)'}))
+        print('PC test copy written to', pc)
 
 
 if __name__ == '__main__':

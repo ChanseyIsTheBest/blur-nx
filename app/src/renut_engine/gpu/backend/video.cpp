@@ -59,6 +59,11 @@
 #include "host_shaders/view_fp10_encode_ps.spirv.h"  // halo3-nx
 #include "host_shaders/view_reinterpret_ps.spirv.h"  // blur-nx
 #include "host_shaders/view_reinterpret_ms_ps.spirv.h"  // blur-nx
+#include "host_shaders/sample_grid_resolve_ps.spirv.h"  // blur-nx
+#include "host_shaders/edram_inherit_ps.spirv.h"  // blur-nx
+#include "host_shaders/edram_inherit_src_ms_ps.spirv.h"  // blur-nx
+#include "host_shaders/edram_inherit_dst_ms_ps.spirv.h"  // blur-nx
+#include "host_shaders/edram_inherit_ms_ms_ps.spirv.h"  // blur-nx
 #if defined(PLUME_DEKO3D)  // banjo-nx (2026-10-17): the deko3d back end's (tools/deko3d_host_shader.py)
 #include "host_shaders/depth_resolve_ms_ps.deko3d.h"
 #include "host_shaders/depth_resolve_ps.deko3d.h"
@@ -76,6 +81,11 @@
 #include "host_shaders/view_fp10_encode_ps.deko3d.h"  // halo3-nx
 #include "host_shaders/view_reinterpret_ps.deko3d.h"  // blur-nx
 #include "host_shaders/view_reinterpret_ms_ps.deko3d.h"  // blur-nx
+#include "host_shaders/sample_grid_resolve_ps.deko3d.h"  // blur-nx
+#include "host_shaders/edram_inherit_ps.deko3d.h"  // blur-nx
+#include "host_shaders/edram_inherit_src_ms_ps.deko3d.h"  // blur-nx
+#include "host_shaders/edram_inherit_dst_ms_ps.deko3d.h"  // blur-nx
+#include "host_shaders/edram_inherit_ms_ms_ps.deko3d.h"  // blur-nx
 #endif
 #if defined(_WIN32)
 #include "host_shaders/depth_resolve_ms_ps.dxil.h"
@@ -94,6 +104,11 @@
 #include "host_shaders/view_fp10_encode_ps.dxil.h"  // halo3-nx
 #include "host_shaders/view_reinterpret_ps.dxil.h"  // blur-nx
 #include "host_shaders/view_reinterpret_ms_ps.dxil.h"  // blur-nx
+#include "host_shaders/sample_grid_resolve_ps.dxil.h"  // blur-nx
+#include "host_shaders/edram_inherit_ps.dxil.h"  // blur-nx
+#include "host_shaders/edram_inherit_src_ms_ps.dxil.h"  // blur-nx
+#include "host_shaders/edram_inherit_dst_ms_ps.dxil.h"  // blur-nx
+#include "host_shaders/edram_inherit_ms_ms_ps.dxil.h"  // blur-nx
 #endif
 
 // sa2-nx (2026-10-20, sa2_renut_double_buffer). pacman-nx: on by default, the user's call (2026-11-03). renut-ultimate: off by
@@ -314,6 +329,14 @@ bool BuildDepthResolvePipelines(VideoState &s) {
   s.view_reinterpret_ps = CreateHostShader(s.device.get(), RENUT_HOST_SHADER(view_reinterpret_ps), "view_reinterpret_ps");
   s.view_reinterpret_ms_ps =
       CreateHostShader(s.device.get(), RENUT_HOST_SHADER(view_reinterpret_ms_ps), "view_reinterpret_ms_ps");
+  // blur-nx (2026-11-10, blur_renut_sample_grid_resolve): a multisampled view resolved from its sample grid's 1x target.
+  s.sample_grid_resolve_ps =
+      CreateHostShader(s.device.get(), RENUT_HOST_SHADER(sample_grid_resolve_ps), "sample_grid_resolve_ps");
+  // blur-nx (2026-11-11, blur_renut_edram_inherit): one EDRAM view written into another (1x / multisampled each side).
+  s.edram_inherit_ps = CreateHostShader(s.device.get(), RENUT_HOST_SHADER(edram_inherit_ps), "edram_inherit_ps");
+  s.edram_inherit_src_ms_ps = CreateHostShader(s.device.get(), RENUT_HOST_SHADER(edram_inherit_src_ms_ps), "edram_inherit_src_ms_ps");
+  s.edram_inherit_dst_ms_ps = CreateHostShader(s.device.get(), RENUT_HOST_SHADER(edram_inherit_dst_ms_ps), "edram_inherit_dst_ms_ps");
+  s.edram_inherit_ms_ms_ps = CreateHostShader(s.device.get(), RENUT_HOST_SHADER(edram_inherit_ms_ms_ps), "edram_inherit_ms_ms_ps");
   s.depth_resolve_ps[0] =
       CreateHostShader(s.device.get(), RENUT_HOST_SHADER(depth_resolve_ps), "depth_resolve_ps");
   s.depth_resolve_ps[1] = CreateHostShader(s.device.get(), RENUT_HOST_SHADER(depth_resolve_ms_ps),
