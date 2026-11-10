@@ -279,8 +279,12 @@ void PrefetchTextureGuestExtent(const TextureFetch &fetch);
 // GPU-written. 'header_format', when given, is the header's fetch constant as
 // it was when the resolve was recorded (the header may be a temporary the
 // game has since overwritten).
+// blur-nx (2026-11-10, blur_renut_resolve_keep_dest): 'cover_pixels', when not 0, is how many pixels a single-sampled
+// resolve writes: one that covers less than an existing destination of another format keeps it (the caller then writes
+// its part with a converting draw: dest->host_format != format).
 HostTexture *GetResolveTextureLocked(u32 texture_va, plume::RenderFormat format, RenderScale scale,
-                                     const d3d::TextureFetchConstant *header_format = nullptr);
+                                     const d3d::TextureFetchConstant *header_format = nullptr,
+                                     uint32_t cover_pixels = 0);
 
 // The same for a depth resolve: a kDepthResolveFormat target plus the guest
 // words (kDepthResolveWordsFormat), which a texture of a 32-bit 8_8_8_8

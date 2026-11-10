@@ -13938,7 +13938,25 @@ bool ResolveDepth(HostSurface *surface, HostTexture *dest, const ClearRect &src,
 // before anything other than a whole clear binds it, and before it goes. A whole clear of the target gives the image to the
 // destination instead: the render-to-texture loop's resolve-and-clear and the frame's last resolve are never copied.
 bool DrawResolveCopy(HostSurface *surface, HostTexture *dest, const plume::RenderRect &rect, uint32_t host_x,
-                     uint32_t host_y);
+                     uint32_t host_y, bool convert = false);
+// blur-nx (2026-11-10, blur_renut_resolve_keep_dest): colour formats a converting draw writes and reads exactly
+// (textures.cpp has the same list for ResolveTarget).
+static bool ConvertibleResolveFormat(plume::RenderFormat f) {
+  switch (f) {
+  case plume::RenderFormat::R8G8B8A8_UNORM:
+  case plume::RenderFormat::B8G8R8A8_UNORM:
+  case plume::RenderFormat::R16G16B16A16_UNORM:
+  case plume::RenderFormat::R16G16B16A16_FLOAT:
+  case plume::RenderFormat::R16G16_UNORM:
+  case plume::RenderFormat::R16G16_FLOAT:
+  case plume::RenderFormat::R16_FLOAT:
+  case plume::RenderFormat::R32_FLOAT:
+  case plume::RenderFormat::R32G32_FLOAT:
+    return true;
+  default:
+    return false;
+  }
+}
 bool ResolveCopyPossible(const HostSurface *surface, const HostTexture *dest);
 
 std::vector<HostTexture *> g_handed;  // destinations whose content is a target's current image
@@ -14015,6 +14033,22 @@ bool MaterialiseLocked(HostTexture &d, bool words) {
 
 // A resolve into 'd' left in the target's image when it can be (true). Otherwise (false, the resolve is drawn) a
 // destination still holding other content gets it first when the resolve does not cover it.
+// blur-nx (2026-11-10, blur_renut_resolve_keep_dest): how many pixels a single-sampled colour resolve of 'surface'
+// writes (its rect within the surface), for ResolveTarget; 0 for a multisampled source (resolved by the API, which
+// wants one format) or an empty rect.
+uint32_t ResolveCoverPixels(const HostSurface *surface, const ClearRect *source_rect) {
+  if (surface->samples != plume::RenderSampleCount::COUNT_1)
+    return 0;
+  int32_t w = int32_t(surface->width), h = int32_t(surface->height);
+  if (source_rect) {
+    const int32_t x1 = std::clamp(source_rect->x1, 0, w), y1 = std::clamp(source_rect->y1, 0, h);
+    const int32_t x2 = std::clamp(source_rect->x2, x1, w), y2 = std::clamp(source_rect->y2, y1, h);
+    w = x2 - x1;
+    h = y2 - y1;
+  }
+  return w > 0 && h > 0 ? uint32_t(w) * uint32_t(h) : 0;
+}
+
 bool HandOverResolveLocked(HostSurface *s, HostTexture *d, const ClearRect &src, i32 dest_x, i32 dest_y,
                            bool words) {
   const bool whole = src.x1 == 0 && src.y1 == 0 && src.x2 == int32_t(s->width) && src.y2 == int32_t(s->height) &&
@@ -14305,14 +14339,21 @@ bool ResolveCopyPossible(const HostSurface *surface, const HostTexture *dest) {
 }
 
 bool DrawResolveCopy(HostSurface *surface, HostTexture *dest, const plume::RenderRect &rect, uint32_t host_x,
-                     uint32_t host_y) {
+                     uint32_t host_y, bool convert) {
   auto &s = State();
-  if (!ResolveCopyPossible(surface, dest))
+  // blur-nx (2026-11-10, blur_renut_resolve_keep_dest): 'convert', a destination kept in another format
+  // (ResolveTarget): the texel load gives the source's values, the target's format stores them. The pipeline is the
+  // destination format's (the same as the source's when not converting).
+  if (convert ? !(s.resolve_copy_ps && dest->texture && dest->render_target &&
+                  dest->dimension == TextureDimension::Tex2D && !dest->stacked &&
+                  surface->samples == plume::RenderSampleCount::COUNT_1 && ConvertibleResolveFormat(surface->format) &&
+                  ConvertibleResolveFormat(dest->host_format))
+              : !ResolveCopyPossible(surface, dest))
     return false;
   const uint32_t source_slot = SurfaceSampleSlotLocked(surface);
   if (source_slot == kInvalidDescriptor)
     return false;
-  auto &pipeline = s.resolve_copy_pipelines[uint32_t(surface->format)];
+  auto &pipeline = s.resolve_copy_pipelines[uint32_t(dest->host_format)];
   if (!pipeline) {
     plume::RenderGraphicsPipelineDesc desc;
     desc.pipelineLayout = s.utility_layout.get();
@@ -14321,7 +14362,7 @@ bool DrawResolveCopy(HostSurface *surface, HostTexture *dest, const plume::Rende
     desc.primitiveTopology = plume::RenderPrimitiveTopology::TRIANGLE_LIST;
     desc.cullMode = plume::RenderCullMode::NONE;
     desc.renderTargetCount = 1;
-    desc.renderTargetFormat[0] = surface->format;
+    desc.renderTargetFormat[0] = dest->host_format;
     desc.renderTargetBlend[0] = plume::RenderBlendDesc::Copy();
     desc.depthTargetFormat = plume::RenderFormat::UNKNOWN;
     pipeline = s.device->createGraphicsPipeline(desc);
@@ -14379,13 +14420,30 @@ void SyncColorViewLocked(HostSurface *surface) {
     return;
   constexpr u32 kFormat2_10_10_10_Float_Edram = 0x3F, kFormat2_10_10_10_As_16 = 0x36;
   auto &s = State();
-  if ((latest->format_word & 0x3F) != kFormat2_10_10_10_Float_Edram || (surface->format_word & 0x3F) != kFormat2_10_10_10_As_16 ||
-      latest->samples != plume::RenderSampleCount::COUNT_1 || surface->samples != plume::RenderSampleCount::COUNT_1 ||
-      !s.view_fp10_encode_ps) {
+  // blur-nx (2026-11-10, blur_renut_view_reinterpret, A/B 210): Blur's HDR passes draw a 2_10_10_10_FLOAT view and
+  // resolve the same EDRAM through an 8_8_8_8 one, and the other way round: the same 32-bit words on the console
+  // (view_reinterpret_ps.hlsl: mode 0 the floats' bits as bytes, mode 1 bytes as 7e3 floats).
+  constexpr u32 kFormat8_8_8_8_Edram = 0x06;
+  const u32 drawn_format = latest->format_word & 0x3F, read_format = surface->format_word & 0x3F;
+  const bool to_bytes = drawn_format == kFormat2_10_10_10_Float_Edram && read_format == kFormat8_8_8_8_Edram;
+  // The other way (bytes read back as floats) is left out: in Blur's tiled 4x frames the 8888 view is bound after the scene
+  // without holding it, and rebuilding the float view from it wiped every tile but the first (route5: rows 256-719 black).
+  const bool from_bytes = false && drawn_format == kFormat8_8_8_8_Edram && read_format == kFormat2_10_10_10_Float_Edram;
+  // Multisampled views (Blur's scene is 4x) take the per-sample form; both views must have the same sample count.
+  const bool multisampled = surface->samples != plume::RenderSampleCount::COUNT_1;
+  const bool reinterpret = (to_bytes || from_bytes) && latest->samples == surface->samples &&
+                           (multisampled ? bool(s.view_reinterpret_ms_ps) : bool(s.view_reinterpret_ps)) &&
+                           banjo::renut_gpu::ViewReinterpretOn();
+  const bool halo_pair = drawn_format == kFormat2_10_10_10_Float_Edram && read_format == kFormat2_10_10_10_As_16 &&
+                         s.view_fp10_encode_ps;
+  if (!(reinterpret || (halo_pair && latest->samples == plume::RenderSampleCount::COUNT_1 &&
+                        surface->samples == plume::RenderSampleCount::COUNT_1))) {
     static uint32_t logged = 0;
     if (LogLimited(logged, 8))
-      RGPU_WARN("Resolve through a view of format {:02X} of EDRAM last drawn as {:02X}: its pixels are not carried over",
-                surface->format_word & 0x3F, latest->format_word & 0x3F);
+      RGPU_WARN("Resolve through a view of format {:02X} of EDRAM last drawn as {:02X}: its pixels are not carried over "
+                "(samples {} / {}, {}x{} / {}x{}, reinterpret {})",  // blur-nx: the samples, sizes and the 7e3 / 8888 pass
+                surface->format_word & 0x3F, latest->format_word & 0x3F, uint32_t(surface->samples), uint32_t(latest->samples),
+                surface->width, surface->height, latest->width, latest->height, reinterpret);
     return;
   }
   // renut-ultimate: a resolve handed over in this target's image is drawn out first; the encode writes the image.
@@ -14394,12 +14452,15 @@ void SyncColorViewLocked(HostSurface *surface) {
   const uint32_t source_slot = SurfaceSampleSlotLocked(latest);
   if (source_slot == kInvalidDescriptor)
     return;
-  auto &pipeline = s.view_fp10_encode_pipelines[uint32_t(surface->format)];
+  auto &pipeline = s.view_fp10_encode_pipelines[uint32_t(surface->format) | (reinterpret ? 0x80000000u : 0u) |
+                                                (uint32_t(surface->samples) << 20)];
   if (!pipeline) {
     plume::RenderGraphicsPipelineDesc desc;
     desc.pipelineLayout = s.utility_layout.get();
     desc.vertexShader = s.present_vs.get();
-    desc.pixelShader = s.view_fp10_encode_ps.get();
+    desc.pixelShader = !reinterpret ? s.view_fp10_encode_ps.get()
+                       : multisampled ? s.view_reinterpret_ms_ps.get() : s.view_reinterpret_ps.get();
+    desc.multisampling = plume::RenderMultisampling(plume::RenderSampleCounts(surface->samples));
     desc.primitiveTopology = plume::RenderPrimitiveTopology::TRIANGLE_LIST;
     desc.cullMode = plume::RenderCullMode::NONE;
     desc.renderTargetCount = 1;
@@ -14434,6 +14495,11 @@ void SyncColorViewLocked(HostSurface *surface) {
   push.sampler_index = kPointClampSamplerSlot;
   // RB_COLOR_INFO bits 20-25: the signed exponent the console applies when it writes the colour.
   push.param0 = std::ldexp(1.0f, int32_t(latest->color_info_word << 6) >> 26);
+  if (from_bytes && reinterpret) {
+    // blur-nx: reading bytes as floats, the bias is the float surface's own (its host target holds the value without it).
+    push.param0 = std::ldexp(1.0f, int32_t(surface->color_info_word << 6) >> 26);
+    push.param1 = 1.0f;
+  }
   cmd->setGraphicsPushConstants(0, &push, 0, sizeof(push));
   cmd->drawInstanced(3, 1, 0, 0);
   surface->synced_view = latest;
@@ -14739,7 +14805,8 @@ void ResolveStateLocked(const u8 *device_state, u32 flags, const ClearRect *sour
         }
       }
     } else if (HostTexture *dest = GetResolveTextureLocked(dest_texture_va, surface->format,
-                                                           surface->scale, dest_format)) {
+                                                           surface->scale, dest_format,
+                                                           ResolveCoverPixels(surface, source_rect))) {
       SyncColorViewLocked(surface);  // halo3-nx (2026-11-03)
       ClearRect src;
       // A volume's slices are depth; stacked textures and cubes have layers.
@@ -14786,7 +14853,17 @@ void ResolveStateLocked(const u8 *device_state, u32 flags, const ClearRect *sour
                                           int32_t(host_x) + (rect.right - rect.left),
                                           int32_t(host_y) + (rect.bottom - rect.top));
         const bool multisampled = surface->samples != plume::RenderSampleCount::COUNT_1;
-        if (multisampled && dest->extra_levels && IsVulkan()) {
+        if (dest->host_format != surface->format) {
+          // blur-nx (2026-11-10, blur_renut_resolve_keep_dest): a destination kept in another format (ResolveTarget):
+          // its part written by a draw that converts.
+          if (!(slice == 0 && z == 0 && dest_level == 0 && DrawResolveCopy(surface, dest, rect, host_x, host_y, true))) {
+            static uint32_t logged = 0;
+            if (LogLimited(logged, 8))
+              RGPU_WARN("[renut] resolve into {:08X} kept in format {} (source format {}) not drawn (level {}, slice "
+                        "{})", dest_texture_va, u32(dest->host_format), u32(surface->format), dest_level, dest_slice);
+            dest->resolve_signature = 0;
+          }
+        } else if (multisampled && dest->extra_levels && IsVulkan()) {
           // A destination with host levels takes it through a single-level
           // target (ResolveStagingLocked): plume's Vulkan resolve writes every
           // level of its destination (D3D12's writes level 0 only, and

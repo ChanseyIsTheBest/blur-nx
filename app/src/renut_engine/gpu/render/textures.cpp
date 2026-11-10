@@ -721,7 +721,33 @@ HostTexture *ResolvedAlias(u32 texture_va, const TextureFetch &fetch, const u32 
   HostTexture *resolved = it->second;
   if (resolved->guest_va == texture_va || !resolved->texture)
     return nullptr;
-  return SameData(resolved->desc, desc) ? resolved : nullptr;
+  if (SameData(resolved->desc, desc))
+    return resolved;
+  // blur-nx (2026-11-10, blur_renut_expand_alias, A/B 211): an EXPAND resolve sampled as its FLOAT twin, or the other
+  // way (16_EXPAND / 16_FLOAT, 16_16_ / 16_16_FLOAT, 16_16_16_16_ / 16_16_16_16_FLOAT): the same memory, size,
+  // endianness and dimension, only the format field differs, and the reference reads both as half floats (the SDK's
+  // d3d12 texture_cache.cpp). Blur resolves its 640x360 HDR downsample as 16_16_16_16_EXPAND and reads it as
+  // 16_16_16_16_FLOAT: without this the texture was made from guest memory, which the resolve never wrote (no bloom).
+  // Only a destination the resolve made in half floats (its EDRAM format's host format).
+  if (banjo::renut_gpu::ExpandAliasOn()) {
+    constexpr u32 kFormatBits = 0x3Fu;
+    constexpr u32 kDimensionMask = 0x600u;
+    const u32 a = resolved->desc[1] & kFormatBits, b = desc[1] & kFormatBits;
+    const auto twins = [](u32 x, u32 y) { return x >= 27 && x <= 29 && y == x + 3; };
+    const bool half = resolved->host_format == plume::RenderFormat::R16_FLOAT ||
+                      resolved->host_format == plume::RenderFormat::R16G16_FLOAT ||
+                      resolved->host_format == plume::RenderFormat::R16G16B16A16_FLOAT;
+    if (half && (twins(a, b) || twins(b, a)) && ((resolved->desc[1] ^ desc[1]) & ~kFormatBits) == 0 &&
+        resolved->desc[2] == desc[2] && ((resolved->desc[5] ^ desc[5]) & kDimensionMask) == 0) {
+      static uint32_t logged = 0;
+      if (logged++ < 8)
+        RGPU_INFO("[renut] texture {:08X} (format {}) reads resolve destination {:08X} ({}x{} format {}) through its "
+                  "texture (blur_renut_expand_alias)", texture_va, b, resolved->guest_va, resolved->width,
+                  resolved->height, a);
+      return resolved;
+    }
+  }
+  return nullptr;
 }
 
 // The depth resolve whose words a texture described by 'fetch' reads: a
@@ -804,9 +830,27 @@ void CopyDepthWords(HostTexture &t, HostTexture &source) {
 }
 
 // GetResolveTextureLocked; 'fetch' receives the header's fetch constant.
+// blur-nx (2026-11-10, blur_renut_resolve_keep_dest): colour formats a converting draw writes and reads exactly.
+bool ConvertibleResolveFormat(plume::RenderFormat f) {
+  switch (f) {
+  case plume::RenderFormat::R8G8B8A8_UNORM:
+  case plume::RenderFormat::B8G8R8A8_UNORM:
+  case plume::RenderFormat::R16G16B16A16_UNORM:
+  case plume::RenderFormat::R16G16B16A16_FLOAT:
+  case plume::RenderFormat::R16G16_UNORM:
+  case plume::RenderFormat::R16G16_FLOAT:
+  case plume::RenderFormat::R16_FLOAT:
+  case plume::RenderFormat::R32_FLOAT:
+  case plume::RenderFormat::R32G32_FLOAT:
+    return true;
+  default:
+    return false;
+  }
+}
+
 HostTexture *ResolveTarget(u32 texture_va, plume::RenderFormat format, RenderScale scale,
                            const d3d::TextureFetchConstant *header_format, bool depth,
-                           TextureFetch &fetch) {
+                           TextureFetch &fetch, uint32_t cover_pixels = 0) {
   // banjo-nx (2026-10-19, render-thread proposal 3): no unconditional g_texture_epoch bump: Create and Retire bump it,
   // and so does a resolve target entry that changes (below).
   if (!texture_va)
@@ -824,9 +868,37 @@ HostTexture *ResolveTarget(u32 texture_va, plume::RenderFormat format, RenderSca
   MaskedDesc(fetch, desc);
 
   auto &slot = TextureSlot(texture_va);
+  // blur-nx (2026-11-10, blur_renut_resolve_keep_dest, A/B 212): a single-sampled resolve of part of an existing
+  // destination (the same header, size and scale) made from another format keeps it: the console converts into the
+  // destination's format and leaves the rest. Blur's 1x1 2_10_10_10 resolve into the corner of its 640x360 half-float
+  // image, every frame before the image's own resolve, made the image again (empty) for the pass that reads last
+  // frame's. A resolve of the whole destination still makes it again in its source's format.
+  const bool keep_other_format =
+      slot && !depth && cover_pixels != 0 && slot->render_target && slot->texture && slot->host_format != format &&
+      std::memcmp(slot->desc, desc, sizeof(desc)) == 0 && slot->scale == scale &&
+      slot->alloc_width == scale.Size(slot->width) && slot->alloc_height == scale.Size(slot->height) &&
+      cover_pixels < slot->width * slot->height && slot->dimension == TextureDimension::Tex2D && !slot->stacked &&
+      ConvertibleResolveFormat(format) && ConvertibleResolveFormat(slot->host_format) &&
+      banjo::renut_gpu::ResolveKeepDestOn();
+  if (keep_other_format) {
+    static uint32_t logged = 0;
+    if (logged++ < 8)
+      RGPU_INFO("[renut] resolve of {} pixels (format {}) into {:08X} ({}x{} format {}) keeps it and converts "
+                "(blur_renut_resolve_keep_dest)", cover_pixels, u32(format), texture_va, slot->width, slot->height,
+                u32(slot->host_format));
+  } else if (slot && !depth && cover_pixels != 0 && slot->render_target && slot->host_format != format &&
+             cover_pixels < slot->width * slot->height) {
+    static uint32_t logged = 0;  // blur-nx (2026-11-10): why a partial resolve of another format still remade it
+    if (logged++ < 8)
+      RGPU_INFO("[renut] resolve of {} pixels (format {}) into {:08X} ({}x{} format {}) makes it again: desc {} scale "
+                "{} formats {}/{}", cover_pixels, u32(format), texture_va, slot->width, slot->height,
+                u32(slot->host_format), std::memcmp(slot->desc, desc, sizeof(desc)) == 0 ? "same" : "differs",
+                slot->scale == scale ? "same" : "differs", ConvertibleResolveFormat(format),
+                ConvertibleResolveFormat(slot->host_format));
+  }
   // banjo-nx (2026-10-28, night_gpu5, dynamic resolution steps): a destination of a settable code made at another
   // height of it (render/surfaces.cpp CodeForHeightLocked) is made again: its size is the old height's.
-  if (slot && (!slot->render_target || std::memcmp(slot->desc, desc, sizeof(desc)) != 0 ||
+  if (slot && !keep_other_format && (!slot->render_target || std::memcmp(slot->desc, desc, sizeof(desc)) != 0 ||
                !slot->texture || slot->host_format != format || slot->scale != scale ||
                slot->alloc_width != scale.Size(slot->width) || slot->alloc_height != scale.Size(slot->height))) {
     Retire(*slot);
@@ -1276,6 +1348,12 @@ TextureBinding BindTextureLocked(u32 texture_va, const TextureFetch &device_fetc
     banjo::renut_gpu::CountExpAdjust(adjust);
   if (HostTexture *resolved = ResolvedAlias(texture_va, fetch, desc)) {
     resolved->used_frame = g_frame;
+    if (banjo::renut_gpu::ResolveTraceOn() && resolved->trace_frame != g_frame) {
+      resolved->trace_frame = g_frame;  // blur-nx (2026-11-10): the alias path returned before the trace
+      RGPU_INFO("[trace] sample resolved {:08X} through header {:08X} ({}x{} fmt {}; fetch format {}, adjust {})",
+                resolved->guest_va, texture_va, resolved->width, resolved->height, u32(resolved->host_format),
+                u32(fetch.Format()), fetch.ExpAdjust());
+    }
     if (resolved->words)
       banjo::renut_gpu::CountDepthFloatSampled();  // banjo-nx (2026-10-18): a depth resolve's float target sampled
     FlushResolveMipsLocked(*resolved);  // banjo-nx (2026-10-28, banjo_renut_lazy_resolve_mips)
@@ -1383,6 +1461,24 @@ TextureBinding BindTextureLocked(u32 texture_va, const TextureFetch &device_fetc
     t.trace_frame = g_frame;  // banjo-nx (package 28): banjo_renut_diag_resolve_trace
     RGPU_INFO("[trace] sample resolved {:08X} ({}x{} levels {} fmt {})", texture_va, t.width, t.height,
               t.extra_levels ? 1 + t.extra_levels : 1, u32(t.host_format));
+  }
+  // blur-nx (2026-11-10): in the trace frame, a texture made from guest memory whose memory starts in a resolve
+  // destination's (the same page, or within the destination's first width x height x 8 bytes): what the resolve
+  // wrote is not in it.
+  if (banjo::renut_gpu::ResolveTraceOn() && !t.gpu_written && !depth_source && t.trace_frame != g_frame) {
+    const u32 page = fetch.BasePage();
+    for (const auto &[base, r] : g_resolve_targets) {
+      if (!r || !r->texture || r == &t)
+        continue;
+      const u32 pages = (r->width * r->height * 8 + 4095) / 4096;
+      if (page >= base && page < base + std::max(pages, 1u)) {
+        t.trace_frame = g_frame;
+        RGPU_INFO("[trace] sample GUEST {:08X} (format {}, {}x{}, page +{}) over resolve destination {:08X} ({}x{} "
+                  "fmt {}, guest format {})", texture_va, u32(fetch.Format()), t.width, t.height, page - base,
+                  r->guest_va, r->width, r->height, u32(r->host_format), u32(r->guest_format));
+        break;
+      }
+    }
   }
   // One that could not be made is not marked used: it goes once idle, and the
   // next bind tries again (the bindless table may have room by then).
@@ -1569,9 +1665,9 @@ void TextureGuestExtent(const TextureFetch &fetch, uint32_t pages[2], uint32_t s
 }
 
 HostTexture *GetResolveTextureLocked(u32 texture_va, plume::RenderFormat format, RenderScale scale,
-                                     const d3d::TextureFetchConstant *header_format) {
+                                     const d3d::TextureFetchConstant *header_format, uint32_t cover_pixels) {
   TextureFetch fetch;
-  return ResolveTarget(texture_va, format, scale, header_format, false, fetch);
+  return ResolveTarget(texture_va, format, scale, header_format, false, fetch, cover_pixels);
 }
 
 HostTexture *GetDepthResolveTextureLocked(u32 texture_va, RenderScale scale,

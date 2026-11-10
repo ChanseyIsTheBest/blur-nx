@@ -57,6 +57,8 @@
 #include "host_shaders/texture_mip_ps.spirv.h"
 #include "host_shaders/resolve_copy_ps.spirv.h"
 #include "host_shaders/view_fp10_encode_ps.spirv.h"  // halo3-nx
+#include "host_shaders/view_reinterpret_ps.spirv.h"  // blur-nx
+#include "host_shaders/view_reinterpret_ms_ps.spirv.h"  // blur-nx
 #if defined(PLUME_DEKO3D)  // banjo-nx (2026-10-17): the deko3d back end's (tools/deko3d_host_shader.py)
 #include "host_shaders/depth_resolve_ms_ps.deko3d.h"
 #include "host_shaders/depth_resolve_ps.deko3d.h"
@@ -72,6 +74,8 @@
 #include "host_shaders/texture_mip_ps.deko3d.h"
 #include "host_shaders/resolve_copy_ps.deko3d.h"
 #include "host_shaders/view_fp10_encode_ps.deko3d.h"  // halo3-nx
+#include "host_shaders/view_reinterpret_ps.deko3d.h"  // blur-nx
+#include "host_shaders/view_reinterpret_ms_ps.deko3d.h"  // blur-nx
 #endif
 #if defined(_WIN32)
 #include "host_shaders/depth_resolve_ms_ps.dxil.h"
@@ -88,6 +92,8 @@
 #include "host_shaders/texture_mip_ps.dxil.h"
 #include "host_shaders/resolve_copy_ps.dxil.h"
 #include "host_shaders/view_fp10_encode_ps.dxil.h"  // halo3-nx
+#include "host_shaders/view_reinterpret_ps.dxil.h"  // blur-nx
+#include "host_shaders/view_reinterpret_ms_ps.dxil.h"  // blur-nx
 #endif
 
 // sa2-nx (2026-10-20, sa2_renut_double_buffer). pacman-nx: on by default, the user's call (2026-11-03). renut-ultimate: off by
@@ -304,6 +310,10 @@ bool BuildDepthResolvePipelines(VideoState &s) {
   s.resolve_copy_ps = CreateHostShader(s.device.get(), RENUT_HOST_SHADER(resolve_copy_ps), "resolve_copy_ps");
   // halo3-nx (2026-11-03): one EDRAM view read through another (SyncColorViewLocked).
   s.view_fp10_encode_ps = CreateHostShader(s.device.get(), RENUT_HOST_SHADER(view_fp10_encode_ps), "view_fp10_encode_ps");
+  // blur-nx (2026-11-10): the 2_10_10_10_FLOAT and 8_8_8_8 views of the same EDRAM, both ways (SyncColorViewLocked).
+  s.view_reinterpret_ps = CreateHostShader(s.device.get(), RENUT_HOST_SHADER(view_reinterpret_ps), "view_reinterpret_ps");
+  s.view_reinterpret_ms_ps =
+      CreateHostShader(s.device.get(), RENUT_HOST_SHADER(view_reinterpret_ms_ps), "view_reinterpret_ms_ps");
   s.depth_resolve_ps[0] =
       CreateHostShader(s.device.get(), RENUT_HOST_SHADER(depth_resolve_ps), "depth_resolve_ps");
   s.depth_resolve_ps[1] = CreateHostShader(s.device.get(), RENUT_HOST_SHADER(depth_resolve_ms_ps),

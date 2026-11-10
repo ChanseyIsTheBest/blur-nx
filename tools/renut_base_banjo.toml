@@ -1,4 +1,4 @@
-# katamari-nx (Beautiful Katamari on the Switch, Renut's renderer on deko3d): 720 lines docked too, the Xbox 360's own (pixel-identical)
+# katamari-nx (Beautiful Katamari on the Switch, Renut's renderer on deko3d): the built-in settings with logs, profiler and diagnostics on (720 lines handheld, 1080 docked)
 # Made by tools/make_katamari_tomls.py from banjo-nx's shipped renut.toml (2026-10-29). Copy over katamari.toml next to
 # the NRO, the only toml it reads (renut.toml with KATAMARI_BUILTIN_CONFIG off). Credits: reNut's renderer (masterspike52,
 # reuse permitted), banjo-nx, sa2-nx, NetherSX2_nx (four-core layout), battd_nx (the GPU arena), bejeweled3-nx and the zuma
@@ -37,6 +37,9 @@ input_xbox_layout = true
 # controller, change the order, split a Joy-Con pair into two). Single Joy-Cons are held sideways, one per player: the
 # four buttons under the right thumb are the face buttons, SL / SR are ZL / ZR, minus or plus is Start.
 input_joycon_sideways = true
+# Rumble (2026-11-10, your request): the game's own vibration on every controller that has it (HD rumble on the
+# Joy-Cons and the Pro Controller). false = no vibration.
+input_rumble = true
 # Per-player button maps: the [input_p1] and [input_p2] sections at the end of this file.
 # The game's on-screen keyboard (naming things) opens the Switch's own keyboard (2026-10-21, your request): type with
 # the touch screen or the controller, + or OK accepts, Cancel keeps the old name. false = the old ImGui text box.
@@ -464,7 +467,7 @@ banjo_renut_portrait_msaa_samples = 2
 # (rounded to a multiple of 9: 648, 702, 756, 810, 864, 900, ...; read at start). configs/banjo_renut_native_720p.toml
 # is the game's own 720p.
 banjo_renut_render_height_handheld = 720
-banjo_renut_render_height_docked = 720
+banjo_renut_render_height_docked = 1080
 banjo_renut_display_height_docked = 1080
 # The upscale: 0 = bilinear (your choice, every config: one sample a pixel, the cheapest), 1 = bicubic Catmull-Rom
 # (sharper, five samples a pixel).

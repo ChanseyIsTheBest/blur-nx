@@ -10,7 +10,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from make_katamari_tomls import apply  # noqa: E402
+from make_blur_tomls import apply  # noqa: E402
 
 
 def main():

@@ -226,7 +226,64 @@ serves both bindings and Renut takes the input layout from the declaration, so t
 0x20 bit is set (`app/thirdparty/reblue-XenosRecomp/XenosRecomp/main.cpp`).
 
 **XDK forms checked so far:** SetGammaRamp's entry is Katamari's (`mr r4,r5`: the ramp in r5); the base's hook read r4:
-fixed above. `banjo_renut_game_gamma` is off in the base, so it does not act; to look at in the visual pass.
+fixed above. `banjo_renut_game_gamma` is off in the base; Blur ships it on (the title against the reference, below).
+
+## The reference and the picture (2026-11-10)
+
+**The SDK's emulated renderer (`--banjo_renderer=emulated --gpu_plugin=xenos`, Direct3D 12) cannot serve as the
+reference for Blur's 3D scenes.** It boots the game (the CPU side is the same) but its own resolves fail: "Resolve
+region 0 <= x < 1280 is outside the surface pitch 320", 10,902 times in an 8-minute run (`ref_route1`); the title
+screen's car is a pink-white blob and the race is washed out nearly to white (the exposure chain reads the failed
+downsamples). Its ROV render-target path (`--render_target_path_d3d12=rov`, Xenia's exact EDRAM model) is the same
+(`ref_rov1`: the white blob at 122 s, a white frame at 45 s). So the reference is used for what it draws right: the
+2D layers (menus, HUD, text), the Bink videos and the loading screens; the 3D frames are checked for consistency on
+our own renderer (and against the console when a log comes back). Fixing the emulated renderer's resolve is outside
+this port's renderer; noted for the base.
+
+The user's suggestion (18:10): switch the enhancements and speed-ups off and bisect. Done for every run-time one:
+`--banjo_cpu_enhancements=false --banjo_noncpu_enhancements=false` (the log: "cpu master OFF, non-cpu master OFF",
+none active), `ref_off1`: the same white blob on the title and the same resolve error (2,096 times in 200 s). So no
+run-time enhancement does it; nothing to bisect there. What the master keys cannot switch is build-time: the codegen
+options and post-codegen passes, which rewrite the generated code itself. A CPU-side mistranslation inside D3D's own
+Resolve would show only in the reference (Renut replaces Resolve) and would look like this; checking it needs a PC
+build of code generated without the passes (a separate tree and about 40 minutes): not done yet, listed under "Next".
+
+**The fix for the reference (the user's tip, 18:40): `--d3d12_readback_resolve=true`.** Xenia Canary's own
+compatibility report for Blur shows the same white 3D with today's emulated renderer and an older Xenia's report
+calls it playable with readback resolve on; so it is here (`ref_rb1`): the title's car, the menus and the race draw
+right. Every reference run from then on: `--banjo_renderer=emulated --gpu_plugin=xenos --d3d12_readback_resolve=true`.
+The resolve fault above is the emulated renderer's (its non-readback resolve path), not this port's; noted for the base.
+
+**Comparisons with the reference (`tools/blur_pair.py`: side by side, a difference image, mean |difference|):**
+
+| Scene | Before | Fix | After |
+|---|---|---|---|
+| Title ("Press START") | mean diff 2.9 / 7.6 / 9.0 (ours brighter in the darks) | the display's gamma ramp the game loads (`banjo_renut_game_gamma`, a base key that was off): on in Blur's shipped toml, `configs/renut_gamma_off.toml` without it | 0.3 / 1.3 / 1.5 (`gamma1`) |
+| Race (Barcelona Oval, first seconds) | ours darker (means 56 / 61 / 52 against 67 / 71 / 59), the tail lights' glow and the bloom missing, the car's rear window black | the 640x360 HDR downsample: resolved as 16_16_16_16_EXPAND, sampled through another header as 16_16_16_16_FLOAT; Renut made that texture from guest memory, which the resolve never wrote (the log's "[flash] ... made from guest memory over resolve destination ... 640x360 format 29"). `blur_renut_expand_alias` (A/B 211, on): the two formats are the same half floats in the reference (the SDK's d3d12 `texture_cache.cpp`), so the texture reads the resolve's own image | the texture reads the resolve (route7's log), but the picture did not change: see the next row |
+| Race, the post pass that reads last frame's 640x360 image | the same 640x360 image empty every frame | each frame, before the image's own resolve, Blur resolves a 1x1 2_10_10_10 target into its corner (the console converts into the destination's format and leaves the rest); Renut made a resolve destination again whenever the source's format differed, so the whole image was made again, empty, for that pixel (`trace2`: "resolve colour 7010F6B0 (1x1 fmt 11) -> texture 44ED87A8", then the image read from guest memory). `blur_renut_resolve_keep_dest` (A/B 212, on): a single-sampled resolve of part of an existing destination of another format keeps it and writes its part with a draw that converts (`DrawResolveCopy`'s pipeline now by the destination's format) | the image is kept and read (`route8`: "keeps it and converts", then "reads resolve destination ... through its texture"); frames clean |
+
+**What the race comparison can and cannot say (20:00).** The reference's race frame and ours are not the same moment:
+the reference's car shows 3 mph with its brake lights on (the red glow round the tail lights, the lit rear window),
+ours 0 mph; the eye adaptation (the 1x1 luminance chain) depends on how long the race has run. So the remaining
+difference in brightness (ours about 10 lower in the means) is not yet a renderer finding: it needs the same moment
+in both (the same scripted presses from a save at the grid, or a capture at a fixed frame after the race loads).
+`banjo_renut_diag_resolve_trace` now also lists, in its frame, resolves sampled through another header and textures
+made from guest memory over a resolve destination ("sample GUEST"): the traced race frames show none left but
+ordinary textures in memory a resolve once used.
+
+**The EDRAM views of one surface (`blur_renut_view_reinterpret`, A/B 210, off).** Blur draws a 1280x720 4x MSAA
+target as 2_10_10_10_FLOAT (7e3) and resolves it through an 8_8_8_8 view (and once at 320x180 the other way: drawn as
+16_16_16_16_FLOAT, resolved as 8_8_8_8): the console reads the same EDRAM words, Renut's views are separate host
+targets ("Resolve through a view of format 3F of EDRAM last drawn as 06: its pixels are not carried over"). A pass
+that carries the words over (`shaders/host/view_reinterpret*.hlsl`, 7e3 bits <-> bytes, per sample) was written and
+tried: the bytes-to-floats direction broke the tiled frames (rows 256-719 black: a tiled frame's later tiles read the
+words of the first), the floats-to-bytes direction brought the race's means to 63 / 68 / 57 but made the HUD's panels
+pale. Not proven, so off; the key and the A/B stay for the console's log and a later look.
+
+**Renut on Vulkan (`renut13`, `route2`)**: the logos, the title with the car under the logo, the Bink attract video,
+the menus (single player, career, Proving Grounds), the tutorial videos, car select and a Barcelona Oval race with
+its HUD, power-ups, smoke and track: 120 fps on the RTX 3060 (the PC's vsync), render thread 0.3 ms and GPU 2.3 ms a
+frame at the title, no errors in the log.
 
 ## What belonged to Katamari, taken out (`tools/blur_strip_katamari.py`)
 

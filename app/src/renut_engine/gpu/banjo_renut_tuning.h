@@ -393,6 +393,9 @@ void CountFetchAlignment(bool aligned);
 bool DepthHandOverReadOnlyOn();
 // kameo-nx (2026-11-03, the GPU round from the third console run; docs/kameo-notes.md). A/B targets 73-79.
 bool ColorHandOverOn();          // banjo_deko3d_color_handover (73)
+bool ViewReinterpretOn();        // blur_renut_view_reinterpret (210, blur-nx)
+bool ExpandAliasOn();            // blur_renut_expand_alias (211, blur-nx)
+bool ResolveKeepDestOn();        // blur_renut_resolve_keep_dest (212, blur-nx)
 bool ScanOutHandOverOn();        // banjo_deko3d_scanout_handover (74)
 bool DepthHandOverSampledOn();   // banjo_deko3d_depth_handover_sampled (75)
 bool DepthReadLayoutOn();        // banjo_deko3d_depth_read_layout (76)

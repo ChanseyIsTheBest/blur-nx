@@ -13,7 +13,9 @@
 # (out/deko3d_shaders_nocentroid, app/out/renut_switch_nocentroid: a GLSL package the runtime loads from the SD,
 # /switch/katamari_nx/deko3d_glsl.bin), step 3 left out (the NRO's own shader cache stays the default set's).
 param([switch]$NoCentroid)
-$ErrorActionPreference = "Stop"
+# blur-nx (2026-11-10): "Continue": XenosRecomp writes its informational lines ("fetch lod ...") to stderr, which "Stop"
+# turned into a terminating error; every native call below checks $LASTEXITCODE instead.
+$ErrorActionPreference = "Continue"
 $root = Split-Path -Parent $PSScriptRoot
 $py = "C:\Python314\python.exe"
 $exe = Join-Path $root "app\out\pc\xenos_recomp\build\XenosRecomp\XenosRecomp.exe"

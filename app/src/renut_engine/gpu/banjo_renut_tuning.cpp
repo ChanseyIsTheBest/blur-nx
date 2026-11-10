@@ -647,6 +647,27 @@ REXCVAR_DEFINE_STRING(banjo_renut_ab_targets, "", "Banjo",
                       "numbers (\"15,16\"); each in turn is switched off and on for one banjo_renut_ab_s period each, "
                       "the next one after, and the 10 s report has a \"[renut A/B]\" line for each with its halves "
                       "so far. One console run measures them all. Empty: banjo_renut_ab_target alone");
+REXCVAR_DEFINE_BOOL(blur_renut_view_reinterpret, false, "Banjo/Enhancements",  // blur-nx: off, not proven (blur-notes)
+                    "blur-nx (2026-11-10, A/B 210): the 2_10_10_10_FLOAT and 8_8_8_8 views of one EDRAM, as the console "
+                    "has them: a resolve through one after the other was drawn reads the same 32-bit words (the 7e3 "
+                    "floats' bits as bytes, or bytes as 7e3 floats; Blur's HDR passes do both). Off: the resolve reads "
+                    "its own host target, which nothing drew to")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(blur_renut_expand_alias, true, "Banjo/Renut",
+                    "blur-nx (2026-11-10, A/B 211): a resolve destination written as 16_EXPAND / 16_16_EXPAND / "
+                    "16_16_16_16_EXPAND and sampled through another header as 16_FLOAT / 16_16_FLOAT / 16_16_16_16_FLOAT "
+                    "(or the other way) is the same data: the reference's texture cache reads both as half floats. Blur's "
+                    "640x360 HDR downsample is resolved as one and read as the other (its bloom). Off: such a texture is "
+                    "made from guest memory, which the resolve never wrote (no bloom, the tail lights' glow missing)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(blur_renut_resolve_keep_dest, true, "Banjo/Renut",
+                    "blur-nx (2026-11-10, A/B 212): a single-sampled resolve that covers part of an existing destination "
+                    "made from another format keeps that destination and writes its part with a draw that converts, as the "
+                    "console writes the resolve into the destination's own format. Blur resolves a 1x1 2_10_10_10 target "
+                    "into the corner of its 640x360 half-float image each frame: without this the image was made again "
+                    "(empty) and the post pass that reads last frame's image read nothing. Off: the destination is made "
+                    "again in the source's format (Renut's rule)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(banjo_renut_push_point_only, true, "Banjo/Enhancements",
                     "Renut's renderer (Vulkan): with the constants in uniform buffers, the push constant (the three "
                     "constant addresses) is read only by the point sprites' geometry shader, so only point-list draws "
@@ -984,6 +1005,9 @@ const char *AbName(int target) {
   case 78: return "no pow in the scan-out at an output gamma of 1 (banjo_renut_present_no_pow)";
   case 79: return "the scan-out loads the texel at one to one (banjo_renut_present_texel_load)";
   case 84: return "a queued draw prefetches the delta's device and shadow lines (banjo_renut_delta_prefetch; 74 in bangaio-nx)";
+  case 210: return "the 2_10_10_10_FLOAT / 8_8_8_8 views of one EDRAM reinterpreted (blur_renut_view_reinterpret)";
+  case 211: return "an EXPAND resolve sampled as its FLOAT twin through the resolve's texture (blur_renut_expand_alias)";
+  case 212: return "a partial resolve keeps a destination of another format and converts (blur_renut_resolve_keep_dest)";
   default: {
     // sasrt-nx (2026-11-08): the GPU round's items (sasrt_gpu_round.h: 90 and up).
     const char *name = sasrt::gpu_round::AbName(target);
@@ -1664,6 +1688,21 @@ template <int kTarget>
 bool ColorHandOverOn() {
   static const bool on = REXCVAR_GET(banjo_deko3d_color_handover);
   return KeyOn<73>(on);
+}
+// blur-nx (2026-11-10): SyncColorViewLocked's 7e3 / 8888 pairs (draw.cpp), A/B 210.
+bool ViewReinterpretOn() {
+  static const bool on = REXCVAR_GET(blur_renut_view_reinterpret);
+  return KeyOn<210>(on);
+}
+// blur-nx (2026-11-10): ResolvedAlias's EXPAND / FLOAT pairs (render/textures.cpp), A/B 211.
+bool ExpandAliasOn() {
+  static const bool on = REXCVAR_GET(blur_renut_expand_alias);
+  return KeyOn<211>(on);
+}
+// blur-nx (2026-11-10): ResolveTarget's kept destination and the converting draw (textures.cpp, draw.cpp), A/B 212.
+bool ResolveKeepDestOn() {
+  static const bool on = REXCVAR_GET(blur_renut_resolve_keep_dest);
+  return KeyOn<212>(on);
 }
 bool ScanOutHandOverOn() {
   static const bool on = REXCVAR_GET(banjo_deko3d_scanout_handover);
