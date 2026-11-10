@@ -581,7 +581,7 @@ banjo_renut_diag_terrain = true
 renut_shadow_resolution = "1x"
 renut_ambient_occlusion = "Half"
 banjo_xma_frame_cache = false
-banjo_renut_ab_targets = "25,28,22,26,33,42,45,46,48,70,211,212,213,214,1"
+banjo_renut_ab_targets = "25,28,22,26,33,42,45,46,48,70,211,212,213,214,215,216,217,218,219,220,221,1"
 banjo_renut_ab_s = 30
 
 [input_p1]

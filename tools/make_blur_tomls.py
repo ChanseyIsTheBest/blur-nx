@@ -73,7 +73,10 @@ PLAY = {'log_level': '"error"', 'banjo_renut_diag_resolve_trace': 'false', 'banj
 # 1 (a Vulkan-only key) does nothing on the Switch: the control.
 # 2026-11-10: Blur's own keys too: 211 the EXPAND/FLOAT alias, 212 the kept destination, 213 the occlusion answer, 214
 # the tile resolve staging (each a correctness fix; the A/B gives its cost and its picture).
-AB = {'banjo_renut_ab_targets': '"25,28,22,26,33,42,45,46,48,70,211,212,213,214,1"', 'banjo_renut_ab_s': '30',
+# 2026-11-11: 215 the stack surface headers, 216 the sample-grid resolve, 217 the surface size guard, 218 the overwritten
+# EDRAM wipe, 219 the resolve exponent bias, 220 the EDRAM inheritance, 221 the multisampled slice resolves.
+AB = {'banjo_renut_ab_targets': '"25,28,22,26,33,42,45,46,48,70,211,212,213,214,215,216,217,218,219,220,221,1"',
+      'banjo_renut_ab_s': '30',
       'banjo_renut_dynamic_resolution': 'false'}
 VERIFY = {k: 'true' for k in (
     'banjo_renut_fast_draw_verify', 'banjo_renut_resource_objects_verify', 'banjo_renut_fetch_cache_verify',
