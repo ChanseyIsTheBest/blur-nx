@@ -497,6 +497,17 @@ holds the game to 60 frames a second; a number in frame_cap is taken as it is; t
 differences); the EDRAM inheritance and the exponent bias at work on deko3d; at the grid the rear window shows the
 interior and the tail lights' red glow spreads, as on the PC; the race at 10-14 fps (the earlier runs' 1-10).
 
+**The "10% darker" frame, checked (07:00-08:00, the user's question: is it the gamma?).** With the game's gamma ramp off
+our race frame overshoots the reference (frame 68 against 60; with it on, 53): the ramp stays on. The 10% was the
+comparison's, not the renderer's: the two cars stop about a lane apart, so fixed screen boxes held other things. Over the
+distant scenery (sky, hills, trees, buildings, the same in both frames) the averages are 63.0 and 63.5 (0.992), and
+uniform 3x3 patches showing the same thing are equal within 1-3 levels from black to 200. The reference's displayed
+frame is its 10-bit front buffer unchanged (its present adds nothing); ours applies the ramp at present: the two end
+the same. Still not settled: the car paint (darker here in the frames compared), whose light depends on where the car
+stands; the games' timing gives no moment with both cars in one place (the run-up after the intro differs). Images:
+`out/compare/` (1-5). `tools/run_pc.ps1 -Max` sets the capture count (a second nfsmw_captura_max in -Extra is a CLI
+error that drops every flag: a reference run then draws nothing).
+
 **Machine copies: on hold (the user, 21:12: "I'll tell you when", waiting on the SASRT session).** The SASRT
 session's generator patch (copies of functions with guest atomics) is applied to `tools/localize_native.py`; nothing
 runs it until post-codegen runs again.

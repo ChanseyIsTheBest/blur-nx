@@ -1,10 +1,11 @@
 # blur-nx (2026-11-10): Blur's game folder and its title update's files (UPDATE:). katamari-nx: one PC test run of app/out/pc/renut.exe: minimised, muted, its own log, PNG captures every N seconds
 # (nfsmw_captura_cada_s), stopped after -Seconds. Stops only the process it started.
-#   powershell -File tools/run_pc.ps1 -Seconds 120 -Name boot1 [-Every 15] [-Extra "--gpu_plugin=xenos --foo=1"]
+#   powershell -File tools/run_pc.ps1 -Seconds 120 -Name boot1 [-Every 15] [-Max 60] [-Extra "--gpu_plugin=xenos --foo=1"]
+# blur-nx (2026-11-11): -Max sets nfsmw_captura_max (passing it again in -Extra is a CLI error: every flag is then lost).
 # The log is written unbuffered (log_file_writer = false): the run is stopped by force, which would drop the buffer.
 # -Visible: the window is shown (not minimised): Renut presents (and so captures and paces by vsync) only with a
 # swapchain, which a minimised window does not get.
-param([int]$Seconds = 90, [string]$Name = "run", [int]$Every = 15, [string]$Extra = "", [switch]$Visible)
+param([int]$Seconds = 90, [string]$Name = "run", [int]$Every = 15, [string]$Extra = "", [switch]$Visible, [int]$Max = 60)
 $root = Split-Path -Parent $PSScriptRoot
 $dir = Join-Path $root "app\out\pc"
 $exe = Join-Path $dir "renut.exe"
@@ -15,7 +16,7 @@ Remove-Item $log -ErrorAction SilentlyContinue
 $min = if ($Visible) { "false" } else { "true" }
 $args = @("--log_file=$log", "--audio_mute=true", "--window_start_minimized=$min", "--fullscreen=false",
           "--game_data_root=D:/blur/game", "--update_data_root=D:/blur/tu", "--user_data_root=$root/out/pc_user",
-          "--nfsmw_captura_cada_s=$Every", "--nfsmw_captura_max=60", "--log_file_writer=false") +
+          "--nfsmw_captura_cada_s=$Every", "--nfsmw_captura_max=$Max", "--log_file_writer=false") +
         @($Extra -split ' ' | Where-Object { $_ })
 $style = if ($Visible) { "Normal" } else { "Minimized" }
 $p = Start-Process -FilePath $exe -ArgumentList $args -WorkingDirectory $dir -PassThru -WindowStyle $style `
