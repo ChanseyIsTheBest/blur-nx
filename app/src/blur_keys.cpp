@@ -5,6 +5,7 @@
 // Each comes back with its own file once it has been moved to Beautiful Katamari's functions (docs/katamari-notes.md).
 
 #include <rex/cvar.h>
+#include <rex/platform.h>  // blur-nx (2026-11-11): REX_PLATFORM_SWITCH (blur_pc_speed_cap is the PC's alone)
 
 #include <atomic>
 #include <chrono>
@@ -38,6 +39,18 @@ REXCVAR_DEFINE_STRING(frame_cap, "Off", "Katamari/Performance",
                       "Frame rate cap: Off (the game's own, uncapped as on the Xbox 360) or a number of frames a second")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+// blur-nx (2026-11-11): Blur's frame timer (sub_82574A20) takes each frame's step as the time since the last, held to
+// 1/60..1/15 s (no fixed step: the tunables that would set one are 0). The console never runs above its 60 Hz output, so
+// the 1/60 floor never applied there; a PC drawing at 120 Hz gave the game 1/60 s a frame, twice real time (measured with
+// blur_diag_frame_timer: 2.00 game seconds a second at 120 fps, 0.80 at 12 fps). With frame_cap Off the PC holds the
+// game to 60 frames a second, the console's most; a number in frame_cap is taken as it is. The Switch's display is 60 Hz
+// already: nothing changes there.
+REXCVAR_DEFINE_BOOL(blur_pc_speed_cap, true, "Blur/Performance",
+                    "PC: with frame_cap Off, at most 60 frames a second (the Xbox 360's most). Blur's clock gives each "
+                    "frame at least 1/60 s of game time, so above 60 fps the game ran faster than real time (twice at "
+                    "120 Hz). Off: as fast as the display allows")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 // katamari-nx (2026-11-02, the user's request: a 30 fps cap in blur.toml, off by default): renutFrameLimit of
 // renut_engine/frameHooks.cpp, called at the end of the game's Swap (d3d/hooks/device.cpp). With the display's refresh
 // known (the Switch) a frame is released at a refresh plus the measured phase (renut_engine/display_sync.h), else on its
@@ -46,7 +59,13 @@ void renutFrameLimit() {
   using clock = std::chrono::steady_clock;
   static const int fps = [] {
     const std::string &v = REXCVAR_GET(frame_cap);
-    return v.empty() || v == "Off" ? 0 : std::atoi(v.c_str());
+    const int cap = v.empty() || v == "Off" ? 0 : std::atoi(v.c_str());
+#if !REX_PLATFORM_SWITCH
+    // blur-nx (2026-11-11, blur_pc_speed_cap): the game's speed above 60 fps (its clock's 1/60 s floor).
+    if (cap <= 0 && REXCVAR_GET(blur_pc_speed_cap))
+      return 60;
+#endif
+    return cap;
   }();
   // pacman-nx (2026-11-03, pacman_vblank_display_sync, futari-nx's): with no frame cap the display's refresh starts the
   // game's next frame (display_sync.h). The game's speed follows its frames.

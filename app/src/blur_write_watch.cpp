@@ -33,6 +33,7 @@
 
 extern "C" void __imp__sub_8216AE98(PPCContext &__restrict ctx, uint8_t *base);  // the generated cube filler
 extern "C" void __imp__sub_8216CA28(PPCContext &__restrict ctx, uint8_t *base);  // the light slots' writer
+extern "C" void __imp__sub_8256D6D8(PPCContext &__restrict ctx, uint8_t *base);  // the game's frame update
 
 REXCVAR_DEFINE_INT32(blur_diag_cube_lights_s, 0, "Blur/Diagnostics",
                      "blur-nx (2026-11-11): from this many seconds in (0: off), the inputs of the function that fills the "
@@ -48,6 +49,12 @@ REXCVAR_DEFINE_BOOL(blur_diag_watch_light_scale, false, "Blur/Diagnostics",
                     "blur-nx (2026-11-11): with blur_diag_cube_lights_s, the light writer's first dump write-protects the "
                     "page of its object's +2684 (the scale of light 0's colour), so each write there names its function "
                     "and line (\"[watch]\" lines; PC only)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(blur_diag_frame_timer, false, "Blur/Diagnostics",
+                    "blur-nx (2026-11-11): the game's frame timers once a second (sub_8256D6D8 wrapped in the indirect-call "
+                    "table): each timer's step (dt, clamped by the game to 1/60..1/15 s unless a fixed step is set), its "
+                    "fps, its game time and its fixed-step override, against wall time (\"[timer]\" lines; PC only): the "
+                    "game's speed when frames run late or fast")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(blur_diag_cube_writer, false, "Blur/Diagnostics",
                     "blur-nx (2026-11-11): find the function that writes the 8x8 ambient cube's staging buffer: its "
@@ -262,6 +269,24 @@ void CubeFillerWrapper(PPCContext &ctx, uint8_t *base) {
           DumpRecord("cube", int(i), b + 16 + 64 * i);
     }
   }
+  // The first cube's place (its record's floats 4-6: the player's car) once a second, in the same window as the light
+  // scale's course: how far the car moves per second of wall time (the game's speed when frames run late).
+  {
+    static std::chrono::steady_clock::time_point last_place{};
+    const auto from = g_lights_start + std::chrono::seconds(std::max(0, after_s - 40));
+    if (now >= from && now < from + std::chrono::seconds(100) && now - last_place >= std::chrono::seconds(1)) {
+      last_place = now;
+      auto *memory = REX_KERNEL_MEMORY();
+      const u8 *j = memory->TranslateVirtual<const u8 *>(ctx.r3.u32);
+      const u32 block = j ? GuestWord(j) : 0, first = j ? GuestWord(j + 16) : 0;
+      if (const u8 *b = block ? memory->TranslateVirtual<const u8 *>(block) : nullptr) {
+        const u8 *c = b + 16 + 64 * first;
+        REXLOG_INFO("[lights] t {} ms: cube {} at {} {} {}",
+                    std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lights_start).count(), first,
+                    GuestFloat(c + 16), GuestFloat(c + 20), GuestFloat(c + 24));
+      }
+    }
+  }
   __imp__sub_8216AE98(ctx, base);
 }
 }  // namespace
@@ -349,7 +374,35 @@ void LightWriterWrapper(PPCContext &ctx, uint8_t *base) {
   __imp__sub_8216CA28(ctx, base);
 }
 
+// The game's frame update (sub_8256D6D8, through its vtables): r3 the game object; its timers at +16 and +56
+// (sub_82574A20: +4 frames since the last fps, +8 their time, +12 the step, +16 the fps, +20 the game time, +32 the fixed
+// step or -1), each override set from a tunable's +36 (82CDF3A0, 82CDF3D8: a frame rate; 1/rate when 0.0001 or more).
+std::chrono::steady_clock::time_point g_timer_start{}, g_timer_last{};
+void FrameUpdateWrapper(PPCContext &ctx, uint8_t *base) {
+  const auto now = std::chrono::steady_clock::now();
+  if (now - g_timer_last >= std::chrono::seconds(1)) {
+    g_timer_last = now;
+    auto *memory = REX_KERNEL_MEMORY();
+    const u8 *g = memory->TranslateVirtual<const u8 *>(ctx.r3.u32);
+    const u8 *ta = memory->TranslateVirtual<const u8 *>(0x82CDF3A0 + 36);
+    const u8 *tb = memory->TranslateVirtual<const u8 *>(0x82CDF3D8 + 36);
+    if (g)
+      REXLOG_INFO("[timer] wall {:.3f} s: A dt {:.5f} fps {:.2f} game {:.3f} fixed {:.4f} | B dt {:.5f} fps {:.2f} game {:.3f} "
+                  "fixed {:.4f} | tunables {} {}",
+                  std::chrono::duration<double>(now - g_timer_start).count(), GuestFloat(g + 16 + 12),
+                  GuestFloat(g + 16 + 16), GuestFloat(g + 16 + 20), GuestFloat(g + 16 + 32), GuestFloat(g + 56 + 12),
+                  GuestFloat(g + 56 + 16), GuestFloat(g + 56 + 20), GuestFloat(g + 56 + 32), ta ? GuestFloat(ta) : 0.0f,
+                  tb ? GuestFloat(tb) : 0.0f);
+  }
+  __imp__sub_8256D6D8(ctx, base);
+}
+
 void InstallCubeFillerWrapper() {
+  if (REXCVAR_GET(blur_diag_frame_timer)) {
+    g_timer_start = std::chrono::steady_clock::now();
+    const bool set = REX_KERNEL_MEMORY()->SetFunction(0x8256D6D8, &FrameUpdateWrapper);
+    REXLOG_INFO("[timer] the game's frame update sub_8256D6D8 wrapped in the indirect-call table: {}", set ? "yes" : "no");
+  }
   if (REXCVAR_GET(blur_diag_cube_lights_s) <= 0)
     return;
   g_lights_start = std::chrono::steady_clock::now();

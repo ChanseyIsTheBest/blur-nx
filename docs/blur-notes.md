@@ -474,6 +474,29 @@ into its slice (the path Vulkan already used for destinations with levels). The 
 a few levels; the rear window shows the interior (67/70/58 against 87/89/77; the rest is the lighting phase and the
 car's place), the paint is brighter.
 
+**The game's speed when frames run late (or fast), measured (05:30-06:30).** Blur's frame timer (`sub_82574A20`, two of
+them, updated by the game's frame update `sub_8256D6D8`) takes each frame's step as the time since the last (the
+microsecond clock `sub_822702A0`), held to 1/60..1/15 s; a fixed step replaces it only when a tunable frame rate is set
+(both are 0 here: the override stays -1). `blur_diag_frame_timer` (PC, the frame update wrapped in the indirect-call
+table) logs both timers' step, fps and game time once a second:
+
+| Frames a second | Step | Game seconds a second |
+|---|---|---|
+| 120 (PC, uncapped) | 1/60 (the floor) | 2.00 |
+| 60 (PC, `blur_pc_speed_cap`) | 1/60 | 1.00 |
+| 12 (PC, frame_cap 12) | 1/15 (the ceiling) | 0.80 |
+
+So the game keeps real time from 15 to 60 frames a second, slows in proportion below 15 (fps / 15) and runs fast in
+proportion above 60. **Ryujinx (emu11):** the race at 10-14 fps runs at 0.67-0.93 of real time (the menus and loading
+faster); nothing in the timing was changed. **The PC above 60 fps was a bug:** on a 120 Hz display the game ran at
+double speed (physics, AI, timers; it is also why my uncapped PC runs reached the race phases at other times than the
+reference). The console never draws above its 60 Hz output. `blur_pc_speed_cap` (PC, on): with frame_cap Off the PC
+holds the game to 60 frames a second; a number in frame_cap is taken as it is; the Switch (60 Hz display) is unchanged.
+
+**emu11 (05:00, the Switch build with 219-221 and the occlusion fix):** clean (0 memory emergencies, 0 verify
+differences); the EDRAM inheritance and the exponent bias at work on deko3d; at the grid the rear window shows the
+interior and the tail lights' red glow spreads, as on the PC; the race at 10-14 fps (the earlier runs' 1-10).
+
 **Machine copies: on hold (the user, 21:12: "I'll tell you when", waiting on the SASRT session).** The SASRT
 session's generator patch (copies of functions with guest atomics) is applied to `tools/localize_native.py`; nothing
 runs it until post-codegen runs again.
