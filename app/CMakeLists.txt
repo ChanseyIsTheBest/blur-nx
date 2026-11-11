@@ -277,6 +277,14 @@ endif()
 if(NOT SASRT_HOT_PREFETCH)
     target_compile_definitions(renut PRIVATE SASRT_HOT_PREFETCH_OFF)
 endif()
+# sasrt-nx (2026-11-10, machine-copy idea 27; blur-nx 2026-11-11, the user's request; sasrt-nx's handoff
+# docs/handoff/idea27_guard_forms.md): the guard's logged forms of every localized copy. OFF (a build that runs no
+# guard, the one for the console): about two thirds of the copies' code is not made; every hook calls its copy directly.
+# ON for the PC and Ryujinx verify builds (banjo_hot_guard_*, banjo_cpu_verify need them).
+option(SASRT_HOT_GUARD_FORMS "Localized copies: the guard's logged forms (banjo_hot_guard_*, banjo_cpu_verify)" ON)
+if(NOT SASRT_HOT_GUARD_FORMS)
+    target_compile_definitions(renut PRIVATE BANJO_HOT_GUARD_FORMS=0)
+endif()
 if(SASRT_HOT_LR_ELIDE)
     foreach(_shard RANGE 0 11)
         set_property(SOURCE src/cpu/banjo_hot_shard_${_shard}.cpp APPEND PROPERTY COMPILE_DEFINITIONS REX_LR_MOVES_ELIDE)

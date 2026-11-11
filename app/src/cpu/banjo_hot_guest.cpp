@@ -586,8 +586,17 @@ uint8_t InitHook(Hook& h, uint8_t* base) {
   h.verify = verify;
   h.guard_calls = uint32_t(std::clamp(REXCVAR_GET(banjo_hot_guard_calls), 0, 4000));
   h.period = period;
-  // No guard at all: the hook calls its copy directly (banjo_hot_guest.h, kDirect).
-  const bool direct = !verify && h.guard_calls == 0 && REXCVAR_GET(banjo_hot_guard_period) == 0;
+  // No guard at all: the hook calls its copy directly (banjo_hot_guest.h, kDirect). sasrt-nx (2026-11-10, machine-copy
+  // idea 27; blur-nx 2026-11-11, the user's request): also when the build has no guard forms (BANJO_HOT_GUARD_FORMS 0:
+  // the logged forms are not made).
+  const bool forms = h.native_logged && h.reference_logged;
+  if (!forms && (verify || h.guard_calls || REXCVAR_GET(banjo_hot_guard_period))) {
+    static std::atomic<bool> said{false};
+    if (!said.exchange(true, std::memory_order_relaxed))
+      REXLOG_WARN("[hot] this build has no guard forms (SASRT_HOT_GUARD_FORMS OFF): banjo_cpu_verify and "
+                  "banjo_hot_guard_* are ignored, every native copy is called directly");
+  }
+  const bool direct = !forms || (!verify && h.guard_calls == 0 && REXCVAR_GET(banjo_hot_guard_period) == 0);
   uint8_t state = on ? (direct ? kDirect : kOn) : kOff;
   if (on && REXCVAR_GET(banjo_hot_count) && h.native_counted) state = kCount;
   if (on && h.bulk) {
