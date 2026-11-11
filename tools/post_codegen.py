@@ -203,6 +203,16 @@ def main():
     # banjo-nx (2026-10-19, CPU proposal 1): the store cards, after everything else (the inline copies included): every
     # store outside the stack marks its page for Renut's cached vertex and index copies (REX_STORE_CARDS_OFF).
     run(tool('store_cards.py'), '--gen', gen)
+    # blur-nx (2026-11-11, CPU batch 2, docs/vector-store-ideas.md VS-14): in the copies, one card check per group of
+    # card stores to the same base in a straight stretch (two at its end: the lowest and highest offset's page).
+    run(tool('card_groups.py'), '--gen', gen)
+    # blur-nx (2026-11-11, CPU batch 2, docs/vector-ideas-2.md VX-15 / VX-14): in the copies' f_ bodies only (the o_
+    # bodies stay the guard's reference), two or four broadcast dot products merged by vmrghw / vmrglw as one
+    # pairwise-add tree (sdk/include/rex/ppc/vec_batch2.h).
+    run(tool('vec_dp_merge.py'), '--gen', gen)
+    # blur-nx (2026-11-11, CPU batch 2, docs/vector-ideas-2.md VX-29 / VX-02): in the copies' f_ bodies, vupkd3d128 of a
+    # zero register as 1.0 and vcuxwfp128 / vcsxwfp128 of a known splat as their constants.
+    run(tool('vec_const_fold.py'), '--gen', gen)
     # blur-nx (2026-11-11, CPU batch 1, docs/vector-store-ideas.md VS-05): a 128-byte dcbzl as two DC ZVA (no read of
     # the line it zeroes). After store_cards.py, which finds the dcbz by its memset to put the card in front.
     run(tool('vec_dcbz_zva.py'), '--gen', gen)

@@ -32,6 +32,9 @@
 #include <rex/ppc/intrinsics.h>
 #include <rex/ppc/vec_lane.h>  // blur-nx (2026-11-11): the lanes by a run-time index (VecLanes below)
 #include <rex/ppc/vec_batch1.h>  // blur-nx (2026-11-11): CPU batch 1's forms (VecBatch1 below)
+#include "hot/blur_block_copy.h"  // blur-nx (2026-11-11): CPU batch 2's natives' forms (VecBatch2 below)
+#include "hot/blur_gather.h"
+#include <rex/ppc/vec_batch2.h>  // blur-nx (2026-11-11): the dot-product merges (VecBatch2 below)
 
 namespace {
 
@@ -373,6 +376,77 @@ void VecBatch1(Tally& t) {
   }
 }
 
+// blur-nx (2026-11-11, CPU batch 2): the resampler natives' table pairs (hot/blur_gather.h: the NEON form against the
+// portable one, at every word offset of a line, 12 included, where the pair reaches into the next line) and the natives'
+// block copy (hot/blur_block_copy.h: the NEON form for a multiple of 64, memcpy otherwise).
+void VecBatch2(Tally& t) {
+  uint32_t seed = 0x6A09E667u;
+  alignas(16) static uint8_t mem[256];
+  for (int i = 0; i < 256; ++i) mem[i] = uint8_t(Lcg(seed) >> 13);
+  for (int r = 0; r < 64; ++r) {
+    uint32_t o[4];
+    for (int k = 0; k < 4; ++k) o[k] = r < 16 ? uint32_t((r * 4 + k * 52) % 240) & ~3u : (Lcg(seed) % 240u) & ~3u;
+    const uint8_t* p[4];
+    for (int k = 0; k < 4; ++k) p[k] = Opaque(static_cast<const uint8_t*>(mem + o[k]));
+    simde__m128 lo, hi, lo_ref, hi_ref;
+    blur_gather::Pairs4(p[0], p[1], p[2], p[3], lo, hi);
+    blur_gather::Pairs4Ref(p[0], p[1], p[2], p[3], lo_ref, hi_ref);
+    Vec a, b;
+    a.v = simde_mm_castps_si128(lo);
+    b.v = simde_mm_castps_si128(lo_ref);
+    ExpectVec(t, "Pairs4 lo", r, a, b);
+    a.v = simde_mm_castps_si128(hi);
+    b.v = simde_mm_castps_si128(hi_ref);
+    ExpectVec(t, "Pairs4 hi", r, a, b);
+  }
+  t.Expect("PairOk", "0x82000010", blur_gather::PairOk(0x82000010u), true);
+  t.Expect("PairOk", "0x8200001C", blur_gather::PairOk(0x8200001Cu), true);
+  t.Expect("PairOk", "0x82000012", blur_gather::PairOk(0x82000012u), false);
+  t.Expect("PairOk", "0xFFFFFFF8", blur_gather::PairOk(0xFFFFFFF8u), true);
+  t.Expect("PairOk", "0xFFFFFFFC", blur_gather::PairOk(0xFFFFFFFCu), false);
+  t.Expect("PairOk", "0xDFFFFFFC", blur_gather::PairOk(0xDFFFFFFCu), false);
+  // VX-15 / VX-14: two and four dot products (vmsum4fp128 0xFF, vmsum3fp128 0xEF) and their vmrghw merges against the
+  // products and pairwise adds the pass writes, on finite, signed-zero, infinite, NaN and denormal lanes.
+  {
+    static const uint32_t kOdd[] = {0x00000000u, 0x80000000u, 0x7F800000u, 0xFF800000u, 0x7FC00001u, 0xFFA00002u,
+                                    0x00000001u, 0x807FFFFFu, 0x3F800000u, 0x7F7FFFFFu, 0x00800000u, 0x4B000001u};
+    for (int r = 0; r < 48; ++r) {
+      Vec in[8];
+      for (int k = 0; k < 8; ++k)
+        for (int l = 0; l < 4; ++l) {
+          const uint32_t x = Lcg(seed);
+          in[k].u32[l] = r >= 8 && (x & 7u) == 0 ? kOdd[(x >> 3) % 12u] : (0x3C000000u + (x & 0x0FFFFFFFu)) ^ (x & 0x80000000u);
+        }
+      for (int k = 0; k < 8; ++k) in[k].v = Opaque(in[k].v);
+      Vec got, want;
+      got.f = rex::ppc::DpPairNew<0xFF>(in[0].f, in[1].f, in[2].f, in[3].f);
+      want.f = rex::ppc::DpPairRef<0xFF>(in[0].f, in[1].f, in[2].f, in[3].f);
+      ExpectVec(t, "DpPair 0xFF", r, got, want);
+      got.f = rex::ppc::DpPairNew<0xEF>(in[0].f, in[1].f, in[2].f, in[3].f);
+      want.f = rex::ppc::DpPairRef<0xEF>(in[0].f, in[1].f, in[2].f, in[3].f);
+      ExpectVec(t, "DpPair 0xEF", r, got, want);
+      // the quad: D1 = merge(dp(0,1), dp(2,3)), D2 = merge(dp(4,5), dp(6,7)), D = merge(D1, D2) = [a c b d]
+      const simde__m128 d1 = rex::ppc::DpPairRef<0xFF>(in[0].f, in[1].f, in[2].f, in[3].f);
+      const simde__m128 d2 = rex::ppc::DpPairRef<0xFF>(in[4].f, in[5].f, in[6].f, in[7].f);
+      want.v = simde_mm_unpackhi_epi32(simde_mm_castps_si128(d1), simde_mm_castps_si128(d2));
+      got.f = rex::ppc::DpQuad(rex::ppc::DpProd<0xFF>(in[0].f, in[1].f), rex::ppc::DpProd<0xFF>(in[4].f, in[5].f),
+                               rex::ppc::DpProd<0xFF>(in[2].f, in[3].f), rex::ppc::DpProd<0xFF>(in[6].f, in[7].f));
+      ExpectVec(t, "DpQuad", r, got, want);
+    }
+  }
+  {
+    alignas(16) static uint8_t src[1088], dst[1088], ref[1088];
+    for (int i = 0; i < 1088; ++i) src[i] = uint8_t(Lcg(seed) >> 7);
+    for (size_t len : {size_t(1024), size_t(64), size_t(1000)}) {
+      std::memset(dst, 0x5A, sizeof(dst));
+      std::memset(ref, 0x5A, sizeof(ref));
+      blur_copy::Copy64s(Opaque(dst + 16), Opaque(static_cast<const uint8_t*>(src + 32)), len);
+      std::memcpy(ref + 16, src + 32, len);
+      t.Expect("Copy64s", std::to_string(len).c_str(), std::memcmp(dst, ref, sizeof(dst)) == 0, true);
+    }
+  }
+}
+
 }  // namespace
 
 namespace banjo {
@@ -385,6 +459,7 @@ void FormsSelfCheck() {
   VectorHelpers(t);
   VecLanes(t);
   VecBatch1(t);
+  VecBatch2(t);
   if (t.wrong) {
     for (int i = 0; i < t.wrong; ++i) ::me::native::VerifyDifference();
     REXLOG_ERROR("[enhancements] DIFFERENCE: instruction forms self-check: {} of {} results are NOT as expected (see the lines "

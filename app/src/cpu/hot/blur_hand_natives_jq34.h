@@ -73,7 +73,7 @@ template <class S>
   s.Hand(kN822EA3C0, 1024);
   if (!s.Note(w0, wlen)) [[unlikely]] return true;
   ::banjo::hot::Card(base, w0, wlen);
-  std::memcpy(::banjo::hot::Raw(base, dst), ::banjo::hot::Raw(base, src), 1024);
+  blur_copy::Copy64s(::banjo::hot::Raw(base, dst), ::banjo::hot::Raw(base, src), 1024);  // VS-07 (blur_block_copy.h)
   if (lead) std::memset(::banjo::hot::Raw(base, w0), 0, 16);
   const int64_t r3 = ctx.r3.s64;
   ctx.r3.s64 = 96;

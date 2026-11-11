@@ -622,6 +622,30 @@ void XmaContext::NoteProduction(bool produced, uint8_t reason, const XMA_CONTEXT
   }
 }
 
+// blur-nx (2026-11-11, CPU batch 2): the bitmap of the enabled contexts (context.h). The flag is stored first, with
+// release; the bit after, with release: a sweep that sees the bit sees the flag. A sweep that does not see a bit
+// set during it misses that context this time, as the walk of the flags did when the flag was set behind it; the
+// kick that enabled it signals the worker, which looks again. Work() still checks both flags itself.
+namespace {
+constexpr uint32_t kEnabledWords = 10;  // 320 contexts
+std::atomic<uint32_t> g_enabled_bits[kEnabledWords];
+}  // namespace
+
+uint32_t XmaEnabledWord(uint32_t word) {
+  return word < kEnabledWords ? g_enabled_bits[word].load(std::memory_order_acquire) : 0u;
+}
+
+void XmaContext::set_is_enabled(bool is_enabled) {
+  is_enabled_.store(is_enabled, std::memory_order_release);
+  if (id_ < kEnabledWords * 32) {
+    const uint32_t bit = 1u << (id_ & 31);
+    if (is_enabled)
+      g_enabled_bits[id_ >> 5].fetch_or(bit, std::memory_order_release);
+    else
+      g_enabled_bits[id_ >> 5].fetch_and(~bit, std::memory_order_release);
+  }
+}
+
 bool XmaContext::Work() {
   if (!is_allocated() || !is_enabled()) {
     return false;

@@ -153,7 +153,7 @@ template <class S>
   ::banjo::hot::Card(base, w0, wlen);
   if (flag) {
     const uint32_t d = dst0 & ~15u, lead = dst0 & 16u, s16 = srcb & ~15u;
-    std::memcpy(::banjo::hot::Raw(base, d), ::banjo::hot::Raw(base, s16), len);
+    blur_copy::Copy64s(::banjo::hot::Raw(base, d), ::banjo::hot::Raw(base, s16), len);  // VS-07 (blur_block_copy.h)
     if (lead)  // the next block's dcbz zeroes the last 16 bytes of this one, and the first block's the 16 below it
       for (uint32_t i = 0; i < n; ++i) std::memset(::banjo::hot::Raw(base, d - 16u + (i << 10)), 0, 16);
     ::banjo::hot::Card(base, z0, len);
@@ -405,8 +405,10 @@ namespace blur_b3b {
 [[gnu::always_inline]] inline uint32_t LvlxW(uint8_t* base, uint32_t ea) {
   const uint32_t o = ea & 15u;
   const uint8_t* q = ::banjo::hot::Raw(base, ea & ~15u);
+  // blur-nx (2026-11-11, CPU batch 2): the word through one pointer (q[o + 1u] could wrap in 32 bits for all GCC
+  // knows, which kept it four byte loads); the same bytes, one load and a rev.
   if (o <= 12u) [[likely]]
-    return uint32_t(q[o]) << 24 | uint32_t(q[o + 1u]) << 16 | uint32_t(q[o + 2u]) << 8 | uint32_t(q[o + 3u]);
+    return blur_gather::Be32(q, o);
   uint32_t w = 0;
   for (uint32_t j = 0; j < 4; ++j) w = w << 8 | (o + j < 16u ? q[o + j] : 0u);
   return w;
@@ -473,6 +475,9 @@ template <class S>
   uint64_t b = 0;
   uint64_t r9 = out64;
   simde__m128 vr0 = simde_mm_setzero_ps(), vr11 = vr0, vr12 = vr0, vr13 = vr0;
+  // blur-nx (2026-11-11, CPU batch 2, blur_gather.h): every entry address is the table plus a multiple of 4, so with a
+  // 4-aligned table each (lo, hi) is one 8-byte load (unless an address is one PairOk excludes).
+  const bool tab_aligned = (uint32_t(tab) & 3u) == 0;
   for (uint32_t it = 0; it < 32; ++it) {
     const simde__m128 v54 = simde_mm_round_ps(v63, SIMDE_MM_FROUND_TO_ZERO | SIMDE_MM_FROUND_NO_EXC);
     const simde__m128 v53 = v63;
@@ -488,13 +493,22 @@ template <class S>
       ad[k] = uint32_t(((uint32_t(pos) >> 6) & 0x3FFFFFCu) + tab);
     }
     b += 8ull * step64;
-    uint32_t lo[8], hi[8];
-    for (uint32_t k = 0; k < 8; ++k) lo[k] = LvlxW(base, ad[k]);
-    for (uint32_t k = 0; k < 8; ++k) hi[k] = LvlxW(base, ad[k] + 4u);
-    const simde__m128 g0 = simde_mm_castsi128_ps(simde_mm_set_epi32(int(lo[0]), int(lo[1]), int(lo[2]), int(lo[3])));
-    const simde__m128 g1 = simde_mm_castsi128_ps(simde_mm_set_epi32(int(lo[4]), int(lo[5]), int(lo[6]), int(lo[7])));
-    const simde__m128 h0 = simde_mm_castsi128_ps(simde_mm_set_epi32(int(hi[0]), int(hi[1]), int(hi[2]), int(hi[3])));
-    const simde__m128 h1 = simde_mm_castsi128_ps(simde_mm_set_epi32(int(hi[4]), int(hi[5]), int(hi[6]), int(hi[7])));
+    bool pairs = tab_aligned;
+    for (uint32_t k = 0; k < 8; ++k) pairs &= blur_gather::PairOk(ad[k]);
+    simde__m128 g0, g1, h0, h1;
+    if (pairs) [[likely]] {
+      using ::banjo::hot::Raw;
+      blur_gather::Pairs4(Raw(base, ad[0]), Raw(base, ad[1]), Raw(base, ad[2]), Raw(base, ad[3]), g0, h0);
+      blur_gather::Pairs4(Raw(base, ad[4]), Raw(base, ad[5]), Raw(base, ad[6]), Raw(base, ad[7]), g1, h1);
+    } else {
+      uint32_t lo[8], hi[8];
+      for (uint32_t k = 0; k < 8; ++k) lo[k] = LvlxW(base, ad[k]);
+      for (uint32_t k = 0; k < 8; ++k) hi[k] = LvlxW(base, ad[k] + 4u);
+      g0 = simde_mm_castsi128_ps(simde_mm_set_epi32(int(lo[0]), int(lo[1]), int(lo[2]), int(lo[3])));
+      g1 = simde_mm_castsi128_ps(simde_mm_set_epi32(int(lo[4]), int(lo[5]), int(lo[6]), int(lo[7])));
+      h0 = simde_mm_castsi128_ps(simde_mm_set_epi32(int(hi[0]), int(hi[1]), int(hi[2]), int(hi[3])));
+      h1 = simde_mm_castsi128_ps(simde_mm_set_epi32(int(hi[4]), int(hi[5]), int(hi[6]), int(hi[7])));
+    }
     const simde__m128 v11 = simde_mm_sub_ps(h0, g0);
     simde__m128 r = REX_VMADDFP(v12a, v11, g0);
     simde_mm_store_si128((simde__m128i*)::banjo::hot::Raw(base, uint32_t(r9) & ~15u),
@@ -583,6 +597,7 @@ template <class S>
   uint32_t o1p = uint32_t(out1), o2p = uint32_t(out2);
   simde__m128 vr0 = simde_mm_setzero_ps(), vr10 = vr0, vr11 = vr0, vr12 = vr0, vr13 = vr0;
   const auto idx = [](uint64_t ph) { return uint64_t((uint32_t(ph) >> 6) & 0x3FFFFFCu); };
+  const bool tabs_aligned = ((uint32_t(tabA) | uint32_t(tabB)) & 3u) == 0;
   for (uint32_t it = 0; it < 64; ++it) {
     p = p + step64;
     const simde__m128 v57 = simde_mm_mul_ps(v63, v61);
@@ -599,21 +614,35 @@ template <class S>
     const uint64_t p4 = (p3 & 0xFF) + step64;
     const uint64_t i4 = idx(p4);
     const uint64_t sv[4] = {s0, s1, s2, s3};
-    uint32_t wa[4], wb[4], na[4], nb[4];
+    uint32_t ea[4], eb[4];
+    bool pairs = tabs_aligned;
     for (uint32_t k = 0; k < 4; ++k) {
-      const uint32_t sk = uint32_t(sv[k]);
-      wa[k] = LvlxW(base, sk + uint32_t(tabA));
-      wb[k] = LvlxW(base, sk + uint32_t(tabB));
+      ea[k] = uint32_t(sv[k]) + uint32_t(tabA);
+      eb[k] = uint32_t(sv[k]) + uint32_t(tabB);
+      pairs &= blur_gather::PairOk(ea[k]) & blur_gather::PairOk(eb[k]);
     }
-    for (uint32_t k = 0; k < 4; ++k) {
-      const uint32_t sk4 = uint32_t(sv[k]) + 4u;
-      na[k] = LvlxW(base, sk4 + uint32_t(tabA));
-      nb[k] = LvlxW(base, sk4 + uint32_t(tabB));
+    simde__m128 g0, g1, h0, h1;
+    // blur-nx (2026-11-11, CPU batch 2, blur_gather.h): the offsets are sums of multiples of 4, so with 4-aligned
+    // tables each (lo, hi) is one 8-byte load (unless an address is one PairOk excludes).
+    if (pairs) [[likely]] {
+      using ::banjo::hot::Raw;
+      blur_gather::Pairs4(Raw(base, ea[0]), Raw(base, ea[1]), Raw(base, ea[2]), Raw(base, ea[3]), g0, h0);
+      blur_gather::Pairs4(Raw(base, eb[0]), Raw(base, eb[1]), Raw(base, eb[2]), Raw(base, eb[3]), g1, h1);
+    } else {
+      uint32_t wa[4], wb[4], na[4], nb[4];
+      for (uint32_t k = 0; k < 4; ++k) {
+        wa[k] = LvlxW(base, ea[k]);
+        wb[k] = LvlxW(base, eb[k]);
+      }
+      for (uint32_t k = 0; k < 4; ++k) {
+        na[k] = LvlxW(base, ea[k] + 4u);
+        nb[k] = LvlxW(base, eb[k] + 4u);
+      }
+      g0 = simde_mm_castsi128_ps(simde_mm_set_epi32(int(wa[0]), int(wa[1]), int(wa[2]), int(wa[3])));
+      g1 = simde_mm_castsi128_ps(simde_mm_set_epi32(int(wb[0]), int(wb[1]), int(wb[2]), int(wb[3])));
+      h0 = simde_mm_castsi128_ps(simde_mm_set_epi32(int(na[0]), int(na[1]), int(na[2]), int(na[3])));
+      h1 = simde_mm_castsi128_ps(simde_mm_set_epi32(int(nb[0]), int(nb[1]), int(nb[2]), int(nb[3])));
     }
-    const simde__m128 g0 = simde_mm_castsi128_ps(simde_mm_set_epi32(int(wa[0]), int(wa[1]), int(wa[2]), int(wa[3])));
-    const simde__m128 g1 = simde_mm_castsi128_ps(simde_mm_set_epi32(int(wb[0]), int(wb[1]), int(wb[2]), int(wb[3])));
-    const simde__m128 h0 = simde_mm_castsi128_ps(simde_mm_set_epi32(int(na[0]), int(na[1]), int(na[2]), int(na[3])));
-    const simde__m128 h1 = simde_mm_castsi128_ps(simde_mm_set_epi32(int(nb[0]), int(nb[1]), int(nb[2]), int(nb[3])));
     const simde__m128 v51 = simde_mm_round_ps(v57, SIMDE_MM_FROUND_TO_ZERO | SIMDE_MM_FROUND_NO_EXC);
     const simde__m128 v12 = simde_mm_sub_ps(v57, v51);
     const simde__m128 v10a = simde_mm_sub_ps(h0, g0);
