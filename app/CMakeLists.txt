@@ -536,6 +536,10 @@ if(REXGLUE_PLATFORM_SWITCH)
     # their C and C++ only: about 8 % of busy CPU in the console profile of 3 Nov. They were out only because every build
     # folder shared the SDK's libraries (REXGLUE_OUTPUT_IN_BUILD above).
     option(BANJO_SWITCH_SDK_OPT "The SDK runtime and FFmpeg in the Switch LTO and PGO (renut-ultimate)" ON)
+    # blur-nx (2026-11-11): the two groups added to the SDK list below, each a switch of its own: the first LTO+PGO NRO
+    # with both (instrumented, Ryujinx pgo1) stopped at 43 s on a null mutant in NtReleaseMutant, so they are bisected.
+    option(BLUR_SWITCH_SDK_OPT_THIRDPARTY "blur-nx: the SDK's other libraries and the app's zstd/xxHash/smol-v in LTO/PGO" ON)
+    option(BLUR_SWITCH_SDK_OPT_OBJECTS "blur-nx: the SDK's OBJECT libraries (rexaudio, rexcore, ...) in LTO/PGO" ON)
     set(_banjo_sdk_opt_targets)
     if(BANJO_SWITCH_SDK_OPT AND REXGLUE_OUTPUT_IN_BUILD)
         set(_banjo_sdk_opt_targets rexruntime libavcodec libavutil)
@@ -545,9 +549,30 @@ if(REXGLUE_PLATFORM_SWITCH)
         # under 0.1 % of CPU together, so the gain is small; LTO drops their unused code from the NRO. uam stays out:
         # it is linked as one object with its symbols made local (plume_uam_localize.cmake), which GIMPLE objects do not
         # survive; it compiles at -O2 (its own CMake, SwitchWakerHD's copy).
-        list(APPEND _banjo_sdk_opt_targets rexgpu-xenos xxhash o1heap fmt spdlog mspack aes128 imgui
-                    glslang GenericCodeGen MachineIndependent OSDependent OGLCompiler SPIRV
-                    renut_zstd renut_xxhash renut_smolv)
+        if(BLUR_SWITCH_SDK_OPT_THIRDPARTY)
+            list(APPEND _banjo_sdk_opt_targets rexgpu-xenos xxhash o1heap fmt spdlog mspack aes128 imgui
+                        glslang GenericCodeGen MachineIndependent OSDependent OGLCompiler SPIRV
+                        renut_zstd renut_xxhash renut_smolv)
+        endif()
+        # blur-nx (2026-11-11): the SDK's OBJECT libraries too. Their objects go into rexruntime but compile with their own
+        # options, so the list above left them without LTO and PGO (the flags of the first instrumented build's
+        # build.ninja: sdk/src/audio, core, filesystem, input and ui at -O3 only). rexaudio holds XmaContext (about 8 % of
+        # a core in the console race). The linker's --wrap functions (rexglue_switch.cmake: threadCreate, svcSleepThread,
+        # the nv* calls) are defined in switch_perf.cpp, which is in rexglue_switch_startup (the start-up and crash hooks:
+        # it stays out), and in threading_switch.cpp (__wrap_svcSetThreadCoreMask), which stays a regular object (-fno-lto
+        # after the target's -flto) so the wraps resolve as before; it keeps PGO. So do the two files whose assembly names
+        # C symbols (exception_handler_switch.cpp: g_rex_exc_*; fiber_switch.cpp: rex_fiber_trampoline): LTO cannot see
+        # a reference inside an asm string, dropped those symbols and the link failed ("undefined reference to
+        # g_rex_exc_neon_tmp", the second instrumented build). None of the three is hot.
+        if(BLUR_SWITCH_SDK_OPT_OBJECTS)
+            list(APPEND _banjo_sdk_opt_targets rexaudio rexcore rexfilesystem rexinput rexui)
+        endif()
+        if(BANJO_SWITCH_LTO AND BLUR_SWITCH_SDK_OPT_OBJECTS AND TARGET rexcore)
+            foreach(_banjo_no_lto threading_switch.cpp exception_handler_switch.cpp fiber_switch.cpp)
+                set_property(SOURCE "${REXSDK_DIR}/src/core/${_banjo_no_lto}" TARGET_DIRECTORY rexcore
+                             APPEND PROPERTY COMPILE_OPTIONS -fno-lto)
+            endforeach()
+        endif()
         foreach(target ${_banjo_sdk_opt_targets})
             if(NOT TARGET ${target})
                 message(WARNING "banjo: BANJO_SWITCH_SDK_OPT names ${target}, which this build has no target of")

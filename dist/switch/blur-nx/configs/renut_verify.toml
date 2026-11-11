@@ -585,6 +585,7 @@ banjo_cpu_native_sub_8230B338 = false  # blur-nx: the copy writes r12 back, the 
 banjo_cpu_native_sub_8249CB30 = false  # blur-nx: the copy writes r12 back, the original does not (guard)
 blur_renut_wipe_overwritten = true  # blur-nx: Blur needs it (off by default in the base since port 77)
 banjo_renut_replay_inherits = true  # blur-nx: Blur's replays inherit (off by default in the base since port 77)
+blur_renut_edram_inherit = true  # blur-nx: Blur needs it (the base turns it off since port 86; no band on Blur's console)
 banjo_renut_fast_draw_verify = true
 banjo_renut_resource_objects_verify = true
 banjo_renut_fetch_cache_verify = true

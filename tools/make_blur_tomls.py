@@ -69,6 +69,10 @@ SHIPPED = {
     'banjo_cpu_native_sub_8249CB30': 'false  # blur-nx: the copy writes r12 back, the original does not (guard)',
     'blur_renut_wipe_overwritten': 'true  # blur-nx: Blur needs it (off by default in the base since port 77)',
     'banjo_renut_replay_inherits': 'true  # blur-nx: Blur\'s replays inherit (off by default in the base since port 77)',
+    # blur-nx (2026-11-11): base port 86 turns 220 (the EDRAM inheritance) off by default after Viva Pinata's band of
+    # garbage tiles on deko3d; on Blur's console the title is the same with it on and off (mean difference 0.46, JPEG
+    # noise; no band) and Blur needs it: on here, so a later base keeps it on for Blur.
+    'blur_renut_edram_inherit': 'true  # blur-nx: Blur needs it (the base turns it off since port 86; no band on Blur\'s console)',
     # blur-nx (2026-11-11, the user's word: "turn on xma frame cache"): a sound played again from its start takes
     # the samples decoded the first time instead of FFmpeg's decode (exact; the XMA Decoder was 46 % of a core in
     # the console race). renut_verify.toml decodes anyway and counts the differences.
@@ -214,6 +218,18 @@ def main():
                                     'banjo_renut_diag_unleashed_census')}
     write(os.path.join(tests, 'renut_emu_verify.toml'), 'Ryujinx: every verify mode, the censuses, the input script to a '
           'race, captures every 15 s', apply(apply(shipped, VERIFY), {**emu, **censuses}))
+    # blur-nx (2026-11-11, the user: "collect PGO data on emulator, make sure you drive forward during a race"): the PGO
+    # build's settings (renut_pgo.toml) with the menus' A presses to 280 s (emu12 was in the race at 167 s; the
+    # instrumented build is slower), then RT held from 300 s for 15 minutes and the sticks wandering from then (the left
+    # one steers: walls, other cars, the track's other parts), a capture every 30 s to see it drive.
+    pgo_script = ','.join(['40:START'] + [f'{t}:A' for t in range(52, 281, 6)] + ['300:RT@900'])
+    emu_pgo = {'input_script': f'"{pgo_script}"', 'input_script_sticks': '300', 'nfsmw_captura_cada_s': '30',
+               'nfsmw_captura_max': '45'}
+    write(os.path.join(tests, 'renut_emu_pgo.toml'), 'Ryujinx: the PGO build\'s settings, the menus to a race, then RT '
+          'held and the sticks wandering for 15 minutes, captures every 30 s', apply(apply(shipped, PGO), emu_pgo))
+    # blur-nx (2026-11-11): the same drive with the shipped settings (logs as shipped): an optimised build's check run.
+    write(os.path.join(tests, 'renut_emu_drive.toml'), 'Ryujinx: the shipped settings, the menus to a race, then RT held '
+          'and the sticks wandering, captures every 30 s', apply(shipped, emu_pgo))
     print('emulator test tomls written to', tests)
 
 
