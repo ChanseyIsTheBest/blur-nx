@@ -135,6 +135,13 @@ def main():
     # A57 cannot forward the wider store; sdk/include/rex/ppc/vec_lane.h, checked on the device by the forms
     # self-check). Before the localized copies, so they take the same form.
     run(tool('vec_lane_index.py'), '--gen', gen)
+    # blur-nx (2026-11-11, CPU batch 1; the user: "do all the exact ones", "optimise the hell out of CPU ... in large
+    # batches"): docs/vector-store-ideas.md VS-27, VS-08, VS-25 and docs/vector-ideas-2.md VX-20, VX-21, each exact and
+    # checked by the app's forms self-check on the device. Before the localized copies, so they take the same forms.
+    run(tool('vec_cvt_fixed.py'), '--gen', gen)      # vcfsx / vcfux with a scale: one SCVTF / UCVTF #n
+    run(tool('vec_prefetch_line.py'), '--gen', gen)  # a guest dcbt prefetches the whole 128-byte line
+    run(tool('vec_lvlx_splat.py'), '--gen', gen)     # lvlx + vspltw 0: one 4-byte load (where the lvlx is dead after)
+    run(tool('vec_shift_whole.py'), '--gen', gen)    # vsrw / vsraw as one vector shift; vslw without the dead clamp
     # banjo-nx (2026-10-16, CPU codegen agent): the read-only constants ro_constants.py could not see because a label
     # stood between the base register's constant and the load (loop heads): followed over the control-flow graph.
     run(tool('ro_constants_cfg.py'), '--gen', gen, '--image', IMAGE, *(['--xex', xex] if os.path.isfile(xex) else []))
@@ -196,6 +203,9 @@ def main():
     # banjo-nx (2026-10-19, CPU proposal 1): the store cards, after everything else (the inline copies included): every
     # store outside the stack marks its page for Renut's cached vertex and index copies (REX_STORE_CARDS_OFF).
     run(tool('store_cards.py'), '--gen', gen)
+    # blur-nx (2026-11-11, CPU batch 1, docs/vector-store-ideas.md VS-05): a 128-byte dcbzl as two DC ZVA (no read of
+    # the line it zeroes). After store_cards.py, which finds the dcbz by its memset to put the card in front.
+    run(tool('vec_dcbz_zva.py'), '--gen', gen)
     if scratch:
         print(f'post_codegen: optimised codegen steps done on {gen}')
         return

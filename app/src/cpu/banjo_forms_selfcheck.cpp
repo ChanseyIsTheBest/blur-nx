@@ -31,6 +31,7 @@
 #include <rex/ppc/diet_ops.h>
 #include <rex/ppc/intrinsics.h>
 #include <rex/ppc/vec_lane.h>  // blur-nx (2026-11-11): the lanes by a run-time index (VecLanes below)
+#include <rex/ppc/vec_batch1.h>  // blur-nx (2026-11-11): CPU batch 1's forms (VecBatch1 below)
 
 namespace {
 
@@ -285,6 +286,93 @@ void VecLanes(Tally& t) {
   }
 }
 
+// blur-nx (2026-11-11, CPU batch 1): the forms of tools/vec_cvt_fixed.py, vec_shift_whole.py, vec_dcbz_zva.py and
+// vec_lvlx_splat.py, each against the form the generator writes (rex/ppc/vec_batch1.h's *Ref, or the expression
+// itself), on the device. The guard cannot see them: the copy and the original statements both use the new forms.
+uint32_t Lcg(uint32_t& s) { return s = s * 1664525u + 1013904223u; }
+
+template <int N>
+void CvtFixedOne(Tally& t, const uint32_t (&in)[4]) {
+  Vec x;
+  std::memcpy(x.u32, in, 16);
+  x.v = Opaque(x.v);
+  Vec got, want;
+  got.f = rex::ppc::VcfsxN<N>(x.v);
+  want.f = rex::ppc::VcfsxRef(x.v, N);
+  ExpectVec(t, "VcfsxN", N, got, want);
+  got.f = rex::ppc::VcfuxN<N>(x.v);
+  want.f = rex::ppc::VcfuxRef(x.v, N);
+  ExpectVec(t, "VcfuxN", N, got, want);
+}
+
+void VecBatch1(Tally& t) {
+  // VS-27: every scale the pass writes in Blur (2^-1, 2, 7, 8, 14, 15, 31), on edge values and pseudo-random words.
+  uint32_t seed = 0x2F6B1D35u;
+  static const uint32_t kEdge[] = {0u, 1u, 0xFFFFFFFFu, 0x80000000u, 0x7FFFFFFFu, 0x01000001u, 0xFEFFFFFFu, 0x00FFFFFFu,
+                                   0x55555555u, 0xAAAAAAABu, 0x00000003u, 0x80000001u};
+  for (int r = 0; r < 12; ++r) {
+    uint32_t in[4];
+    for (int k = 0; k < 4; ++k) in[k] = r < 3 ? kEdge[(r * 4 + k) % 12] : Lcg(seed) >> (Lcg(seed) & 31);
+    CvtFixedOne<1>(t, in);
+    CvtFixedOne<2>(t, in);
+    CvtFixedOne<7>(t, in);
+    CvtFixedOne<8>(t, in);
+    CvtFixedOne<14>(t, in);
+    CvtFixedOne<15>(t, in);
+    CvtFixedOne<31>(t, in);
+  }
+  // VX-20 / VX-21: every count 0..31 (with junk in the count's high bits, which the forms ignore) on four words.
+  for (uint32_t c = 0; c < 32; ++c) {
+    Vec a, b, got, want;
+    a.u32[0] = 0x80000000u;
+    a.u32[1] = 0xDEADBEEFu;
+    a.u32[2] = 0x7FFFFFFFu;
+    a.u32[3] = Lcg(seed);
+    for (int k = 0; k < 4; ++k) b.u32[k] = ((Lcg(seed) & 0xFFFFFF00u) | ((c + uint32_t(k) * 7u) & 31u)) ^ (Lcg(seed) & 0xE0u);
+    a.v = Opaque(a.v);
+    b.v = Opaque(b.v);
+    got.v = rex::ppc::VecSrw(a.v, b.v);
+    want.v = rex::ppc::VecSrwRef(a.v, b.v);
+    ExpectVec(t, "VecSrw", int(c), got, want);
+    got.v = rex::ppc::VecSraw(a.v, b.v);
+    want.v = rex::ppc::VecSrawRef(a.v, b.v);
+    ExpectVec(t, "VecSraw", int(c), got, want);
+    const simde__m128i masked = simde_mm_and_si128(b.v, simde_mm_set1_epi32(0x1F));
+    got.v = rex::ppc::VecSllv31(a.v, masked);
+    want.v = simde_mm_sllv_epi32(a.v, masked);
+    ExpectVec(t, "VecSllv31", int(c), got, want);
+  }
+  // VS-05: 128 bytes zeroed at a 128-byte aligned address, the bytes around it untouched.
+  {
+    alignas(128) static uint8_t buf[384];
+    std::memset(buf, 0xA5, sizeof(buf));
+    rex::ppc::Dcbz128(Opaque(buf + 128));
+    uint64_t zeros = 0, kept = 0;
+    for (int i = 0; i < 384; ++i) {
+      if (i >= 128 && i < 256) zeros += buf[i] == 0;
+      else kept += buf[i] == 0xA5;
+    }
+    t.Expect("Dcbz128", "zeroed bytes", zeros, 128);
+    t.Expect("Dcbz128", "bytes around", kept, 256);
+  }
+  // VS-25: lvlx + vspltw 0 (the generator's form: the block load, the VectorMaskL row, word 0 = lane 3 splatted)
+  // against the one 4-byte load the pass writes, at every offset it is used for (0..12).
+  {
+    alignas(16) uint8_t mem[32];
+    for (int i = 0; i < 32; ++i) mem[i] = uint8_t(0x11 * (i + 1) ^ (i << 5));
+    for (uint32_t a = 0; a <= 12; ++a) {
+      const simde__m128i block = Opaque(simde_mm_load_si128(reinterpret_cast<const simde__m128i*>(mem)));
+      const simde__m128i row = simde_mm_load_si128(reinterpret_cast<const simde__m128i*>(&rex::ppc::VectorMaskL[a * 16]));
+      Vec want, got;
+      want.v = simde_mm_shuffle_epi32(simde_mm_shuffle_epi8(block, row), 0xFF);
+      uint32_t word;
+      std::memcpy(&word, mem + a, 4);
+      got.v = simde_mm_set1_epi32(int(__builtin_bswap32(Opaque(word))));
+      ExpectVec(t, "LvlxSplat", int(a), got, want);
+    }
+  }
+}
+
 }  // namespace
 
 namespace banjo {
@@ -296,6 +384,7 @@ void FormsSelfCheck() {
   FloatCopies(t);
   VectorHelpers(t);
   VecLanes(t);
+  VecBatch1(t);
   if (t.wrong) {
     for (int i = 0; i < t.wrong; ++i) ::me::native::VerifyDifference();
     REXLOG_ERROR("[enhancements] DIFFERENCE: instruction forms self-check: {} of {} results are NOT as expected (see the lines "
