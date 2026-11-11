@@ -48,6 +48,7 @@
 #include "cpu/banjo_hot_common.h"
 #include "cpu/hot/blur_block_copy.h"  // blur-nx (2026-11-11): the natives' block copies (VS-07)
 #include "cpu/hot/blur_gather.h"  // blur-nx (2026-11-11): the resampler natives' table pairs
+#include "cpu/hot/blur_swap.h"  // blur-nx (2026-11-12): word swaps for lane-wise natives (CPU batch 3)
 #include <rex/ppc/diet_ops.h>  // katamari-nx: rex::ppc::SingleToDoublePure
 
 // katamari-nx: the in-run A/B's target in its off half (renut_engine/gpu/banjo_renut_tuning.cpp).

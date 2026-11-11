@@ -133,31 +133,35 @@ template <class S>
   const uint8_t* ap = ::banjo::hot::Raw(base, pa);
   const uint8_t* bp = ::banjo::hot::Raw(base, pb);
   uint8_t* dp = ::banjo::hot::Raw(base, d);
+  // blur-nx (2026-11-12, CPU batch 3, blur_swap.h): the kernel is lane by lane (s is a splat), so the vectors stay in
+  // the guest's lane order with each word's bytes swapped (rev32: the console's microbench, 470 against 714 ns a KB
+  // for the 16-byte reversal's `tbl`); the same bytes are stored. The registers the generated function leaves get the
+  // generated layout (LaneRev).
+  using blur_swap::LaneRev;
   simde__m128 av[16], bv[16], rv[16];
   for (uint32_t blk = 0; blk < 4; ++blk) {
     const uint32_t o = blk * 256u;
     for (uint32_t j = 0; j < 16; ++j) {
-      av[j] = simde_mm_castsi128_ps(REX_BSWAP128(simde_mm_load_si128((const simde__m128i*)(ap + o + 16 * j))));
-      bv[j] = simde_mm_castsi128_ps(REX_BSWAP128(simde_mm_load_si128((const simde__m128i*)(bp + o + 16 * j))));
+      av[j] = blur_swap::LoadWords(ap + o + 16 * j);
+      bv[j] = blur_swap::LoadWords(bp + o + 16 * j);
     }
     for (uint32_t j = 0; j < 16; ++j) rv[j] = REX_VMADDFP(sv, bv[j], av[j]);
-    for (uint32_t j = 0; j < 16; ++j)
-      simde_mm_store_si128((simde__m128i*)(dp + o + 16 * j), REX_BSWAP128(simde_mm_castps_si128(rv[j])));
+    for (uint32_t j = 0; j < 16; ++j) blur_swap::StoreWords(dp + o + 16 * j, rv[j]);
   }
   simde_mm_store_ps(ctx.v0.f32, sv);
-  simde_mm_store_ps(ctx.v1.f32, av[12]);
-  simde_mm_store_ps(ctx.v2.f32, av[11]);
-  simde_mm_store_ps(ctx.v3.f32, av[10]);
-  simde_mm_store_ps(ctx.v4.f32, av[9]);
-  simde_mm_store_ps(ctx.v5.f32, rv[8]);
-  simde_mm_store_ps(ctx.v6.f32, rv[9]);
-  simde_mm_store_ps(ctx.v7.f32, rv[10]);
-  simde_mm_store_ps(ctx.v8.f32, bv[11]);
-  simde_mm_store_ps(ctx.v9.f32, rv[11]);
-  simde_mm_store_ps(ctx.v10.f32, rv[12]);
-  simde_mm_store_ps(ctx.v11.f32, rv[13]);
-  simde_mm_store_ps(ctx.v12.f32, rv[14]);
-  simde_mm_store_ps(ctx.v13.f32, rv[15]);
+  simde_mm_store_ps(ctx.v1.f32, LaneRev(av[12]));
+  simde_mm_store_ps(ctx.v2.f32, LaneRev(av[11]));
+  simde_mm_store_ps(ctx.v3.f32, LaneRev(av[10]));
+  simde_mm_store_ps(ctx.v4.f32, LaneRev(av[9]));
+  simde_mm_store_ps(ctx.v5.f32, LaneRev(rv[8]));
+  simde_mm_store_ps(ctx.v6.f32, LaneRev(rv[9]));
+  simde_mm_store_ps(ctx.v7.f32, LaneRev(rv[10]));
+  simde_mm_store_ps(ctx.v8.f32, LaneRev(bv[11]));
+  simde_mm_store_ps(ctx.v9.f32, LaneRev(rv[11]));
+  simde_mm_store_ps(ctx.v10.f32, LaneRev(rv[12]));
+  simde_mm_store_ps(ctx.v11.f32, LaneRev(rv[13]));
+  simde_mm_store_ps(ctx.v12.f32, LaneRev(rv[14]));
+  simde_mm_store_ps(ctx.v13.f32, LaneRev(rv[15]));
   ctx.r3.s64 = 112;
   ctx.r4.s64 = 144;
   ctx.r5.s64 = 160;
@@ -211,18 +215,17 @@ template <class S>
     if (zero)
       for (uint32_t k = 0; k < 8; ++k) std::memset(::banjo::hot::Raw(base, (dst + 128u * k) & ~31u), 0, 32);
     ctx.fpscr.enableFlushMode();
+    // blur-nx (2026-11-12, CPU batch 3, blur_swap.h): a lane-by-lane add, so word swaps in the guest's lane order (no
+    // vector register is left: nothing to put back in the generated layout).
     for (uint32_t blk = 0; blk < 4; ++blk) {
       const uint32_t o = blk * 256u;
       simde__m128 av[16], bv[16];
       for (uint32_t j = 0; j < 16; ++j) {
-        av[j] = simde_mm_castsi128_ps(
-            REX_BSWAP128(simde_mm_load_si128((const simde__m128i*)::banjo::hot::Raw(base, a16 + o + 16u * j))));
-        bv[j] = simde_mm_castsi128_ps(
-            REX_BSWAP128(simde_mm_load_si128((const simde__m128i*)::banjo::hot::Raw(base, b16 + o + 16u * j))));
+        av[j] = blur_swap::LoadWords(::banjo::hot::Raw(base, a16 + o + 16u * j));
+        bv[j] = blur_swap::LoadWords(::banjo::hot::Raw(base, b16 + o + 16u * j));
       }
       for (uint32_t j = 0; j < 16; ++j)
-        simde_mm_store_si128((simde__m128i*)::banjo::hot::Raw(base, d16 + o + 16u * j),
-                             REX_BSWAP128(simde_mm_castps_si128(simde_mm_add_ps(av[j], bv[j]))));
+        blur_swap::StoreWords(::banjo::hot::Raw(base, d16 + o + 16u * j), simde_mm_add_ps(av[j], bv[j]));
     }
     n = word(job + 20u);  // the original reads the count again after every entry
   }

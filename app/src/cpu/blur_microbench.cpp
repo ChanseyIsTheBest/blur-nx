@@ -64,6 +64,22 @@ alignas(64) uint8_t g_a[1024], g_b[1024], g_d[1024];
   }
 }
 
+// The same 16-byte reversal as two simple permutes (rev64, then ext #8), in asm so GCC cannot fold them into one tbl:
+// is that cheaper than the tbl the generated code's every guest vector load and store gets (REX_BSWAP128)?
+[[gnu::always_inline]] inline uint8x16_t Reverse16Pair(uint8x16_t v) {
+  uint8x16_t r;
+  __asm__("rev64 %0.16b, %1.16b\n\text %0.16b, %0.16b, %0.16b, #8" : "=&w"(r) : "w"(v));
+  return r;
+}
+
+[[gnu::noinline]] void MixRev64Ext(const uint8_t* a, const uint8_t* b, uint8_t* d, float32x4_t s) {
+  for (int j = 0; j < 64; ++j) {
+    const uint8x16_t x = Reverse16Pair(vld1q_u8(a + 16 * j)), y = Reverse16Pair(vld1q_u8(b + 16 * j));
+    const float32x4_t r = vfmaq_f32(vreinterpretq_f32_u8(x), s, vreinterpretq_f32_u8(y));
+    vst1q_u8(d + 16 * j, Reverse16Pair(vreinterpretq_u8_f32(r)));
+  }
+}
+
 [[gnu::noinline]] float FpcrToggles(int n, float x) {
   uint64_t fpcr;
   __asm__ volatile("mrs %0, fpcr" : "=r"(fpcr));
@@ -116,8 +132,10 @@ void BlurMicrobench() {
   const float32x4_t s = vdupq_n_f32(0.5f);
   const double rev16 = BestNs(2000, [&] { MixReverse16(g_a, g_b, g_d, s); });
   const double rev32 = BestNs(2000, [&] { MixRev32(g_a, g_b, g_d, s); });
-  REXLOG_INFO("[microbench] mixer 1 KB (64 vectors, 3 swaps each): 16-byte reversal {:.1f} ns, rev32 {:.1f} ns", rev16,
-              rev32);
+  const double pair = BestNs(2000, [&] { MixRev64Ext(g_a, g_b, g_d, s); });
+  REXLOG_INFO("[microbench] mixer 1 KB (64 vectors, 3 swaps each): 16-byte reversal as GCC writes it (tbl) {:.1f} ns, "
+              "as rev64 + ext {:.1f} ns, rev32 {:.1f} ns",
+              rev16, pair, rev32);
   volatile float sink = 0;
   const double tog = BestNs(1, [&] { sink = FpcrToggles(20000, sink); }) / 20000.0;
   const double plain = BestNs(1, [&] { sink = NoToggles(20000, sink); }) / 20000.0;

@@ -35,6 +35,7 @@
 #include "hot/blur_block_copy.h"  // blur-nx (2026-11-11): CPU batch 2's natives' forms (VecBatch2 below)
 #include "hot/blur_gather.h"
 #include <rex/ppc/vec_batch2.h>  // blur-nx (2026-11-11): the dot-product merges (VecBatch2 below)
+#include "hot/blur_swap.h"  // blur-nx (2026-11-12): word swaps for lane-wise natives (VecBatch3 below)
 
 namespace {
 
@@ -447,6 +448,23 @@ void VecBatch2(Tally& t) {
   }
 }
 
+// blur-nx (2026-11-12, CPU batch 3): hot/blur_swap.h. Rev32 swaps each word's bytes; LaneRev(Rev32(x)) is the full
+// 16-byte reversal the generated code's REX_BSWAP128 makes (the mixer natives rest on that), on pseudo-random vectors.
+void VecBatch3(Tally& t) {
+  uint32_t seed = 0xBB67AE85u;
+  for (int r = 0; r < 32; ++r) {
+    Vec in, want_words, want_full, got;
+    for (int k = 0; k < 4; ++k) in.u32[k] = Lcg(seed) ^ (r << 24);
+    in.v = Opaque(in.v);
+    for (int k = 0; k < 4; ++k) want_words.u32[k] = __builtin_bswap32(in.u32[k]);
+    for (int i = 0; i < 16; ++i) want_full.u8[i] = in.u8[15 - i];
+    got.v = blur_swap::Rev32(in.v);
+    ExpectVec(t, "Rev32", r, got, want_words);
+    got.f = blur_swap::LaneRev(simde_mm_castsi128_ps(blur_swap::Rev32(in.v)));
+    ExpectVec(t, "LaneRev(Rev32)", r, got, want_full);
+  }
+}
+
 }  // namespace
 
 namespace banjo {
@@ -460,6 +478,7 @@ void FormsSelfCheck() {
   VecLanes(t);
   VecBatch1(t);
   VecBatch2(t);
+  VecBatch3(t);
   if (t.wrong) {
     for (int i = 0; i < t.wrong; ++i) ::me::native::VerifyDifference();
     REXLOG_ERROR("[enhancements] DIFFERENCE: instruction forms self-check: {} of {} results are NOT as expected (see the lines "
