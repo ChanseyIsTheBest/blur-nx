@@ -598,6 +598,22 @@ if(REXGLUE_PLATFORM_SWITCH)
     if(BANJO_SWITCH_SDK_OPT AND REXGLUE_OUTPUT_IN_BUILD)
         set(_banjo_sdk_opt_targets rexruntime libavcodec libavutil)
     endif()
+    # renut-ultimate (2026-11-12, port 89; sasrt-nx's batch B, B1, Blur's finding): the SDK's OBJECT libraries are compiled
+    # with their own options, so they had neither LTO nor PGO. sasrt-nx's console race (in place, handheld clocks):
+    # process CPU -0.7 %, render thread -1.9 %, its audio worker -4.9 %. Four of their files stay out of LTO
+    # (_banjo_sdk_no_lto, below): threading_switch.cpp and switch_perf.cpp define --wrap's __wrap_ functions, which the
+    # link must see as ordinary definitions; exception_handler_switch.cpp and fiber_switch.cpp have top-level asm that
+    # names C symbols (g_rex_exc_*, rex_fiber_trampoline), invisible to LTO, which would drop them.
+    option(BANJO_SWITCH_SDK_OBJECT_OPT "The SDK's OBJECT libraries in the Switch LTO and PGO too (port 89)" ON)
+    set(_banjo_sdk_no_lto)
+    if(BANJO_SWITCH_SDK_OPT AND REXGLUE_OUTPUT_IN_BUILD AND BANJO_SWITCH_SDK_OBJECT_OPT)
+        list(APPEND _banjo_sdk_opt_targets rexaudio rexcore rexfilesystem rexinput rexui)
+        set(_banjo_sdk_no_lto
+            "${CMAKE_CURRENT_SOURCE_DIR}/../sdk/src/core/threading_switch.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../sdk/src/ui/switch_perf.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../sdk/src/core/exception_handler_switch.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../sdk/src/core/fiber_switch.cpp")
+    endif()
     if(BANJO_SWITCH_LTO)
         set(_banjo_lto_compile -flto -fno-fat-lto-objects)
         set(_banjo_lto_link -flto=${BANJO_SWITCH_LTO_JOBS} -flto-partition=balanced -ffp-contract=off
@@ -619,6 +635,10 @@ if(REXGLUE_PLATFORM_SWITCH)
             endif()
         endforeach()
         target_link_options(renut PRIVATE ${_banjo_lto_link})
+        if(_banjo_sdk_no_lto)  # port 89: after the targets' -flto, so it wins
+            set_property(SOURCE ${_banjo_sdk_no_lto} TARGET_DIRECTORY rexcore rexui APPEND PROPERTY COMPILE_OPTIONS
+                         -fno-lto)
+        endif()
         message(STATUS "banjo: Switch LTO (${BANJO_SWITCH_LTO_JOBS} jobs)")
     endif()
     get_filename_component(_banjo_pgo_dir "${_banjo_pgo_profile}" ABSOLUTE)

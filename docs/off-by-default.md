@@ -56,6 +56,7 @@ different may measure them again.
 | `banjo_renut_replay_lookahead` | The next replayed op's lookups prefetched while a draw is drawn. | **Slower:** render thread +2.15 ms a frame (2026-10-27) |
 | `banjo_renut_replay_stream_shaders` | The shader memo's sets prefetched two ops ahead instead of one. | **Slower:** +0.7 ms a frame, 4 of 5 periods worse (run c4, 2026-10-27) |
 | `banjo_renut_texture_slot_skip` | A draw that changes some texture slots keeps the others without a full FillTextures. | **Slower:** render thread +0.64 ms a frame (night_final, 2026-10-28) |
+| `sasrt_gpu_tiled_cache` (A/B 102) | Maxwell's tiled caching (binning), which NVN uses and deko3d leaves off. | **Slower:** +3.96 ms of GPU a frame in vivapinata-nx's garden (19.0 -> 17.7 fps, in-run A/B, run c7, 2026-11-12; its per-item GPU times read faster, but binning moves the work past their timestamps: the frame rate is the measure); sasrt-nx found it no better in its race. The picture was not judged |
 
 ### 3b. No gain on the console
 
@@ -65,6 +66,7 @@ different may measure them again.
 | `banjo_renut_host_packets` | A replayed draw's derived state kept by its device state and reused. | Neutral: -0.54 ms and +0.45 ms in two runs (night_gpu5) |
 | `banjo_renut_merge_draws` | Consecutive draws that change nothing merged into one host draw. | No effect: Nuts & Bolts has no such draws (the census) |
 | `banjo_renut_inline_line_compare` | An older compare of the pushed shared constants. | No effect since 2026-10-23 (the mask compare replaced it); before that it was **slower**: PushSharedConstants 2.7 -> 4.9 % of the render thread (36q) |
+| `sasrt_gpu_lazy_depth_resolve` (A/B 104) | A written compressed depth target decompressed right before something reads it, not each time it leaves the bind point. | No difference: GPU 56.24-56.29 ms on against 56.23-56.29 off (vivapinata-nx's garden, run c7, 2026-11-12) |
 
 ## 4. Trials: off until tried on the console, or because the emulator stalls with them
 
@@ -74,8 +76,8 @@ different may measure them again.
 | `banjo_renut_core_layout` | Pins the drawing thread to core 0 and the other game threads to cores 1-2 at the first Swap. | Hung the first Swap in Ryujinx in 4 of 12 runs (re-masking running threads). | Faster in sa2-nx: render thread 12.5 -> 11.5 ms, game thread 17.6 -> 17.3 ms |
 | `banjo_renut_deferred_chain` | Begin*Vertices draws join the snapshot delta chain instead of a whole device copy. | The chain is one for every device; a game drawing on two devices from two threads gets a delta on the wrong device (emulator hangs in 4 of 8 runs). | Less copying; not measured since |
 | `banjo_deko3d_eager_kicks`, `banjo_deko3d_latency_trim` | Input-latency A/Bs: the frame sent to the GPU in more, earlier parts; the render thread waits for the GPU to trim its queue. | Latency trials, per game. | Lower input latency is the aim; frame time may rise |
-| `banjo_deko3d_skin_once`, `banjo_deko3d_light_branch`, `banjo_deko3d_gpr32` | GPU A/Bs of Banjo's fur and lit shaders: skinning once a frame, per-light branches, a 32-register cap. | The same pixels; whether faster is the console's to say (their configs/*_on.toml). | Not measured on the console |
-| `banjo_gpu_zcull_greater` | Asks the driver for ZCULL in the GREATER direction (reversed depth). | A console trial; the picture should be the same. | Not measured |
+| `banjo_deko3d_skin_once`, `banjo_deko3d_light_branch`, `banjo_deko3d_gpr32` | GPU A/Bs of Banjo's fur and lit shaders: skinning once a frame, per-light branches, a 32-register cap. | The same pixels; whether faster is the console's to say (their configs/*_on.toml). Light branch and gpr32 act only on the pixel shaders Banjo's lists name (tools/lightbranch_shaders.txt, tools/gpr32_shaders.txt): in another game they change no shader, so they are no A/B targets there (vivapinata-nx, 2026-11-12: its in-run A/B halves of them ran at 2 fps, every pipeline looked up again as the variant key changed). | Not measured on the console |
+| `banjo_gpu_zcull_greater` | Asks the driver for ZCULL in the GREATER direction (reversed depth). | A console trial; the picture should be the same. It acts only on the Mesa/NVK path (setenv NVK_ZCULL for banjo-nx's patched NVK); on deko3d it does nothing, and nothing is needed there: dkCmdBufClearDepthStencil writes SET_ZCULL_DIR_FORMAT itself (method 0x36F), GREATER when the depth clear value is under 0.5 and LESS otherwise, so a reversed-depth game that clears depth to 0 already culls in its direction (vivapinata-nx, from libdeko3d.a's disassembly, 2026-11-12). | Not measured |
 
 ## Keeping this page
 

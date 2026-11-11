@@ -143,6 +143,10 @@ toml, so a port that finds one wrong for its game doesn't have to change the cod
   Pinata's title (blur-nx turns it on).
 - Port 87 replays a command buffer a game runs once per predicated tile once for every tile
   (vivapinata-nx's tiles once: -3.74 ms of GPU a frame in its garden on the console).
+- Port 88 skips or copies a multisampled resolve of a target unchanged since its last resolve
+  (vivapinata-nx: two of its four 2D-engine blits a frame gone, -0.14 ms of GPU).
+- Port 89 puts the SDK's OBJECT libraries (audio, core, file system, input, UI) in the Switch LTO and
+  PGO too, four files kept out (sasrt-nx: process CPU -0.7 %, render thread -1.9 %).
 - Port 44 and the translator changes take effect when a game's shader package is made again. Before measuring on the
   console, build its DKSH cache on the PC (`tools/deko3d_variant_cache.py`): a first run that compiles its shaders while
   it draws is slower on the GPU than the build is.
