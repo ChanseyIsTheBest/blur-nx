@@ -44,8 +44,12 @@ SHIPPED = {
     'target_refreshRate': '-1',
     'masseffect_renderer_native': 'false',
     'gpu_plugin': '""',
-    # Three cores (no forwarder NPDM written), as rr6-nx and katamari-nx ship.
-    'banjo_forwarder_program_id': '""',
+    # blur-nx (2026-11-11, the user's request): four cores through a Sphaira forwarder. The id Sphaira's "Install
+    # Forwarder" gives the NRO at sdmc:/switch/blur-nx/blur-nx.nro (SHA-256 of the path written twice, banjo-nx's rule);
+    # a forwarder of the NRO in another folder is recognised too (SphairaForwarderOfThisNro). Launched as that forwarder,
+    # the NRO writes its NPDM (CPU 0-3) once; the next launch of the forwarder has four cores. Launched from the
+    # homebrew menu, nothing is written and it runs on three.
+    'banjo_forwarder_program_id': '"05A5D8E1BAA3E000"  # blur-nx: the Sphaira forwarder of sdmc:/switch/blur-nx/blur-nx.nro',
     # blur-nx (2026-11-11, the user's request after the console race profile: the XMA Decoder took 42 % of a core with
     # all three full): in four-core mode (a forwarder's id above) the XMA Decoder goes to core 3 with audio, the mixer
     # and the shader compiles (banjo_system_core 1). banjo-nx had it off: in its city the system plus those took core
@@ -65,7 +69,10 @@ SHIPPED = {
     'banjo_cpu_native_sub_8249CB30': 'false  # blur-nx: the copy writes r12 back, the original does not (guard)',
     'blur_renut_wipe_overwritten': 'true  # blur-nx: Blur needs it (off by default in the base since port 77)',
     'banjo_renut_replay_inherits': 'true  # blur-nx: Blur\'s replays inherit (off by default in the base since port 77)',
-    'banjo_xma_frame_cache': 'false',
+    # blur-nx (2026-11-11, the user's word: "turn on xma frame cache"): a sound played again from its start takes
+    # the samples decoded the first time instead of FFmpeg's decode (exact; the XMA Decoder was 46 % of a core in
+    # the console race). renut_verify.toml decodes anyway and counts the differences.
+    'banjo_xma_frame_cache': 'true  # blur-nx: on (the user\'s word); exact',
     'banjo_shader_misses': '"sdmc:/switch/blur-nx/shader_misses"',
     'log_level': '"info"',
     'log_file_writer': 'false',
@@ -105,6 +112,7 @@ VERIFY = {k: 'true' for k in (
     'banjo_renut_whole_buffers_verify', 'banjo_renut_persistent_shared_verify', 'banjo_renut_chain_reuse_verify',
     'banjo_renut_snapshot_deltas_verify', 'banjo_renut_store_cards_verify', 'banjo_renut_record_extents_verify')}
 VERIFY.update({'banjo_hot_guard_calls': '4000', 'banjo_hot_guard_period': '64'})
+VERIFY.update({'banjo_xma_frame_cache_verify': 'true'})
 PGO = {'log_level': '"off"', 'switch_profile_stacks': 'false', 'banjo_cpu_profiler': 'false',
        'banjo_show_profiler': 'false', 'banjo_show_fps': 'false', 'banjo_stall_watch_seconds': '0',
        'renut_gpu_profile': '0.0', 'banjo_renut_diag_resolve_trace': 'false', 'banjo_renut_diag_gpu_shaders': 'false',

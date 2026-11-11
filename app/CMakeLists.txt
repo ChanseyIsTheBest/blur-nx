@@ -539,6 +539,20 @@ if(REXGLUE_PLATFORM_SWITCH)
     set(_banjo_sdk_opt_targets)
     if(BANJO_SWITCH_SDK_OPT AND REXGLUE_OUTPUT_IN_BUILD)
         set(_banjo_sdk_opt_targets rexruntime libavcodec libavutil)
+        # blur-nx (2026-11-11, the user's word: "make sure the sdk gets compiled with LTO+PGO and O3"): every other C/C++
+        # library of the SDK that is linked into the NRO too (the list of the ELF's link line), and the app's own copies
+        # of zstd, xxHash and smol-v. Each compiles at -O3 already (build.ninja). In the race profile of 11 Nov they are
+        # under 0.1 % of CPU together, so the gain is small; LTO drops their unused code from the NRO. uam stays out:
+        # it is linked as one object with its symbols made local (plume_uam_localize.cmake), which GIMPLE objects do not
+        # survive; it compiles at -O2 (its own CMake, SwitchWakerHD's copy).
+        list(APPEND _banjo_sdk_opt_targets rexgpu-xenos xxhash o1heap fmt spdlog mspack aes128 imgui
+                    glslang GenericCodeGen MachineIndependent OSDependent OGLCompiler SPIRV
+                    renut_zstd renut_xxhash renut_smolv)
+        foreach(target ${_banjo_sdk_opt_targets})
+            if(NOT TARGET ${target})
+                message(WARNING "banjo: BANJO_SWITCH_SDK_OPT names ${target}, which this build has no target of")
+            endif()
+        endforeach()
     endif()
     if(BANJO_SWITCH_LTO)
         set(_banjo_lto_compile -flto -fno-fat-lto-objects)
