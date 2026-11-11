@@ -41,8 +41,8 @@ base is ready. Do not rebase before that. Then:
   touch the verify keys (RR6: `vmx_float_macros.py` runs before `localize_native.py`, so copies and originals use the
   same forms; AArch64 only, so the PC's verify is exact on both sides; port 74's PC verify: 243 M calls, 0
   differences). What it changes is the game's float results against the console's exact forms: 1-3 ulp on the
-  estimates, fused multiply-add in 2.4 % of lanes. Blur's rule is pixel-identical by default: put to the user whether
-  Blur keeps it on like the base, or builds with `-DSASRT_VMX_FAST_ESTIMATES=OFF -DSASRT_VMX_FUSED_MADD=OFF`;
+  estimates, fused multiply-add in 2.4 % of lanes. **The user (2026-11-11): "Keep it on like the base"**: Blur builds
+  with the base's defaults (no `-DSASRT_VMX_*=OFF`);
 - port 75 (renderer formats: 2_10_10_10 as 10:10:10:2, EDRAM formats 10/12 not RGBA8, 32-bit float textures point
   sampled) changes what Blur draws where it uses them: the PC comparison against the reference covers it;
 - PGO: not used for Blur (only when the user says), so "retrain PGO" does not apply.
