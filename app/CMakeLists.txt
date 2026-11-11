@@ -133,6 +133,9 @@ set(RENUT_SOURCES
     # katamari-nx: the native copies of hot game functions (banjo_hot_guest.cpp and its shards), from this game's PC
     # profile (docs/katamari-notes.md, "Hot functions"): src/cpu/hot/localized.txt and hand.txt.
     src/cpu/banjo_hot_guest.cpp
+    # blur-nx (2026-11-11): the keys of Blur's hand-written natives (in cpu/hot: tools/localize_native.py reads the
+    # addresses named anywhere else as hooked functions).
+    src/cpu/hot/blur_hand_keys.cpp
     src/cpu/banjo_hot_shard_0.cpp
     src/cpu/banjo_hot_shard_1.cpp
     src/cpu/banjo_hot_shard_2.cpp

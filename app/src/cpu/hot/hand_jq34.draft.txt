@@ -1,0 +1,14 @@
+# blur-nx (2026-11-11): the hand.txt lines of cpu/hot/blur_hand_natives_jq34.h, to go into hand.txt after the build of
+# the machine copies is verified. Evidence: the console race profile of the rebased build (C:\blur-nx-test\console_runs\
+# 2026-11-11_1518_rebased, handheld, 13 fps, all three cores full), read with that build's ELF (tools/switch_hot_pcs.py).
+822E4698 exact=r5,r6,r7,r8,r9,r10   # console 2026-11-11 race, job workers 3/4, 4.4 % of a core: 91 % on the dcbzl zero stores (each line read before it is overwritten); one memset of the range (newlib: dc zva)
+822EA3C0 exact=r3,r4,r5,r6,r7,r8,r9,r10   # console 2026-11-11 race, job workers 3/4, 5.5 % of a core: a 1 KB vector copy, 17 % on a store-card mark after every store, every vector byte-swapped in and out; one copy, one card range
+822EA500 exact=r3,r4,r5,r6,r7,r8,r9,r10,v0,v1,v2,v3,v4,v5,v6,v7,v8,v9,v10,v11,v12,v13   # console 2026-11-11 race, job workers 3/4, 7.6 % of a core (the hottest game function): dst = s*b + a over 1 KB, a card mark after every store, the dcbz zeroing the stores overwrite; straight through, cards once
+822EE628 exact=r4,r5,r6,r7,r8,r9,r10   # console 2026-11-11 race, an XThread, 4.8 % of a core: a job of 1 KB vector adds, 21 % on address arithmetic, a card mark after every store; the same steps, cards once an entry
+822E4CE0 exact=f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13,r6,r8,r9,r10   # console 2026-11-11 race, job workers 3/4, 3.0 % of a core: 65 % on the lwz after fctiwz / stfd (no store forwarding from the doubleword just stored); the conversions in registers
+# Not written (the gate's condition 5: no cost a native removes beyond the machine copy):
+# 8230AD50 (7.5 %): samples on loads of object fields right after their address is formed (cache misses) and on context traffic the machine copy removes.
+# 822E17C8 (3.6 %): 47 % on one load through a pointer loaded just before (a pointer chase: cache misses).
+# 82953D90 (3.6 %): loads of r3 / r5 / r7 / r9 from the register context at entry, just after the caller wrote them: the machine copy passes them in registers.
+# 822DA210 (2.8 %): scalar float math; the double-to-single conversions around its fmadd forms are what makes it bit-exact (a single-precision fused form would round once less).
+# 822E53C8 (2.6 %): a vector filter (vsldoi windows, vmsum4fp128 dot products, a running vmaddfp): its samples are the arithmetic and the shuffles it needs; the operation order must stay for the results to stay exact.

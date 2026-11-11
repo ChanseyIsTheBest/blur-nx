@@ -60,9 +60,16 @@ namespace banjo::hand {
 // katamari-nx: kMatCopy / kMatMul / kMatTranslation are Beautiful Katamari's (the end of this file); kMemset serves its
 // C runtime memset too. N&B's other natives stay for reference: hand.txt does not list them here, so they never compile.
 // blur-nx (2026-11-10): banjo-nx's memcpy native only (rr6-nx's list, its own three natives taken out).
+// blur-nx (2026-11-11, the user's request from the console race profile of the rebased build): Blur's 20 hottest game
+// functions, each with its own key (blur_hand_<address>, banjo_hot_guest.cpp). Job workers 3 and 4 (and an XThread):
+// blur_hand_natives_jq34.h; job workers 0-2: blur_hand_natives_jq012.h.
 enum : uint32_t {
   kMemcpy = 0,
-  kNatives = 1
+  kN822EA500, kN8230AD50, kN822EA3C0, kN822EE628, kN822E4698,
+  kN822E17C8, kN82953D90, kN822E4CE0, kN822DA210, kN822E53C8,
+  kN8251E6F0, kN8251D238, kN824F35D8, kN8250A7E8, kN82621458,
+  kN829D2E80, kN82521E68, kN82525FA8, kN82954478, kN825087A0,
+  kNatives
 };
 extern uint8_t g_state[kNatives];
 uint8_t Init(uint32_t which);
@@ -205,8 +212,14 @@ template <class S>
 }  // namespace detail
 
 // ---------------------------------------------------------------------------------------------------------------------
-// blur-nx (2026-11-10): no hand-written natives of Blur's own: those come only from a console profile, past the gate
-// of docs/optimising-functions.md (hand.txt has the evidence of each). banjo-nx's memcpy native above stays, unwired.
+// blur-nx: hand-written natives of Blur's own come only from a console profile, past the gate of
+// docs/optimising-functions.md (hand.txt has the evidence of each). banjo-nx's memcpy native above stays, unwired.
+// 2026-11-11: the 20 hottest game functions of the console race (the user's request), in two files by thread family.
+// The second is included once it has its final name (written as a draft first, so no build meets a half-written one).
 // ---------------------------------------------------------------------------------------------------------------------
+#include "cpu/hot/blur_hand_natives_jq34.h"
+#if __has_include("cpu/hot/blur_hand_natives_jq012.h")
+#include "cpu/hot/blur_hand_natives_jq012.h"
+#endif
 
 }  // namespace banjo::hand

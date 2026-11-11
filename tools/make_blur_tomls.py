@@ -46,6 +46,12 @@ SHIPPED = {
     'gpu_plugin': '""',
     # Three cores (no forwarder NPDM written), as rr6-nx and katamari-nx ship.
     'banjo_forwarder_program_id': '""',
+    # blur-nx (2026-11-11, the user's request after the console race profile: the XMA Decoder took 42 % of a core with
+    # all three full): in four-core mode (a forwarder's id above) the XMA Decoder goes to core 3 with audio, the mixer
+    # and the shader compiles (banjo_system_core 1). banjo-nx had it off: in its city the system plus those took core
+    # 3 to 1-2 % idle and audio stuttered; watch core 3's idle and the audio lines in a four-core run. No effect with
+    # three cores.
+    'banjo_system_core_xma': 'true  # blur-nx: the XMA Decoder on core 3 in four-core mode (the user\'s request)',
     'banjo_xma_frame_cache': 'false',
     'banjo_shader_misses': '"sdmc:/switch/blur-nx/shader_misses"',
     'log_level': '"info"',

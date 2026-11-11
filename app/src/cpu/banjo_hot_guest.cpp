@@ -160,19 +160,23 @@ REXCVAR_DEFINE_BOOL(banjo_hand_xaudio_mix, true, "Banjo/Enhancements",
                     "(one for the range); checked by the guard of the router's hook")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-// blur-nx (2026-11-10): no natives of Blur's own yet (only from a console profile).
+// blur-nx (2026-11-11): Blur's hand-written natives have their keys, names and cases in cpu/hot/blur_hand_keys.cpp:
+// a source outside cpu/hot that names a game function's address makes tools/localize_native.py treat it as hooked
+// (no machine copy), and the natives stand in front of the copies.
 
 namespace banjo::hand {
 
 uint8_t g_state[kNatives] = {};
 
+bool BlurOwn(uint32_t which);             // cpu/hot/blur_hand_keys.cpp
+const char* BlurName(uint32_t which);     // the same
+const char* BlurKey(uint32_t which);      // the same
+
 namespace {
-// blur-nx (2026-11-10): banjo-nx's memcpy only (rr6-nx's list less its own three). Each native adds its enum
-// value, its name, its key and its case here.
-constexpr const char* kNames[kNatives] = {"memcpy"};
-constexpr const char* kKeys[kNatives] = {"banjo_hand_memcpy"};
+const char* NameOf(uint32_t which) { return which == kMemcpy ? "memcpy" : BlurName(which); }
+const char* KeyOf(uint32_t which) { return which == kMemcpy ? "banjo_hand_memcpy" : BlurKey(which); }
 bool Own(uint32_t which) {
-  return which == kMemcpy ? bool(REXCVAR_GET(banjo_hand_memcpy)) : false;
+  return which == kMemcpy ? bool(REXCVAR_GET(banjo_hand_memcpy)) : BlurOwn(which);
 }
 // banjo_hot_count: calls by size, bucket 0 = size 0, bucket k = sizes [2^(k-1), 2^k).
 std::atomic<uint64_t> g_sizes[kNatives][34];
@@ -182,7 +186,7 @@ std::atomic<uint64_t> g_sizes[kNatives][34];
 uint8_t Init(uint32_t which) {
   const uint8_t state = banjo::EnhancementActive(banjo::EnhancementGroup::kCpu, Own(which)) ? 2 : 1;
   if (g_state[which] == 0)
-    REXLOG_INFO("[hot] hand-written native of the {} ({}): {}", kNames[which], kKeys[which], state == 2 ? "ON" : "off");
+    REXLOG_INFO("[hot] hand-written native of the {} ({}): {}", NameOf(which), KeyOf(which), state == 2 ? "ON" : "off");
   g_state[which] = state;
   return state;
 }
@@ -842,7 +846,7 @@ void ForEachKey(void (*row)(void* user, const char* key, bool own), void* user) 
     }
   }
   if (bulk) row(user, "banjo_cpu_native_bulk", REXCVAR_GET(banjo_cpu_native_bulk));
-  for (uint32_t k = 0; k < ::banjo::hand::kNatives; ++k) row(user, ::banjo::hand::kKeys[k], ::banjo::hand::Own(k));
+  for (uint32_t k = 0; k < ::banjo::hand::kNatives; ++k) row(user, ::banjo::hand::KeyOf(k), ::banjo::hand::Own(k));
 }
 
 void Report() {
@@ -862,7 +866,7 @@ void Report() {
         sizes += b == 0 ? fmt::format(" [0: {}]", n) : fmt::format(" [{}-{}: {}]", 1u << (b - 1), (1ull << b) - 1, n);
       }
       if (calls)
-        REXLOG_INFO("[hot] hand-written native of the {}: {} calls so far, by size ({}):{}", ::banjo::hand::kNames[k],
+        REXLOG_INFO("[hot] hand-written native of the {}: {} calls so far, by size ({}):{}", ::banjo::hand::NameOf(k),
                     calls,
                     "bytes",
                     sizes);
