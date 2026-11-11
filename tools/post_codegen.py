@@ -91,6 +91,9 @@ def main():
     # cpu_aggressive (2026-10-16): the late rewrites below change statements the analyses parse (r1l for ctx.r1,
     # REX_LR_WRITE_SAME, computed gotos, hoisted checks): on a tree that was processed before they are taken back out
     # first, so every analysis sees the text it was written for. On a fresh codegen these find nothing.
+    # blur-nx (2026-11-11, CPU batch 1): the DC ZVA pairs come out before the cards (store_cards.py finds a dcbz by its
+    # memset, and tools/localize_native.py knows the memset's store, not REX_DCBZ128).
+    run(tool('vec_dcbz_zva.py'), '--gen', gen, '--restore')
     # banjo-nx (2026-10-19): the store cards were the last step: out first.
     run(tool('store_cards.py'), '--gen', gen, '--restore')
     run(tool('switch_goto.py'), '--gen', gen, '--restore')

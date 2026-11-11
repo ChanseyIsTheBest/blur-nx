@@ -11,7 +11,7 @@ REX_DCBZ128(ea) does that when rex_zva64_ok (set at start-up from DCZID_EL0: the
 otherwise the memset. The asm statements name the 64 bytes each writes as their output, so the compiler knows exactly
 what memory changed. Exact: the same 128 bytes become zero. The 32-byte dcbz stays a memset (smaller than a ZVA block).
 Off the AArch64 REX_DCBZ128 is the memset. REX_DCBZ_MEMSET (compile time) gives the memset back everywhere.
-  python tools/vec_dcbz_zva.py --gen app/generated [--check]
+  python tools/vec_dcbz_zva.py --gen app/generated [--check] [--restore]
 """
 import argparse
 import glob
@@ -34,8 +34,22 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--gen', required=True, help='generated folder (*_recomp.N.cpp and *_pch.h)')
     ap.add_argument('--check', action='store_true', help='count only, write nothing')
+    ap.add_argument('--restore', action='store_true',
+                    help='the memsets back (post_codegen.py, first, with the other late steps: store_cards.py finds '
+                         'the dcbz by the memset, tools/localize_native.py knows its store)')
     a = ap.parse_args()
     total = changed = 0
+    if a.restore:
+        for path in sorted(glob.glob(os.path.join(a.gen, '*_recomp.*.cpp'))) + sorted(glob.glob(os.path.join(a.gen, 'hot', 'n_*.h'))):
+            text = open(path, encoding='utf-8').read()
+            n = text.count(NEW)
+            if n:
+                total += n
+                changed += 1
+                if not a.check:
+                    open(path, 'w', encoding='utf-8', newline='\n').write(text.replace(NEW, OLD))
+        print('vec_dcbz_zva --restore: %d DC ZVA pairs back to memsets (%d files)' % (total, changed))
+        return
     # After tools/store_cards.py (which finds the dcbz by this memset's text to put its card in front): the generated
     # functions and the machine copies (hot/n_*.h), the files store_cards.py reads.
     files = sorted(glob.glob(os.path.join(a.gen, '*_recomp.*.cpp'))) + sorted(glob.glob(os.path.join(a.gen, 'hot', 'n_*.h')))
