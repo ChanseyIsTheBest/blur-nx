@@ -11669,7 +11669,47 @@ void SasrtNoteExport(uint64_t sig, uint64_t moved_sig, const MemExportStream *ex
   }
 }
 
+// sasrt-nx (2026-11-11, port 82; its GPU list's row 4; UNTESTED), sasrt_gpu_skip_cull_both: a triangle draw culling
+// both faces, built as FRONT_AND_BACK (banjo_renut_cull_both, pipeline.cpp), rasterises nothing; left out when neither
+// shader exports memory (an export draw's vertex shader still runs). Points have no facing and lines are not culled:
+// only triangle kinds. renut-ultimate (port 82): not rectangle lists or tessellated draws either, which sasrt-nx's form
+// took: MakeKey clears their cull bits (they are drawn unculled), so leaving them out would drop what is drawn now.
+// Direct3D 12 has no such cull mode and draws both faces: there these draws now draw nothing, as on Vulkan, deko3d and
+// the console. Counted in the 10 s "[renut] untested GPU rows" line.
+[[gnu::noinline]] bool SasrtCullBothLocked(const u8 *device_state, const DrawCall &call) {
+  if (call.tessellation || (call.primitive != kTriangleList && call.primitive != kTriangleFan &&
+                            call.primitive != kTriangleStrip && call.primitive != kQuadList))
+    return false;
+  const GuestDevice device(device_state);
+  if (!device.valid() || (u32(device.dev().m_ControlPacket.ModeControl) & 3u) != 3u)
+    return false;
+  const auto exports = [](const ShaderRecord *r) {
+    if (!r->entry)
+      return true;
+    for (const u32 m : r->entry->memExportConstants)
+      if (m)
+        return true;
+    return false;
+  };
+  const ShaderRecord *vs = FindShaderLocked(device.U32(d3d::kDeviceOffsetVertexShader), RecordKind::VertexShader);
+  if (!vs || exports(vs))
+    return false;
+  if (const u32 ps_va = device.U32(d3d::kDeviceOffsetPixelShader)) {
+    const ShaderRecord *ps = FindShaderLocked(ps_va, RecordKind::PixelShader);
+    if (!ps || exports(ps))
+      return false;
+  }
+  std::atomic<uint64_t> &skipped = sasrt::gpu_round::g_census_cull_both_skipped;  // a load and a store (one writer)
+  skipped.store(skipped.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
+  return true;
+}
+
 bool DrawStateLocked(const u8 *device_state, const DrawCall &call, const ReplayConstants *replay) {
+  {  // sasrt-nx (2026-11-11, port 82; its GPU list's row 4; UNTESTED), sasrt_gpu_skip_cull_both: before everything else
+    static const bool cull_both = sasrt::gpu_round::SkipCullBothOn();
+    if (cull_both && SasrtCullBothLocked(device_state, call)) [[unlikely]]
+      return true;
+  }
   // sasrt-nx (2026-11-08, sasrt_gpu_skip_inert_draws): before the fast path and the targets (SasrtInertDrawLocked). The
   // chain's next draw then finds no kept state of this one (its sequence number is not the last kept + 1): the full path.
   if (sasrt::gpu_round::On(sasrt::gpu_round::kInertDraws)) {

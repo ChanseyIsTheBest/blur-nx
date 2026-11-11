@@ -708,6 +708,17 @@ namespace plume {
         };
         std::mutex heapMutex;
         std::vector<Chunk> chunks;
+        // sasrt-nx (2026-11-11, Deko3DSetTargetBlockCacheMb): emptied dedicated targets' blocks kept for the next
+        // targets (heapMutex), oldest first.
+        struct CachedBlock {
+            DkMemBlock block = nullptr;
+            uint32_t size = 0;
+        };
+        std::vector<CachedBlock> targetCache;
+        uint64_t targetCacheBytes = 0;
+        void cacheTargetBlockLocked(DkMemBlock block, uint32_t size);
+        DkMemBlock takeCachedTargetBlockLocked(uint32_t size, uint32_t &blockSize);
+        uint64_t releaseTargetCacheLocked();
 
         // Shader code: blocks, bump allocated.
         std::mutex codeMutex;
@@ -991,6 +1002,17 @@ namespace plume {
     // image heap's empty chunks given back on request (a governor).
     void Deko3DSetDedicatedTargets(bool on);
     uint64_t Deko3DReleaseEmptyImageChunks();
+    // sasrt-nx (2026-11-11, the stutter hunt: a dynamic-resolution step made ~33 dedicated blocks in one frame, ~2.5 ms
+    // each, and destroyed the old ones two frames later): an emptied dedicated target's block stays, up to this many
+    // MB in all, for the next target of its size or up to an eighth smaller; given back with the empty image chunks
+    // (Deko3DReleaseEmptyImageChunks: the governor's low mark, a block that could not be made). 0: off (destroyed at
+    // once, as before).
+    void Deko3DSetTargetBlockCacheMb(uint32_t mb);
+    struct Deko3DTargetCacheInfo {
+        uint64_t bytes = 0, hits = 0, misses = 0, kept = 0, evicted = 0, released = 0;
+        uint32_t blocks = 0;
+    };
+    void Deko3DTargetCacheFigures(Deko3DTargetCacheInfo &out);
     // sasrt-nx (2026-11-09; port 58, SASRT's docked crash: the command buffers' arena found no room in the heap while the
     // GPU region held 500-700 MB free): the region's free bottom back to newlib now (it goes back by itself only once
     // kRegionGiveBackAt there is free); the bytes given. The region is carved from the heap's top and blocks pack at its
@@ -1060,6 +1082,11 @@ namespace plume {
     struct Deko3DOptions {
         bool depthCompression = false;
         bool zcull = false;
+        // sasrt-nx (2026-11-11, port 82; its GPU list's row 2; UNTESTED), sasrt_gpu_precise_stencil_write: a pipeline's
+        // "may write the depth target" (writesDepthStencil, the mark a read decompresses after) leaves out the stencil
+        // outcomes that cannot happen (fail when it compares always, depth-fail when the depth test cannot fail) and a
+        // stencil write mask of 0. Read as each pipeline is built.
+        bool preciseStencilWrite = false;
         // A pipeline's vertex shader gets specialization constant 905 (when it declares it), the locations its pixel
         // shader reads of the ones it writes (none without a pixel shader; not with a geometry shader): banjo-nx's
         // tools/deko3d_glsl_opt.py, pass vsout, drops the other outputs and what computes them.
@@ -1233,5 +1260,8 @@ namespace plume {
     void Deko3DSetOptions(const Deko3DOptions &options);
     // banjo-nx (2026-10-19, render-thread proposal 13): read inline (barriers() reads it per call).
     extern Deko3DOptions g_deko3dOptions;
+    // sasrt-nx (2026-11-11, port 82; its GPU list's row 2; UNTESTED): the pipelines whose depth mark
+    // preciseStencilWrite dropped (the old rule marked them), since the start.
+    extern std::atomic<uint64_t> g_deko3dPreciseStencilSaved;
     inline const Deko3DOptions &Deko3DGetOptions() { return g_deko3dOptions; }
 };

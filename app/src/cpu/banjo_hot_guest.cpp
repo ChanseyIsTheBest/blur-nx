@@ -29,6 +29,13 @@
 //   reported as a difference (a false one) and only costs that hook.
 // KEYS: banjo_cpu_native_<function> each (CPU group, under banjo_cpu_enhancements); banjo_hot_guard_calls,
 //   banjo_hot_guard_period; banjo_hot_count (a measurement, see Counted).
+// BUILD: sasrt-nx (2026-11-10, port 78; its idea 27): the guard runs the copies' two logged forms, which only a build
+//   with CMake SASRT_HOT_GUARD_FORMS has (ON by default on the PC; OFF on the Switch, where tools/build_switch_guard.bat
+//   makes an NRO with them). Without them every hook calls its copy directly and InitHook says so once.
+//   sasrt-nx (2026-11-11, port 81; machine copies in place): with CMake SASRT_HOT_IN_PLACE (ON by
+//   default on the Switch wherever the guard forms are OFF) there are no hooks at all: the generated function's
+//   symbol is the copy (banjo_hot_guest.h), nothing of the guard runs and no copy's key is read; InPlaceNotes says so
+//   once at start-up and names each key set against the build. The hand-written natives keep their own keys.
 //
 // Name no guest function's address in this file: tools/direct_calls.py and tools/localize_native.py treat every
 // 82xxxxxx address the app's sources mention as hooked. The list is app/src/cpu/hot/localized.txt.
@@ -551,6 +558,20 @@ Hook::Hook(const char* name_, const char* key_, PPCFunc* orig_, void (*native_)(
   *tail = this;
 }
 
+// sasrt-nx (2026-11-11, port 81; machine copies in place): the in-place copies' records
+// (banjo_hot_guest.h), in list order within a file. Both pointers are constant-initialised, so a record of any file
+// may append before this file's own dynamic initialisation has run.
+namespace {
+InPlaceCopy* g_in_place_list = nullptr;
+InPlaceCopy** g_in_place_tail = &g_in_place_list;
+}  // namespace
+
+InPlaceCopy::InPlaceCopy(const char* name_, const char* key_, bool on_, bool bulk_, bool (*own_)())
+    : name(name_), key(key_), on(on_), bulk(bulk_), own(own_) {
+  *g_in_place_tail = this;
+  g_in_place_tail = &next;
+}
+
 bool WriteLog::Grow() {
   if (capacity >= kMaxEntries) return false;
   const uint32_t wanted = capacity ? capacity * 2 : 4096;
@@ -673,15 +694,21 @@ void VmxFuzz(int millions) {
 }
 }  // namespace
 #endif
-uint8_t InitHook(Hook& h, uint8_t* base) {
+namespace {
+// Port 72: the fuzz test's thread, once (sasrt_test_vmx_fuzz): from the first hook's InitHook, and (port 81) in place,
+// where no hook runs, from the start-up notes (InPlaceNotes).
+void StartVmxFuzzOnce() {
 #if defined(REX_VMX_FLOAT_HELPERS)
-  // Port 72: the fuzz test's thread, once (sasrt_test_vmx_fuzz).
   static std::once_flag fuzz_once;
   if (const int m = REXCVAR_GET(sasrt_test_vmx_fuzz); m > 0)
     std::call_once(fuzz_once, [m] {
       StartBackground([](void* p) { VmxFuzz(int(reinterpret_cast<intptr_t>(p))); }, reinterpret_cast<void*>(intptr_t(m)));
     });
 #endif
+}
+}  // namespace
+uint8_t InitHook(Hook& h, uint8_t* base) {
+  StartVmxFuzzOnce();
   // May run on several threads at once for the first call: every one of them stores the same values.
   bool on = banjo::EnhancementActive(banjo::EnhancementGroup::kCpu, h.own());
   if (on && h.bulk && !REXCVAR_GET(banjo_cpu_native_bulk)) on = false;
@@ -693,15 +720,27 @@ uint8_t InitHook(Hook& h, uint8_t* base) {
   h.verify = verify;
   h.guard_calls = uint32_t(std::clamp(REXCVAR_GET(banjo_hot_guard_calls), 0, 4000));
   h.period = period;
-  // No guard at all: the hook calls its copy directly (banjo_hot_guest.h, kDirect).
-  const bool direct = !verify && h.guard_calls == 0 && REXCVAR_GET(banjo_hot_guard_period) == 0;
+  // No guard at all: the hook calls its copy directly (banjo_hot_guest.h, kDirect). sasrt-nx (2026-11-10, port 78; its
+  // idea 27): also when the build has no guard forms (BANJO_HOT_GUARD_FORMS 0: the logged forms are not made), whatever
+  // the keys ask. A key that asks for the guard gets one warning; the hooks' lines and the summary say it too.
+  const bool forms = h.native_logged && h.reference_logged;
+  const bool guard_asked = verify || h.guard_calls || REXCVAR_GET(banjo_hot_guard_period);
+  if (!forms && guard_asked) {
+    static std::atomic<bool> said{false};
+    if (!said.exchange(true, std::memory_order_relaxed))
+      REXLOG_WARN("[hot] this build has no guard forms (SASRT_HOT_GUARD_FORMS OFF): banjo_cpu_verify, "
+                  "banjo_hot_guard_calls and banjo_hot_guard_period check no native copy, every native copy is called "
+                  "directly (an NRO with them: tools/build_switch_guard.bat; a PC build: -DSASRT_HOT_GUARD_FORMS=ON)");
+  }
+  const bool direct = !forms || !guard_asked;
   uint8_t state = on ? (direct ? kDirect : kOn) : kOff;
   if (on && REXCVAR_GET(banjo_hot_count) && h.native_counted) state = kCount;
   if (on && h.bulk) {
     // The bulk hooks say so in the summary of the reports (hundreds of first calls would each be a line).
   } else if (on && state == kDirect && h.state.load(std::memory_order_relaxed) == kUninit) {
-    REXLOG_INFO("[hot] {} ({}): native copy ON, direct (no guard: banjo_hot_guard_calls = banjo_hot_guard_period = 0)",
-                h.name, h.key);
+    REXLOG_INFO("[hot] {} ({}): native copy ON, direct ({})", h.name, h.key,
+                forms ? "no guard: banjo_hot_guard_calls = banjo_hot_guard_period = 0"
+                      : "this build has no guard forms: SASRT_HOT_GUARD_FORMS OFF");  // port 78, its idea 27
   } else if (on && h.state.load(std::memory_order_relaxed) == kUninit) {
     if (state == kCount) {
       REXLOG_INFO("[hot] {} ({}): native copy ON in its counting form (banjo_hot_count; no guard)", h.name, h.key);
@@ -925,8 +964,94 @@ void Check(Hook& h, PPCContext& ctx, uint8_t* base, uint32_t& counter) {
   }
 }
 
+#if BANJO_HOT_IN_PLACE
+namespace {
+// sasrt-nx (2026-11-11, port 81; machine copies in place): the in-run A/B's target 70
+// (banjo_renut_ab_target, or in the list banjo_renut_ab_targets; read by name: Renut's renderer defines them).
+bool AbAsks70() {
+  if (rex::cvar::Query<int32_t>("banjo_renut_ab_target") == 70) return true;
+  int n = 0;
+  bool digit = false;
+  for (const char c : rex::cvar::Query<std::string>("banjo_renut_ab_targets") + ",") {
+    if (c >= '0' && c <= '9') {
+      n = n * 10 + (c - '0');
+      digit = true;
+    } else {
+      if (digit && n == 70) return true;
+      n = 0;
+      digit = false;
+    }
+  }
+  return false;
+}
+
+// No hook reads a key in this build, so once, at start-up (ForEachKey, for the "[enhancements]" line; or the first
+// Report), the log says what the build fixed and names each key that asks for what only a hooked build does, as port
+// 78 does for the guard forms. The hand-written natives keep their keys (their own state byte inside the copies), and
+// so do the in-run A/B's target 69 and the transform chain's own check (katamari_hand_transform_chain_verify).
+void InPlaceNotes() {
+  static std::atomic<bool> said{false};
+  if (said.exchange(true, std::memory_order_relaxed)) return;
+  StartVmxFuzzOnce();  // port 72's test: no InitHook starts it in place
+  uint32_t on = 0, bulk_on = 0, kept = 0, against = 0;
+  std::string keys;
+  for (const InPlaceCopy* c = g_in_place_list; c; c = c->next) {
+    on += c->on;
+    bulk_on += c->on && c->bulk;
+    kept += !c->on;
+    if (c->own() != c->on) {
+      ++against;
+      if (against <= 8) keys += fmt::format("{}{} = {}", against > 1 ? ", " : "", c->key, c->on ? "false" : "true");
+    }
+  }
+  REXLOG_INFO("[hot] native copies IN PLACE (SASRT_HOT_IN_PLACE ON): {} copies are their generated functions ({} of "
+              "them bulk), {} marked off in the lists stay generated code; no hook: no per-copy key, no guard, no "
+              "counts, no in-run A/B 70 (all of them in a hooked build: tools/build_switch_guard.bat, IN_PLACE=OFF)",
+              on, bulk_on, kept);
+  if (against)
+    REXLOG_WARN("[hot] {} native-copy key(s) set against this build, which does not read them (the copies are in "
+                "place: localized.txt and localized_bulk.txt decide, `off` keeps a function generated code): {}{}",
+                against, keys, against > 8 ? ", ..." : "");
+  if (bulk_on && !REXCVAR_GET(banjo_cpu_native_bulk))
+    REXLOG_WARN("[hot] banjo_cpu_native_bulk = false does nothing in this build: its {} bulk copies are in place "
+                "(SASRT_HOT_IN_PLACE ON; a hooked build switches them with it)",
+                bulk_on);
+  if (on && !banjo::EnhancementActive(banjo::EnhancementGroup::kCpu, true))
+    REXLOG_WARN("[hot] banjo_cpu_enhancements = false leaves the {} native copies on in this build (in place, "
+                "SASRT_HOT_IN_PLACE ON); it still switches the hand-written natives and the other CPU items off",
+                on);
+  if (REXCVAR_GET(banjo_cpu_verify) || REXCVAR_GET(banjo_hot_guard_calls) || REXCVAR_GET(banjo_hot_guard_period))
+    REXLOG_WARN("[hot] this build has the native copies in place (SASRT_HOT_IN_PLACE ON: no hooks, no guard forms): "
+                "banjo_cpu_verify, banjo_hot_guard_calls and banjo_hot_guard_period check no native copy (a guard or "
+                "verify NRO: tools/build_switch_guard.bat; a PC build: -DSASRT_HOT_IN_PLACE=OFF "
+                "-DSASRT_HOT_GUARD_FORMS=ON)");
+  if (REXCVAR_GET(banjo_hot_count))
+    REXLOG_WARN("[hot] banjo_hot_count counts nothing in this build: the native copies are in place "
+                "(SASRT_HOT_IN_PLACE ON), and only a hook runs a copy's counting form");
+  if (AbAsks70())
+    REXLOG_WARN("[hot] the in-run A/B's target 70 has no off half in this build: the native copies are in place "
+                "(SASRT_HOT_IN_PLACE ON) and nothing calls the generated originals; both halves run the copies (a "
+                "hooked build: IN_PLACE=OFF, -DSASRT_HOT_IN_PLACE=OFF)");
+}
+}  // namespace
+#endif
+
 void ForEachKey(void (*row)(void* user, const char* key, bool own), void* user) {
   bool bulk = false;
+#if BANJO_HOT_IN_PLACE
+  // Port 81: each copy as the build made it (its list's choice; the key is not read, InPlaceNotes names one set
+  // against it), and the bulk copies' master as on (it cannot switch them off).
+  InPlaceNotes();
+  for (const InPlaceCopy* c = g_in_place_list; c; c = c->next) {
+    if (!c->bulk) {
+      row(user, c->key, c->on);
+    } else {
+      bulk = true;
+      if (!c->on) row(user, c->key, false);  // marked off in the bulk list: generated code
+    }
+  }
+  if (bulk) row(user, "banjo_cpu_native_bulk", true);
+#else
   for (Hook* h = g_hooks; h; h = h->next) {
     if (!h->bulk) {
       row(user, h->key, h->own());
@@ -936,10 +1061,16 @@ void ForEachKey(void (*row)(void* user, const char* key, bool own), void* user) 
     }
   }
   if (bulk) row(user, "banjo_cpu_native_bulk", REXCVAR_GET(banjo_cpu_native_bulk));
+#endif
   for (uint32_t k = 0; k < ::banjo::hand::kNatives; ++k) row(user, ::banjo::hand::kKeys[k], ::banjo::hand::Own(k));
 }
 
 void Report() {
+#if BANJO_HOT_IN_PLACE
+  // Port 81: nothing is counted in place (no hook: no guard, no counting form). The start-up notes said what the build
+  // has; they come here if the "[enhancements]" line never ran.
+  InPlaceNotes();
+#else
   const int64_t now = NowMs();
   int64_t last = g_last_report_ms.load(std::memory_order_relaxed);
   if (now - last < 10000 || !g_last_report_ms.compare_exchange_strong(last, now, std::memory_order_relaxed)) return;
@@ -1004,9 +1135,13 @@ void Report() {
   }
   REXLOG_INFO("[hot] native copies: {} reached, {} on ({} direct, no guard); bulk copies (banjo_cpu_native_bulk {}): {} "
               "of {} reached, {} on; {} calls compared so far, {} not comparable ({} of them stopped in both forms "
-              "with the same stores before the stop, {} not), {} differed once and not when repeated, differences: {}",
+              "with the same stores before the stop, {} not), {} differed once and not when repeated, differences: "
+              "{}{}",
               reached, on, direct, REXCVAR_GET(banjo_cpu_native_bulk) ? "on" : "off", bulk_reached, bulk_total, bulk_on,
-              compared, not_comparable, prefix_equal, prefix_differ, not_repeated, differences);
+              compared, not_comparable, prefix_equal, prefix_differ, not_repeated, differences,
+              // port 78, its idea 27: a build without the guard's forms compares nothing, whatever the keys say.
+              BANJO_HOT_GUARD_FORMS ? "" : " (this build has no guard forms, SASRT_HOT_GUARD_FORMS OFF: nothing compared)");
+#endif  // BANJO_HOT_IN_PLACE
 }
 
 }  // namespace banjo::hot

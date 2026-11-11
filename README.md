@@ -116,6 +116,33 @@ toml, so a port that finds one wrong for its game doesn't have to change the cod
 - Port 76 is blur-nx's renderer fixes (keys 211-221): EXPAND / FLOAT resolve aliases, partial resolves that keep
   their destination, occlusion queries answered (a game hooks its own GetData), stack-held surface headers, the
   resolve exponent bias, the EDRAM inherit and more; Viva Pinata's fade mask to recheck (key 218).
+- Port 77 is the rule for keys that break a game's picture: off in the base by default, on in the toml of the game
+  that needs them (Blur's 218 and Halo 3's replay inherits so far). docs/off-by-default.md lists every switch that
+  is off by default, why, and what is known of its speed.
+- Port 78 builds the machine copies' guard forms only into guard / verify builds (Katamari's Switch NRO 11 MB
+  smaller; tools/build_switch_guard.bat for a Switch guard build), and makes tools/switch_hot_bulk.py leave small
+  copies out of a remade bulk list.
+- Port 79 keeps emptied render-target memory blocks for the next targets (sasrt-nx: a dynamic-resolution step
+  no longer makes ~33 blocks in one frame; its worst frames per window 108 -> 59 ms).
+- Port 80 lets a submit clean the upload ring's range in progress itself instead of waiting for the cleaner thread
+  (sasrt-nx: no more 280-350 ms render-thread waits at its race start).
+- Port 81 puts the machine copies in place of their generated functions on the Switch (sasrt-nx: no hooks, the copies
+  inlinable, its game thread 4 % faster and the NRO 4 MB smaller); their keys, the guard and A/B 70 need a hooked
+  build (tools/build_switch_guard.bat, IN_PLACE=OFF, the PC), and the in-place form has its own PGO profile
+  (pgo-inplace/). sasrt-nx's guide to hand and machine optimising is
+  [docs/hand-and-machine-optimising-guide.md](docs/hand-and-machine-optimising-guide.md).
+- Port 82 adds sasrt-nx's GPU rows 1, 2 and 4, marked untested (exact by construction; a 10 s log line counts
+  what each one did; Katamari hits row 1, with the same frames on and off). Port 83 adds
+  tools/profile_breakdown.py (a console stack profile per thread, against the build's map).
+- Port 85 takes blur-nx's vector-lane reads: an `stvewx` / `stvehx` lane picked by its address is read from
+  the register instead of through the stack (the A57 cannot forward that load); a start-up self-check
+  and an SDK test check every lane. input_script takes LT and RT.
+- Port 84 turns the bulk copies' link-register elision off by default (vivapinata-nx's guard found it
+  differing between a copy's two forms).
+- Port 86 turns Blur's EDRAM inherit (key 220) off by default: on the console it drew garbage tiles over Viva
+  Pinata's title (blur-nx turns it on).
+- Port 87 replays a command buffer a game runs once per predicated tile once for every tile
+  (vivapinata-nx's tiles once: -3.74 ms of GPU a frame in its garden on the console).
 - Port 44 and the translator changes take effect when a game's shader package is made again. Before measuring on the
   console, build its DKSH cache on the PC (`tools/deko3d_variant_cache.py`): a first run that compiles its shaders while
   it draws is slower on the GPU than the build is.
@@ -152,7 +179,7 @@ Windows, LLVM clang and the VS Build Tools for the PC build; devkitA64, libnx an
 | `tools/` | Code generation steps, build and test scripts, shader tools |
 | `pgo/` | katamari-nx's PGO profile (counts of which code ran, no game code or data) |
 | `dist/` | The settings of the test builds |
-| `docs/` | Documentation: [ultimate-fixes.md](docs/ultimate-fixes.md), [building.md](docs/building.md) and katamari-nx's notes |
+| `docs/` | Documentation: [ultimate-fixes.md](docs/ultimate-fixes.md), [building.md](docs/building.md), [off-by-default.md](docs/off-by-default.md), [hand-and-machine-optimising-guide.md](docs/hand-and-machine-optimising-guide.md) and katamari-nx's notes |
 
 </div>
 
