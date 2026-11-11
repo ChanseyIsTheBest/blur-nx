@@ -208,8 +208,11 @@ template <class S>
 // The second is included once it has its final name (written as a draft first, so no build meets a half-written one).
 // ---------------------------------------------------------------------------------------------------------------------
 #include "cpu/hot/blur_hand_natives_jq34.h"
-#if __has_include("cpu/hot/blur_hand_natives_jq012.h")
 #include "cpu/hot/blur_hand_natives_jq012.h"
-#endif
+// 2026-11-11, batches 2 and 3 (the user: 30 from the next 60 hot functions; 14 written by three agents, reviewed here).
+#include "cpu/hot/blur_hand_natives_batch2.h"
+#include "cpu/hot/blur_hand_natives_batch3a.h"
+#include "cpu/hot/blur_hand_natives_batch3b.h"
+#include "cpu/hot/blur_hand_natives_batch3c.h"
 
 }  // namespace banjo::hand

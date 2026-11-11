@@ -1,0 +1,62 @@
+# blur-nx batch 2 (draft, 2026-11-11): hand.txt lines for blur_hand_natives_batch2.draft.h. Evidence: console race profile
+# 2026-11-11 15:18 (rebased build 46b3f6d6), ranks 21-80 (out/console/hand_candidates_60.txt).
+8230CBB8 exact=   # console 2026-11-11 15:18 (rebased build 46b3f6d6), race, JQ Worker 3 61 %, 4 39 %, 2.04% of a core, 166 instrs: a crossfade with 64 separately byte-swapped, separately card-marked stores per call; native marks one card, enables the mode once
+822E48F8 exact=   # console 2026-11-11 15:18 (rebased build 46b3f6d6), race, JQ Worker 3 78 %, 4 22 %, 1.42% of a core: the index of every element converted through the stack (std, lfd, fcfid: failed store forwarding, 4 pairs per 4 elements); native converts directly, cards per range
+82954F28 exact=f1   # console 2026-11-11 15:18 (rebased build 46b3f6d6), race, JQ Worker 3 58 %, 4 37 %, 1.17% of a core: stfd/lhz and stfd/lwz round trips of f0 and the fctiwz image through r1-16 (failed store forwarding) plus f2-f13/r8-r10 context writes; native keeps them in registers, writes the one stack doubleword
+822E9F20 exact=   # console 2026-11-11 15:18 (rebased build 46b3f6d6), race, JQ Worker 3 64 %, 4 36 %, 0.68% of a core: 64 byte-swapped loads/stores each card-marked for a 1024-byte add; native one card, tight loop
+82520D78 exact=   # console 2026-11-11 15:18 (rebased build 46b3f6d6), race, JQ Worker 4 33 %, Game Master 22 %, 1 22 %, 0.56% of a core: three paths each leaving 14-20 vector temporaries and switching the mode; native keeps splats in registers, one switch, one card
+82244170 exact=   # console 2026-11-11 15:18 (rebased build 46b3f6d6), race, JQ Worker 4 33 %, 0 22 %, 2 22 %, 0.56% of a core: lvlx128+lvrx128+vor per 16 bytes and a card per store; native is one memcpy and one card
+# 82505EF8 not written: 1 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 826803B0 not written: 5 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 8230AAD0 not written: 5 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 826EFE18 not written: 1 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 82526568 not written: 3 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 822CBA00 not written: indirect (virtual) call in the function: a native cannot make it under the guard
+# 82236E78 not written: 2 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 8252E168 not written: 9 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 8230A4D8 not written: 1 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 822E4FE8 not written: 1 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 822BEDD0 not written: 14 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 822D92D8 not written: 1 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 822EB480 not written: indirect (virtual) call in the function: a native cannot make it under the guard
+# 822E6E98 not written: caller of sub_82954478 (also calls sub_82954558, sub_829552D8): real callees besides the sine; not written
+# 822E29A8 not written: read: a vsldoi/vmsum4fp128 filter with a 16-way vsel tail (176 instructions); no stack or context round trip beyond what the copy already keeps in locals; not reproduced in the time
+# 822EB4C0 not written: indirect (virtual) call in the function: a native cannot make it under the guard
+# 822D7DF0 not written: read: int16 to float with a scale; head and tail loops use std/lfd round trips but the middle is a vupkhsb128/vcsxwfp/vperm body whose exact semantics I did not verify; hot-path split (head, body, tail are sequential) not safe to cut
+# 82432300 not written: 6 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 82306F88 not written: indirect (virtual) call in the function: a native cannot make it under the guard
+# 82668520 not written: 4 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 826EFA20 not written: 11 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 82451530 not written: indirect (virtual) call in the function: a native cannot make it under the guard
+# 82733868 not written: indirect (virtual) call in the function: a native cannot make it under the guard
+# 8230EDE0 not written: 16 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 822D2378 not written: 12 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 822EB500 not written: indirect (virtual) call in the function: a native cannot make it under the guard
+# 82522568 not written: leaf, read only in the call-list index (not read further in the time): no native written
+# 82507988 not written: 4 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 8248DBB0 not written: 26 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 8251E438 not written: read: ring-buffer bookkeeping of integer and float stores into one object; copy already in locals; no stall to remove
+# 8216AE98 not written: leaf, read only in the call-list index (not read further in the time): no native written
+# 822D9040 not written: 1 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 8227E098 not written: 3 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 822E1468 not written: 1 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 822CBB80 not written: indirect (virtual) call in the function: a native cannot make it under the guard
+# 822D79A8 not written: 1 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 824EB1C8 not written: 8 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 829552D8 not written: 7 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 82500AC0 not written: caller of sub_82954478 (two sine calls and vrlimi128/vmaddcfp128 rotations); inline-sine native not written in the time
+# 82522340 not written: indirect (virtual) call in the function: a native cannot make it under the guard
+# 82302700 not written: 3 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 8227CCE8 not written: indirect (virtual) call in the function: a native cannot make it under the guard
+# 82432A28 not written: 6 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 826ADB30 not written: read: closest-point-on-triangle, 80 vector statements, no memory traffic but the result store; the copy already holds them in locals; nothing to remove
+# 8266D118 not written: 3 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 825217B8 not written: caller of sub_82520D78: one call inside a loop, the rest scalar float and integer index math; not written in the time
+# 82504618 not written: indirect (virtual) call in the function: a native cannot make it under the guard
+# 82521FA8 not written: 1 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 822CBAD0 not written: indirect (virtual) call in the function: a native cannot make it under the guard
+# 82432918 not written: 2 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 826A7858 not written: leaf, read only in the call-list index (not read further in the time): no native written
+# 8250C1A8 not written: 15 direct callee(s): real calls a native cannot make; not read further, no removable cost identified
+# 822EC708 not written: indirect (virtual) call in the function: a native cannot make it under the guard
+# 822E8418 not written: leaf, read only in the call-list index (not read further in the time): no native written
