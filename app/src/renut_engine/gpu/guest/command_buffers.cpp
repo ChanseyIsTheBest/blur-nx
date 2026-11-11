@@ -46,6 +46,7 @@ extern "C" char *fake_heap_end;  // libnx: the end of the malloc heap
 #include "renut_engine/gpu/guest/resources.h"  // banjo-nx (2026-10-23): PrefetchShaderLocked
 #include "renut_engine/gpu/render/texture_layout.h"  // banjo-nx (2026-10-27): the slots' extents (GetTextureDataSizes)
 #include "renut_engine/gpu/render/textures.h"  // banjo-nx (2026-10-28): TextureFrameLocked (the packet census's frames)
+#include "renut_engine/gpu/render/surfaces.h"  // blur-nx (2026-11-10, port 76; its key 215): StackHeaderSet
 
 #include <rex/cvar.h>
 
@@ -453,7 +454,11 @@ struct HostCommandBuffer {
   uint64_t id = 0;  // banjo-nx (2026-10-26): a number per recording (the objects are pooled), for the census
   // halo3-nx (2026-11-03, banjo_renut_replay_inherits): the device words this recording set, a bit a word, against the
   // device at its Begin; the ranges it did not set, which a replay takes from the running device (BuildInheritRuns).
-  u32 set_words[d3d::kDeviceSnapshotSize / 4 / 32] = {};
+  // renut-ultimate (port 67, 2026-11-10, blur-nx): rounded up. NoteSetWords and BuildInheritRuns index it with at / 128
+  // up to kDeviceSnapshotSize, so a snapshot that does not end on 128 bytes read and wrote its last words one past the
+  // end, in inherit_runs (Katamari's and RR6's 12,704 bytes: the last 32 words; Blur's 12,888: the last 88, and its
+  // render thread crashed in BuildInheritRuns at the first replay).
+  u32 set_words[(d3d::kDeviceSnapshotSize / 4 + 31) / 32] = {};
   std::vector<std::pair<u32, u32>> inherit_runs;  // offset, bytes
   bool inherit_built = false;
   // renut-ultimate (audit, 2026-11-07, ultimate_renut_replay_inherit_same): the inherited runs' bytes as op 0 recorded them
@@ -465,11 +470,16 @@ struct HostCommandBuffer {
   std::vector<SortEntry> sort_entries;
   std::vector<SortPair> sort_pairs;
   std::atomic<u32> sort_state{0};
-  void ClearSortPlan() {
+  // blur-nx (2026-11-10, port 76; its key 215: blur_renut_stack_surface_headers): the ops recorded with a stack surface
+  // bound as a target, by op index (ascending), with that surface's header as it was then: a recording replays long
+  // after its function returned.
+  std::vector<std::pair<u32, StackHeaderSet>> stack_headers;
+  void ClearSortPlan() {  // (called where a buffer starts a new recording: the stack headers go with the old ops too)
     sort_runs.clear();
     sort_entries.clear();
     sort_pairs.clear();
     sort_state.store(0, std::memory_order_relaxed);
+    stack_headers.clear();
   }
 };
 std::atomic<uint64_t> g_recording_ids{0};
@@ -1866,6 +1876,17 @@ inline uint64_t PacketKeyOf(const OpCall &c) {
   return k ? k : 1;
 }
 
+// blur-nx (2026-11-10, port 76; its key 215: blur_renut_stack_surface_headers): the headers recorded with op 'op_index',
+// or nullptr.
+const StackHeaderSet *StackHeadersOf(const HostCommandBuffer &buffer, size_t op_index) {
+  const auto &list = buffer.stack_headers;
+  if (list.empty())
+    return nullptr;
+  const auto it = std::lower_bound(list.begin(), list.end(), op_index,
+                                   [](const std::pair<u32, StackHeaderSet> &e, size_t i) { return e.first < i; });
+  return it != list.end() && it->first == op_index ? &it->second : nullptr;
+}
+
 Op *NewOp(u32 device_va, OpKind kind, HostCommandBuffer **out_buffer) {
   const u32 command_buffer = RecordingBuffer(device_va);
   auto *device = GuestPtr<d3d::Device>(device_va);
@@ -1915,6 +1936,12 @@ Op *NewOp(u32 device_va, OpKind kind, HostCommandBuffer **out_buffer) {
   const bool first = buffer.ops.size() == 1;
   const auto *bytes = reinterpret_cast<const u8 *>(device);
   NoteSetWords(buffer, set, bytes);  // halo3-nx (2026-11-03)
+  {
+    StackHeaderSet headers;  // blur-nx (2026-11-10, port 76; its key 215: blur_renut_stack_surface_headers)
+    CaptureStackHeaders(bytes, headers);
+    if (headers.count)
+      buffer.stack_headers.emplace_back(u32(buffer.ops.size() - 1), headers);
+  }
   if (kind == OpKind::Draw) {
     u32 vs_word;
     std::memcpy(&vs_word, bytes + d3d::kDeviceOffsetVertexShader, 4);
@@ -2616,7 +2643,9 @@ void Replay(const u8 *running, const BufferSet &buffers, u32 command_buffer_va, 
               hint_plain = 0;
               hint_fields = 0;
             }
+            SetReplayStackHeaders(StackHeadersOf(buffer, e.op));  // blur-nx (2026-11-10, port 76; its key 215)
             DrawStateLocked(state, CallOf(sop.call, arena), &constants);
+            SetReplayStackHeaders(nullptr);
             g_chain_hint = {};
             if (kinds)
               NoteDrawKind(RenderTicks() - entry_start);
@@ -2867,7 +2896,9 @@ void Replay(const u8 *running, const BufferSet &buffers, u32 command_buffer_va, 
       }
       if (op.binding)
         ApplyBindingLocked(op.binding);  // halo3-nx (2026-11-03)
+      SetReplayStackHeaders(StackHeadersOf(buffer, op_index));  // blur-nx (2026-11-10, port 76; its key 215)
       DrawStateLocked(state, call, &constants);
+      SetReplayStackHeaders(nullptr);
       g_draw_slot_extents = nullptr;
       g_draw_resources = nullptr;
       g_chain_hint = {};  // only for the draw itself
@@ -2878,15 +2909,19 @@ void Replay(const u8 *running, const BufferSet &buffers, u32 command_buffer_va, 
     }
     case OpKind::Clear:
       merge_prev = nullptr;
+      SetReplayStackHeaders(StackHeadersOf(buffer, op_index));  // blur-nx (2026-11-10, port 76; its key 215)
       ClearStateLocked(state, op.flags, op.has_rect ? &op.rect : nullptr, op.color, op.depth,
                        op.stencil);
+      SetReplayStackHeaders(nullptr);
       break;
     case OpKind::Resolve:
       merge_prev = nullptr;
+      SetReplayStackHeaders(StackHeadersOf(buffer, op_index));  // blur-nx (2026-11-10, port 76; its key 215)
       ResolveStateLocked(state, op.flags, op.has_rect ? &op.rect : nullptr, op.dest_texture,
                          op.has_dest_format ? &op.dest_format : nullptr, op.dest_x, op.dest_y,
                          op.dest_level, op.dest_slice, op.has_color ? op.color : nullptr,
                          op.depth, op.stencil);
+      SetReplayStackHeaders(nullptr);
       break;
     case OpKind::Run:
       // The nested buffer runs on this op's state: complete its constants.
