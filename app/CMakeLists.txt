@@ -64,6 +64,14 @@ endif()
 if(SASRT_VMX_FUSED_MADD)
     add_compile_definitions(REX_VMX_FUSED_MADD)
 endif()
+# blur-nx (2026-11-12, the user: "Please do the fmadds change"): the scalar fmadds / fmsubs / fnmadds / fnmsubs rounded once
+# in single precision, as the Xenon does (tools/fma_single.py, sdk/include/rex/ppc/fma_single.h), instead of the double
+# fused multiply-add rounded again to single: one unit in the last place apart in rare cases (about one operation in a
+# few hundred million), and single-precision chains stay in float registers. OFF: the double rounding, as before.
+option(BLUR_FMADDS_SINGLE "Scalar fmadds and kin rounded once in single precision (the Xenon's rounding; not bit-exact to the double form)" ON)
+if(NOT BLUR_FMADDS_SINGLE)
+    add_compile_definitions(REX_FMADDS_DOUBLE_ROUNDING)
+endif()
 include(generated/rexglue.cmake)
 
 # banjo-nx (from sa2-nx): the optimised codegen. The build re-runs the generator by itself whenever an input in

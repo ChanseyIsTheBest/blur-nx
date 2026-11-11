@@ -16,6 +16,8 @@
 
 #include "../me/me_verify.h"
 
+#include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -36,6 +38,7 @@
 #include "hot/blur_gather.h"
 #include <rex/ppc/vec_batch2.h>  // blur-nx (2026-11-11): the dot-product merges (VecBatch2 below)
 #include "hot/blur_swap.h"  // blur-nx (2026-11-12): word swaps for lane-wise natives (VecBatch3 below)
+#include <rex/ppc/fma_single.h>  // blur-nx (2026-11-12): fmadds rounded once (FmaSingle below)
 
 namespace {
 
@@ -465,6 +468,62 @@ void VecBatch3(Tally& t) {
   }
 }
 
+// blur-nx (2026-11-12, the user: "Please do the fmadds change"): rex/ppc/fma_single.h. On float inputs FmaddsSingle must be
+// a * b + c rounded once to single: against a quad-precision reference where long double is wider than 2 * 24 + 2 bits
+// (the AArch64's IEEE quad: the product exact, the sum rounded to 113 bits, then to 24, which cannot differ from one
+// rounding). On inputs that are not floats it must be the double form exactly. Random values, cancellations
+// (c near -a * b), denormals, signed zeros and infinities; NaNs only checked to stay NaN.
+void FmaSingle(Tally& t) {
+  uint32_t seed = 0x3C6EF372u;
+  const auto rnd = [&](int spread) {
+    const uint32_t x = Lcg(seed);
+    const uint32_t exp = 127u + (Lcg(seed) % uint32_t(2 * spread + 1)) - uint32_t(spread);
+    return std::bit_cast<float>((x & 0x807FFFFFu) | (std::min(exp, 254u) << 23));
+  };
+  static const uint32_t kSpecial[] = {0x00000000u, 0x80000000u, 0x00000001u, 0x807FFFFFu, 0x00800000u, 0x7F800000u,
+                                      0xFF800000u, 0x3F800000u, 0xBF800000u, 0x7F7FFFFFu, 0x34000000u, 0x00400000u};
+  int checked_exact = 0;
+  for (int r = 0; r < 600; ++r) {
+    float a, b, c;
+    if (r < 144) {
+      a = std::bit_cast<float>(kSpecial[r % 12]);
+      b = std::bit_cast<float>(kSpecial[(r / 12) % 12]);
+      c = rnd(20);
+    } else if (r < 400) {
+      a = rnd(r < 300 ? 8 : 60);
+      b = rnd(r < 300 ? 8 : 60);
+      c = rnd(r < 300 ? 8 : 60);
+    } else {
+      a = rnd(10);
+      b = rnd(10);
+      // a cancellation: c is -a*b rounded to single, nudged by a few units in its last place
+      const float p = -(a * b);
+      c = std::bit_cast<float>(std::bit_cast<uint32_t>(p) + (Lcg(seed) % 7u) - 3u);
+    }
+    const double da = Opaque(double(a)), db = Opaque(double(b)), dc = Opaque(double(c));
+    const double got = rex::ppc::FmaddsSingle(da, db, dc);
+    const std::string in = fmt::format("{:08X} {:08X} {:08X}", std::bit_cast<uint32_t>(a), std::bit_cast<uint32_t>(b),
+                                       std::bit_cast<uint32_t>(c));
+    if constexpr (sizeof(long double) > 8) {
+      const long double exact = (long double)a * (long double)b + (long double)c;
+      const float want = float(exact);
+      if (std::isnan(want)) {
+        t.Expect("FmaddsSingle NaN", in, std::isnan(got), true);
+      } else {
+        t.Expect("FmaddsSingle", in, std::bit_cast<uint64_t>(got), std::bit_cast<uint64_t>(double(want)));
+        ++checked_exact;
+      }
+    }
+    // an input that is not a float: the double form, bit for bit
+    const double wide = Opaque(double(a) * (1.0 + 0x1p-40));
+    if (!rex::ppc::IsExactSingle(wide)) {
+      t.Expect("FmaddsSingle wide", in, std::bit_cast<uint64_t>(rex::ppc::FmaddsSingle(wide, db, dc)),
+               std::bit_cast<uint64_t>(rex::ppc::FmaddsDouble(wide, db, dc)));
+    }
+  }
+  (void)checked_exact;
+}
+
 }  // namespace
 
 namespace banjo {
@@ -479,6 +538,7 @@ void FormsSelfCheck() {
   VecBatch1(t);
   VecBatch2(t);
   VecBatch3(t);
+  FmaSingle(t);
   if (t.wrong) {
     for (int i = 0; i < t.wrong; ++i) ::me::native::VerifyDifference();
     REXLOG_ERROR("[enhancements] DIFFERENCE: instruction forms self-check: {} of {} results are NOT as expected (see the lines "

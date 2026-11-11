@@ -170,6 +170,10 @@ def main():
     # macros (their default is the expression the generator writes; CMake SASRT_VMX_FAST_ESTIMATES / SASRT_VMX_FUSED_MADD,
     # ON, give the faster AArch64 forms). Before the copies, so they get the macros too.
     run(tool('vmx_float_macros.py'), '--gen', gen)
+    # blur-nx (2026-11-12, the user: "Please do the fmadds change"): fmadds / fmsubs / fnmadds / fnmsubs rounded once in
+    # single precision, as the Xenon does (sdk/include/rex/ppc/fma_single.h; not bit-exact to the double rounding the
+    # generator wrote; CMake BLUR_FMADDS_SINGLE=OFF gives it back). Before the copies, so they take the same form.
+    run(tool('fma_single.py'), '--gen', gen)
     if not scratch:
         # The localized native copies (app/generated/hot, from sa2-nx): made from the text as it stands after every
         # step above, so each copy matches the function the build compiles. The list is app/src/cpu/hot/localized.txt;

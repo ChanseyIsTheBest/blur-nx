@@ -458,20 +458,20 @@ template <class S>
   ctx.fpscr.disableFlushModeUnconditional();
   Fence();
   PinAll(f27, f28, f0m);
-  double g13 = double(float(std::fma(f28, f28, f0m)));  // fmadds f13,f28,f28,f0
+  double g13 = REX_FMADDS(f28, f28, f0m);  // fmadds f13,f28,f28,f0
   double g12 = double(float(1.0 / std::sqrt(g13)));     // frsqrte f12,f13
   const double half = double(F32(REX_RO_U32(0x82001BD0, 0x3F000000)));
   double f31 = double(F32(REX_RO_U32(0x82000BA4, 0x3F800000)));
   double g11 = -g13;                                    // fneg f11,f13
   double g10 = double(float(g12));                      // frsp f10,f12
   double g9 = REX_FMULS(g10, g10);
-  double g8 = double(float(-std::fma(g9, g13, -f31)));  // fnmsubs f8,f9,f13,f31
+  double g8 = (-REX_FMADDS(g9, g13, -f31));  // fnmsubs f8,f9,f13,f31
   double g7 = REX_FMULS(g8, g10);
-  double g6 = double(float(std::fma(g7, half, g10)));  // fmadds f6,f7,f0,f10
+  double g6 = REX_FMADDS(g7, half, g10);  // fmadds f6,f7,f0,f10
   double g5 = REX_FMULS(g6, g6);
-  double g4 = double(float(-std::fma(g5, g13, -f31)));  // fnmsubs f4,f5,f13,f31
+  double g4 = (-REX_FMADDS(g5, g13, -f31));  // fnmsubs f4,f5,f13,f31
   double g3 = REX_FMULS(g4, g6);
-  double g2 = double(float(std::fma(g3, half, g6)));  // fmadds f2,f3,f0,f6
+  double g2 = REX_FMADDS(g3, half, g6);  // fmadds f2,f3,f0,f6
   double g1 = GeZeroAnyMode(g2) ? g2 : f29;           // fsel f1,f2,f2,f29
   double g0 = double(float(g1 * g13));                 // fmuls f0,f1,f13
   double f30 = GeZeroAnyMode(g11) ? f29 : g0;         // fsel f30,f11,f29,f0
@@ -500,7 +500,7 @@ template <class S>
     double c6 = double(float(c11 * f30));
     double c5 = double(float(c11 + f30));
     double c4 = REX_FMULS(c10, c10);
-    double c3 = double(float(std::fma(c6, f30, f30)));
+    double c3 = REX_FMADDS(c6, f30, f30);
     double c2 = REX_FMULS(c5, c12);
     double c1 = REX_FMULS(c8, c4);
     double d12 = REX_FADDS(c7, c4);
@@ -619,7 +619,7 @@ template <class S>
     double y3 = GeZeroAnyMode(y4) ? yzero : y5;
     double y2 = REX_FSUBS(yone, y3);
     double y1 = REX_FMULS(y9, y3);
-    double yr = double(float(std::fma(y2, y8, y1)));  // fmadds f0,f2,f8,f1
+    double yr = REX_FMADDS(y2, y8, y1);  // fmadds f0,f2,f8,f1
     float yrs = float(yr);
     Pin(yrs);
     const uint32_t wr = U32(yrs);

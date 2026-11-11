@@ -347,8 +347,8 @@ template <class S>
       l_f9.f64 = double(float(l_f13.f64 - f0.f64));
       l_f8.f64 = double(float(l_f10.f64 * l_f1.f64));
       l_r10.s64 = l_r10.s64 + 1;
-      l_f7.f64 = double(float(std::fma(l_f9.f64, l_f12.f64, l_f8.f64)));
-      l_f6.f64 = double(float(std::fma(f0.f64, l_f2.f64, l_f7.f64)));
+      l_f7.f64 = REX_FMADDS(l_f9.f64, l_f12.f64, l_f8.f64);
+      l_f6.f64 = REX_FMADDS(f0.f64, l_f2.f64, l_f7.f64);
       const uint32_t ea = 4u + l_r9.u32;
       const float r = float(l_f6.f64);
       uint32_t rw;

@@ -471,8 +471,8 @@ template <class S>
         do {
           const double a0 = fv(a[i * sn + j]), x0 = fv(x[j]);
           const double a1 = fv(a[i * sn + j - 1]), x1 = fv(x[j - 1]);
-          f0 = double(float(std::fma(a0, x0, f0)));    // fmadds f0,f9,f10,f0
-          f13 = double(float(std::fma(a1, x1, f13)));  // fmadds f13,f8,f12,f13
+          f0 = REX_FMADDS(a0, x0, f0);    // fmadds f0,f9,f10,f0
+          f13 = REX_FMADDS(a1, x1, f13);  // fmadds f13,f8,f12,f13
           j -= 2;
         } while (j > i + 1);
       }

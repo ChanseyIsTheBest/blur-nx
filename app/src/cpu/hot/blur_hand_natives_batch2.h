@@ -235,7 +235,7 @@ template <class S>
     uint8_t* d = ::banjo::hot::Raw(base, dst);
     for (uint32_t i = 0; i < n; ++i) {
       const double idx = double(float(double(int64_t(i))));         // fcfid; frsp
-      const double ramp = double(float(std::fma(idx, step, g1)));   // fmadds f2,f6,f0,f1
+      const double ramp = REX_FMADDS(idx, step, g1);   // fmadds f2,f6,f0,f1
       const double in = double(F32(Ld32(p + 4u * i)));              // lfs
       St32(d + 4u * i, U32(float(REX_FMULS(ramp, in))));            // fmuls; stfs
     }
