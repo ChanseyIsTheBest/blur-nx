@@ -371,3 +371,138 @@ template <class S>
   return true;
 }
 }  // namespace n_82521E68
+
+// sub_8251D238 - solves a small dense linear system: r3 = the augmented matrix A (n rows of n + 1 floats, row stride
+// n + 1, the right-hand side in column n), r4 = the solution x (n floats, written), r5 = n; returns r3 = 1. Gaussian
+// elimination with partial pivoting: for each column k the row of the largest |A[i][k]| (i = k..n-1, ties go to the
+// later row; found with fsubs / fsel, the row index carried as a float counter) is swapped with row k (all n + 1
+// columns, each word stored with QuietSingleBits), then 1 / A[k][k] is formed and every row below has
+// A[i][j] = fnmsubs(A[i][k] * A[k][j], 1/pivot, A[i][j]) for j = n down to k; then back substitution from the last row
+// up, the sum of the already solved terms taken in two accumulators (even and odd terms, fmadds) plus one leftover
+// product, x[i] = (A[i][n] - sum) / A[i][i].
+// Console samples (race, job workers 0-2; 3.8 % of one core, 73 on the job workers): spread over the pivot search
+// (+0x140-+0x280), the unrolled elimination body (+0x440-+0x580: 8 + 7 + 3 + 3) and the swap/back-substitution loops;
+// no bucket above 11 %. What the machine copy spends there is address arithmetic recomputed for every element
+// (8-12 integer instructions around each 3-instruction float step), a byte swap on every load and store, a store card
+// byte after every store, and the same element read from memory again (A[i][k] four times per four-column step).
+// The native copies the matrix once into a local array (one pass of loads), runs the same float operations in the same
+// order on it, and stores the matrix (all of it: the words the original does not touch get their own bits back) and x
+// once. Operand order of every fmuls / fmadds / fnmsubs follows the original's (it matters only for NaN payloads: the
+// first element of each unrolled group of four columns multiplies (A[i][k], A[k][j]), the other three and the tail
+// (A[k][j], A[i][k])), single rounding at each step through the REX_F*S macros, the flush mode off as the original
+// (set at its first lfs), pivot row from the same fsel chain. Also left as the original leaves them: the stack
+// doubleword of the last fctiwz at r1 - 176 (written for every column; only the last stays) and, unless
+// REX_NV_SAVES_ELIDE, the zero save slot at r1 - 160.
+// Declines (nothing written): n < 1 or n > 32 (the local array), A or x or the three stack doublewords wrapping 4 GB or
+// crossing the physical-view boundary, A overlapping x, and either overlapping the stack words (the original reads and
+// writes them interleaved).
+// Scratch not reproduced (hand.txt exact=r3): f1-f13, r5-r10 (the leaf locals the original writes back).
+// Constants 0.0, 1.0 and 0.5 (0x82000BA0, 0x82000BA4, 0x82001BD0) are used as literals, as the Switch build folds them.
+namespace n_8251D238 {
+template <class S>
+[[gnu::always_inline]] inline bool Native(PPCContext& __restrict ctx, uint8_t* base, S& s) {
+  using namespace blur_jq012;
+  if (!On(kN8251D238)) [[unlikely]] return false;
+  constexpr int kMax = 32;
+  const int32_t n = ctx.r5.s32;
+  if (n < 1 || n > kMax) [[unlikely]] return false;
+  const uint32_t pa = ctx.r3.u32, px = ctx.r4.u32, sp = ctx.r1.u32;
+  const uint32_t stride = uint32_t(n) + 1u, words = uint32_t(n) * stride, abytes = words * 4u, xbytes = uint32_t(n) * 4u;
+  if (!detail::Straight(pa, abytes) || !detail::Straight(px, xbytes) || !detail::Straight(sp - 176u, 24)) [[unlikely]]
+    return false;
+  if (Hit(pa, abytes, px, xbytes) || Hit(pa, abytes, sp - 176u, 24) || Hit(px, xbytes, sp - 176u, 24)) [[unlikely]]
+    return false;
+  s.Hand(kN8251D238, abytes);
+  ctx.fpscr.disableFlushMode();  // the original's first lfs: everything below runs with the mode off
+  Fence();
+  const int sn = int(stride);
+  uint32_t a[kMax * (kMax + 1)];
+  uint32_t x[kMax];
+  {
+    const uint8_t* src = ::banjo::hot::Raw(base, pa);
+    for (uint32_t w = 0; w < words; ++w) a[w] = Ld32(src + 4u * w);
+  }
+  const auto fv = [](uint32_t b) { return double(F32(b)); };
+  const auto absd = [](double v) { return D64(U64(v) & 0x7FFFFFFFFFFFFFFFull); };
+  int64_t last_fctiwz = 0;
+  for (int k = 0; k < n; ++k) {
+    // pivot search: rows k+1 .. n-1 against the best so far (|A[k][k]| to begin with)
+    int best = k;
+    double best_val = absd(fv(a[k * sn + k]));
+    for (int i = k + 1; i < n; ++i) {
+      const double av = absd(fv(a[i * sn + k]));
+      const double d = REX_FSUBS(av, best_val);  // fsubs; fsel(d >= 0, new, old) for the value and the row counter
+      if (::rex::ppc::GeZeroAnyMode(d)) {
+        best = i;
+        best_val = av;
+      }
+    }
+    last_fctiwz = ::rex::ppc::fctiwz(REX_FADDS(double(best), 0.5));  // fadds f0,f11,f8; fctiwz; stfd -176(r1)
+    // swap rows k and best, every column, both words quieted
+    for (int j = 0; j < sn; ++j) {
+      const uint32_t u = a[k * sn + j], v = a[best * sn + j];
+      a[k * sn + j] = ::rex::ppc::QuietSingleBits(v);
+      a[best * sn + j] = ::rex::ppc::QuietSingleBits(u);
+    }
+    const double inv = REX_FDIVS(1.0, fv(a[k * sn + k]));  // fdivs f0,f12,f0 (also executed for the last column)
+    if (k + 1 < n) {
+      const int cols = n - k + 1;  // columns n down to k
+      const int grouped = (cols / 4) * 4;
+      for (int i = k + 1; i < n; ++i) {
+        for (int c = 0; c < cols; ++c) {
+          const int j = n - c;
+          const double m = fv(a[i * sn + k]);  // read again at every step, as the original (the last step changes it)
+          const double ak = fv(a[k * sn + j]);
+          const bool first_of_group = c < grouped && (c & 3) == 0;
+          const double prod = first_of_group ? REX_FMULS(m, ak) : REX_FMULS(ak, m);
+          const double old = fv(a[i * sn + j]);
+          a[i * sn + j] = U32(float(-std::fma(prod, inv, -old)));  // fnmsubs
+        }
+      }
+    }
+  }
+  // back substitution
+  for (int i = n - 1; i >= 0; --i) {
+    double f0 = 0.0, f13 = 0.0, f11 = 0.0;
+    const int count = n - 1 - i;
+    if (count > 0) {
+      int j = n - 1;
+      if (count >= 2) {
+        do {
+          const double a0 = fv(a[i * sn + j]), x0 = fv(x[j]);
+          const double a1 = fv(a[i * sn + j - 1]), x1 = fv(x[j - 1]);
+          f0 = double(float(std::fma(a0, x0, f0)));    // fmadds f0,f9,f10,f0
+          f13 = double(float(std::fma(a1, x1, f13)));  // fmadds f13,f8,f12,f13
+          j -= 2;
+        } while (j > i + 1);
+      }
+      if (j > i) f11 = REX_FMULS(fv(a[i * sn + j]), fv(x[j]));
+      f0 = REX_FADDS(f13, f0);
+      f11 = REX_FADDS(f0, f11);
+    }
+    const double diff = REX_FSUBS(fv(a[i * sn + n]), f11);
+    x[i] = U32(float(REX_FDIVS(diff, fv(a[i * sn + i]))));
+  }
+  Fence();  // the float work is finished before any later flush-mode switch
+#if defined(REX_NV_SAVES_ELIDE)
+  constexpr bool kSave = false;
+#else
+  constexpr bool kSave = true;
+#endif
+  if (!s.Note(pa, abytes) || !s.Note(px, xbytes) || !s.Note(sp - 176u, 8) || (kSave && !s.Note(sp - 160u, 8))) [[unlikely]]
+    return true;  // the guard's logged form's run is over
+  ::banjo::hot::Card(base, pa, abytes);
+  ::banjo::hot::Card(base, px, xbytes);
+  ::banjo::hot::Card(base, sp - 176u, 24);
+  {
+    uint8_t* d = ::banjo::hot::Raw(base, pa);
+    for (uint32_t w = 0; w < words; ++w) St32(d + 4u * w, a[w]);
+    uint8_t* e = ::banjo::hot::Raw(base, px);
+    for (int i = 0; i < n; ++i) St32(e + 4 * i, x[i]);
+    St64(::banjo::hot::Raw(base, sp - 176u), uint64_t(last_fctiwz));
+    if (kSave) St64(::banjo::hot::Raw(base, sp - 160u), 0);  // stfd f31,-160(r1): the copy's local f31 is zero
+  }
+  ctx.r3.u64 = 1;
+  return true;
+}
+}  // namespace n_8251D238

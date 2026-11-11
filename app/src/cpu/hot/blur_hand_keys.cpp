@@ -11,7 +11,7 @@
 
 #include <rex/cvar.h>
 
-#include "cpu/hot/banjo_hand_natives.h"
+#include "cpu/hot/banjo_hand_ids.h"  // the ids alone: banjo_hand_natives.h needs the generated pch
 
 #define BLUR_HAND_KEY(ADDR, WHAT)                                                                                   \
   REXCVAR_DEFINE_BOOL(blur_hand_##ADDR, true, "Blur/Enhancements",                                                 \

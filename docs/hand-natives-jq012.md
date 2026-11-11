@@ -2,7 +2,7 @@
 
 The request: ten of the twenty hottest game functions of the console race profile (2026-11-11 15:18, rebased build
 46b3f6d6, report 17 onward), by the gate of [optimising-functions.md](optimising-functions.md#the-hand-track): a native
-only where the samples show a cost a rewrite removes. Two are written, eight are not. Files:
+only where the samples show a cost a rewrite removes. Three are written (the sine, sub_82521E68, and in a second round sub_8251D238), seven are not. Files:
 `app/src/cpu/hot/blur_hand_natives_jq012.draft.h` (the code), `app/src/cpu/hot/hand_jq012.draft.txt` (the hand.txt lines
 and the reasons), this file. Nothing was built or run: every native below is untested and needs the guard (and the sine
 a run that reaches it) before it is kept.
@@ -12,7 +12,7 @@ a run that reaches it) before it is kept.
 | sub_82954478 | written (the sine) | 2.3 % |
 | sub_82521E68 | written | 2.5 % |
 | sub_8251E6F0 | not written (finding for the generator) | 4.9 % |
-| sub_8251D238 | not written, flat | 3.8 % |
+| sub_8251D238 | written (whole function, n <= 32) | 3.8 % |
 | sub_824F35D8 | not written, dependent chain and loads | 3.0 % |
 | sub_8250A7E8 | not written, callees | 3.0 % |
 | sub_82621458 | not written, loads and a call | 2.8 % |
@@ -117,6 +117,65 @@ Things to check:
   sine's values only (the guard compares final memory).
 - `s.Hand(..., 0)`: no size counted.
 
+
+### sub_8251D238: dense linear solve (second round)
+
+The first reading called the profile flat (73 samples, no bucket above 11 %) and stopped. The coordinator asked for the
+removable overhead of a flat profile, and this function has plenty: address arithmetic recomputed for every element,
+byte-swapped loads and stores, a store-card byte after every store, `A[i][k]` read four times per step. It is a
+Gaussian elimination with partial pivoting: `r3` = augmented matrix (n rows of n+1 floats, right-hand side in column n),
+`r4` = x (written), `r5` = n; returns `r3 = 1`. Pivot search per column with `fsubs` / `fsel` (ties to the later row,
+row index carried as a float counter), the row swap over all n+1 columns with `QuietSingleBits` on both words, then
+`inv = 1/A[k][k]` and for each lower row `A[i][j] = fnmsubs(A[i][k]*A[k][j], inv, A[i][j])` for j = n down to k, then back
+substitution with two accumulators (even/odd terms by `fmadds`) and one leftover product.
+
+The native copies the matrix into a local array once, runs the same operations in the same order, and stores the whole
+matrix and x once. The generated code's four unrolled loops (pivot search by 4 rows, elimination by 4 columns, tail loops,
+back substitution by 2) were all reduced to the sequential semantics they implement; I traced the unrolled bodies
+element by element (row/column pointers, counters in the `fsel` chains, the mid-group re-reads of `A[i][k]`, which is
+only changed by the last column of the row). Operand order of every `fmuls`/`fmadds`/`fnmsubs` is kept as the original
+has it (the first column of each unrolled group of four multiplies `(A[i][k], A[k][j])`, the other three and the tail
+`(A[k][j], A[i][k])`), because with two NaN operands the result payload depends on it.
+
+Exact: `r3`. Scratch not reproduced: f1-f13, r5-r10. Stores: the matrix (all n*(n+1) words: untouched words are written
+back with their own bits, which is the same memory), x, the doubleword of the last `fctiwz` at `r1-176`, and unless
+`REX_NV_SAVES_ELIDE` the zero slot at `r1-160`. The flush mode is set off first, as the original does at its first `lfs`.
+Declines: n < 1 or n > 32, any range wrapping or crossing the physical boundary, A overlapping x, A or x overlapping
+the three stack doublewords.
+
+Doubts to check first: (1) the maximum n: I do not know the real sizes; if they exceed 32 the native never runs (count
+`s.Hand` calls versus the function's calls); (2) the constants 0.0 / 1.0 / 0.5 are literals (the PC build checks them against
+memory in the original via `REX_RO_U32`); (3) NaN operand order in the pivot search `fsubs(|a|, best)` and in the
+elimination as described; (4) the early `n <= 0` path is declined; (5) pivot row is taken from the loop index, not read
+back from the `fctiwz` result (they are equal for counters below 2^23); the `fctiwz` image is still computed and stored.
+
+## Second round: the other seven, in part or in callees
+
+The coordinator asked for the remaining eight to be done whole, in part (the hot path) or through their callees. Result:
+sub_8251D238 is written (above). For the rest I looked for the three kinds of removable work and for hot callees, and did
+not find a native that I can reproduce exactly and that removes something the samples show:
+
+- **Callees (stacks and rows of the profile, JQ Worker 0-2, race).** The callees of sub_8250A7E8, sub_82525FA8,
+  sub_825087A0 and sub_82621458 carry little each: sub_826803B0 2.1 % (worker 1) and 2.5 % (worker 2), 1.3 % (worker 0);
+  sub_82507988 1.5 % (worker 0), 0.6 % (worker 1); sub_8251F778 0.9 / 0.8 / 0.4 %; sub_8251F630 0.7 / 0.6 / 0 %; sub_825069C8
+  1.1 % (worker 2); everything else at or below 0.9 %. Only sub_826803B0 reaches the 2 % floor, and only on two of the
+  three workers. It is 0x2ca8 bytes of ARM with 9 real calls of its own and a profile as flat as its caller's (35 samples,
+  largest bucket 8.6 %, the rest single samples over 25 buckets): no native. No new `kN` names are needed.
+- **sub_8251E6F0.** Its stvewx128 lane reload is the generator's. Of the rest, +0x2200 (12 samples) sits on `fadd d13,d11,d0`
+  after a chain of `lfs`-derived loads and `fcvt`, a dependent chain; +0x13c0 (4) is `ldr q30,[sp,#1136]` right after a
+  `str q31,[sp,#1136]` of the previous step (the same spill pattern, a full-width vector so it forwards). Nothing
+  else I can remove without reproducing the 820-instruction function as a copy of itself.
+- **sub_824F35D8.** The twelve plane vectors are loaded and byte-reversed (`ldr q` + `tbl`) once per object inside the
+  loop, which looks like repeated input. I could not show that they are the same for every object (the function has
+  many paths and the plane source depends on the object type), so a hoist cannot be proven exact; the profile (11 of 45
+  samples on the field load after the compare-and-branch chain) says the time is in the dependent chain.
+- **sub_829D2E80.** A Huffman/LZ decoder. The machine copy already keeps the decoder state (bit buffer, position, table
+  bases r15-r20) in host registers: they are `l_` locals of the leaf copy. What remains per byte is the card byte after each
+  `stbx` and the table load, and the 22 samples are on the table loads. The only removable part is marking the cards once per
+  run, 5-8 samples; not worth a hand copy of a 266-instruction decoder.
+- **sub_82621458, sub_82525FA8, sub_8250A7E8, sub_825087A0.** Real callees (a native would need the main session's
+  open-call handling and its guard cannot repeat it) and, apart from the `msr fpcr` stubs of sub_82525FA8, flat.
+
 ## Not written
 
 ### sub_8251E6F0 (4.9 %): the largest, and a finding for the generator
@@ -135,15 +194,7 @@ rewritten statement by statement with only that changed. That is what the machin
 `vgetq_lane`, so the stored value never goes through memory), where it helps every function. The other big bucket
 (`+0x2200`, 12 samples, 10 on `fadd d13,d11,d0` after the `lfs` chain) is a dependent chain of loads and float adds.
 
-### sub_8251D238 (3.8 %): flat
-
-An LU-style elimination (partial pivoting, scaled; `r5` = n, matrix stride `n + 1`) on a small float matrix in four nested
-loops. 73 samples, no bucket above 11 % (8 of 73), the top twelve hold 49: address arithmetic, byte-swapped element loads
-and stores (each store with a card byte), `fnmsub` chains and the pivot search. The loop bodies recompute row addresses
-from scratch and card-mark per element, but the sampled instructions are loads, the `fnmsub`/`fcvt` chain and the store
-that waits on it (`+0x4f0`, 5), not a stall one of the listed kinds. A rewrite would be a new implementation of a
-numerically sensitive algorithm (single rounding at every `fadds`/`fmuls`/`fnmsubs`, fsel-based pivot choices) with no
-single removable cost. Left alone.
+### sub_8251D238 moved to "Written" (second round), see below.
 
 ### sub_824F35D8 (3.0 %): a dependent chain and object loads
 

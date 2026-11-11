@@ -1,2 +1,11 @@
 # blur-nx: machine copies (tools/localize_native.py; the bulk list by tools/switch_hot_bulk.py --merge,
 # docs/optimising-functions.md).
+# 2026-11-11: the functions with a hand-written native (hand.txt): each its own hook, the native in front of the copy.
+822E4698 hand-written native in front of its copy (hand.txt)
+822EA3C0 hand-written native in front of its copy (hand.txt)
+822EA500 hand-written native in front of its copy (hand.txt)
+822EE628 hand-written native in front of its copy (hand.txt)
+822E4CE0 hand-written native in front of its copy (hand.txt)
+82954478 hand-written native in front of its copy (hand.txt)
+82521E68 hand-written native in front of its copy (hand.txt)
+8251D238 hand-written native in front of its copy (hand.txt)
