@@ -52,6 +52,13 @@ SHIPPED = {
     # 3 to 1-2 % idle and audio stuttered; watch core 3's idle and the audio lines in a four-core run. No effect with
     # three cores.
     'banjo_system_core_xma': 'true  # blur-nx: the XMA Decoder on core 3 in four-core mode (the user\'s request)',
+    # blur-nx (2026-11-11, RR6's word on base port 77, the user's rule "make things that break graphics in specific
+    # games off in the base by default"): two keys the base turns off that Blur needs, set here so a later base keeps
+    # them on for Blur. 218: Blur's motion-blur composite (the wipe left out when another view wrote the EDRAM since);
+    # replay inheritance: Blur's recorded command buffers inherit the device state (blur-nx's port 67 crash was at the
+    # first replay).
+    'blur_renut_wipe_overwritten': 'true  # blur-nx: Blur needs it (off by default in the base since port 77)',
+    'banjo_renut_replay_inherits': 'true  # blur-nx: Blur\'s replays inherit (off by default in the base since port 77)',
     'banjo_xma_frame_cache': 'false',
     'banjo_shader_misses': '"sdmc:/switch/blur-nx/shader_misses"',
     'log_level': '"info"',

@@ -581,6 +581,8 @@ banjo_renut_diag_terrain = false
 renut_shadow_resolution = "1x"
 renut_ambient_occlusion = "Half"
 banjo_xma_frame_cache = false
+blur_renut_wipe_overwritten = true  # blur-nx: Blur needs it (off by default in the base since port 77)
+banjo_renut_replay_inherits = true  # blur-nx: Blur's replays inherit (off by default in the base since port 77)
 
 [input_p1]
 a = ""
