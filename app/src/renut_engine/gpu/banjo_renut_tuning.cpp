@@ -710,7 +710,10 @@ REXCVAR_DEFINE_BOOL(blur_renut_surface_size_guard, true, "Banjo/Renut",
                     "the stack, read after the stack was reused, came out as 12120x26733 and the like; in Ryujinx each "
                     "failed allocation set off a memory emergency). Off: Renut tries")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(blur_renut_wipe_overwritten, true, "Banjo/Renut",
+// renut-ultimate (2026-11-11, port 77; the user's rule: a key that breaks graphics in a specific game is off by
+// default): vivapinata-nx's fade frames (a clear through another layout at the same EDRAM base, which covers every tile
+// of the mask's target) came out 5-8 % white with this on, 0 % off as on the SDK's emulated GPU. blur-nx sets it true.
+REXCVAR_DEFINE_BOOL(blur_renut_wipe_overwritten, false, "Banjo/Renut",
                     "From blur-nx (2026-11-10, port 76; A/B 218): vivapinata-nx's EDRAM wipe (a clear through another "
                     "layout, applied at the wiped target's next resolve when nothing wrote it since) is left out when "
                     "another target over the same EDRAM tiles was drawn or cleared after the wipe: on the console that "
@@ -732,7 +735,12 @@ REXCVAR_DEFINE_BOOL(blur_renut_ms_slice_resolve, true, "Banjo/Renut",
                     "copy into that slice. plume's region resolve has no slice: every face landed in face 0. Blur renders "
                     "its 256x256 environment cube 4x and resolves the six faces: five were black. Off: as before")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(blur_renut_edram_inherit, true, "Banjo/Renut",
+// renut-ultimate (2026-11-11, port 86; the user's rule: a key that breaks graphics in a specific game is off by default):
+// on the console (deko3d) it drew a band of garbage tiles over the top 960x48 pixels of vivapinata-nx's title screen
+// (12x3 EDRAM tiles of 80x16, dark scrambled scene content), at first entry and after every attract fly-through; off
+// (alone or with ports 75-76's other keys), no strip; the PC (D3D12) shows none either way, so it is the deko3d side
+// (port 76 added the multisampled source's bind there, never run before). blur-nx sets it true.
+REXCVAR_DEFINE_BOOL(blur_renut_edram_inherit, false, "Banjo/Renut",
                     "From blur-nx (2026-11-11, port 76; A/B 220): before a draw that keeps part of its target (a write "
                     "mask without every channel, or blending), the target takes what other views wrote over its EDRAM "
                     "tiles since its own last write, through the console's tile and sample layout "
@@ -1082,6 +1090,8 @@ const char *AbName(int target) {
   // blur-nx's own (not in the base).
   case 210: return "the 2_10_10_10_FLOAT / 8_8_8_8 views of one EDRAM reinterpreted (blur_renut_view_reinterpret)";
   case 214: return "multisampled region resolves through a whole-target staging image (blur_renut_tile_resolve_staging)";
+  // vivapinata-nx (2026-11-11, port 87; its number, 85 being its own vivapinata_worker_idle_wait, not in the base).
+  case 86: return "a tile's command buffer run and its twin replayed once for both tiles (vivapinata_tiles_once; off half: once per tile)";
   // blur-nx (2026-11-10/11, port 76; its keys, the same numbers; 210 and 214 not ported).
   case 211: return "an EXPAND resolve sampled as its FLOAT twin through the resolve's texture (blur_renut_expand_alias)";
   case 212: return "a partial resolve keeps a destination of another format and converts (blur_renut_resolve_keep_dest)";
@@ -1382,6 +1392,8 @@ void StatsGameFrame() {
               g_depth_only_draws.exchange(0, std::memory_order_relaxed),
               g_kind_nothing.exchange(0, std::memory_order_relaxed), g_kind_partial.exchange(0, std::memory_order_relaxed));
   REXLOG_INFO("{}", sasrt::gpu_round::Report());  // sasrt-nx (2026-11-08): the GPU round's counts
+  // sasrt-nx (2026-11-11, port 82; its GPU list's rows 1, 2 and 4; UNTESTED): whether this game hits them at all.
+  REXLOG_INFO("{}", sasrt::gpu_round::UntestedReport());
   REXLOG_INFO("[renut] depth resolve words: {} binds through the resolve's own texture (banjo_gpu_depth_words_view), "
               "{} with the copy (made only when resolved since); {} binds of a depth resolve's float target; {} colour "
               "resolves drawn (banjo_deko3d_draw_resolves); resolves of an unchanged source not done again "

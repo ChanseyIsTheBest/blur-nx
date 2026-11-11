@@ -169,6 +169,8 @@ namespace plume {
 
 
     Deko3DOptions g_deko3dOptions;
+    // sasrt-nx (2026-11-11, port 82; its GPU list's row 2; UNTESTED): preciseStencilWrite's count.
+    std::atomic<uint64_t> g_deko3dPreciseStencilSaved{0};
     void Deko3DSetOptions(const Deko3DOptions &options) { g_deko3dOptions = options; }
 
     static Deko3DShaderCacheLookup g_cacheLookup;
@@ -958,6 +960,88 @@ namespace plume {
 
     void Deko3DSetDedicatedTargets(bool on) { g_dedicatedTargets.store(on, std::memory_order_relaxed); }
 
+    // sasrt-nx (2026-11-11, Deko3DSetTargetBlockCacheMb)
+    static std::atomic<uint64_t> g_targetCacheCap{0};
+    static std::atomic<uint64_t> g_targetCacheBytesNow{0}, g_targetCacheHits{0}, g_targetCacheMisses{0},
+        g_targetCacheKept{0}, g_targetCacheEvicted{0}, g_targetCacheReleased{0};
+    static std::atomic<uint32_t> g_targetCacheBlocks{0};
+    void Deko3DSetTargetBlockCacheMb(uint32_t mb) { g_targetCacheCap.store(uint64_t(mb) << 20, std::memory_order_relaxed); }
+    void Deko3DTargetCacheFigures(Deko3DTargetCacheInfo &out) {
+        out.bytes = g_targetCacheBytesNow.load(std::memory_order_relaxed);
+        out.blocks = g_targetCacheBlocks.load(std::memory_order_relaxed);
+        out.hits = g_targetCacheHits.load(std::memory_order_relaxed);
+        out.misses = g_targetCacheMisses.load(std::memory_order_relaxed);
+        out.kept = g_targetCacheKept.load(std::memory_order_relaxed);
+        out.evicted = g_targetCacheEvicted.load(std::memory_order_relaxed);
+        out.released = g_targetCacheReleased.load(std::memory_order_relaxed);
+    }
+
+    void Deko3DDevice::cacheTargetBlockLocked(DkMemBlock block, uint32_t size) {
+        const uint64_t cap = g_targetCacheCap.load(std::memory_order_relaxed);
+        if (!cap || size > cap) {
+            destroyBlock(block);
+            return;
+        }
+        targetCache.push_back({block, size});
+        targetCacheBytes += size;
+        g_targetCacheKept.fetch_add(1, std::memory_order_relaxed);
+        // over the cap: the oldest go
+        size_t drop = 0;
+        while (targetCacheBytes > cap && drop < targetCache.size()) {
+            destroyBlock(targetCache[drop].block);
+            targetCacheBytes -= targetCache[drop].size;
+            ++drop;
+        }
+        if (drop) {
+            targetCache.erase(targetCache.begin(), targetCache.begin() + drop);
+            g_targetCacheEvicted.fetch_add(drop, std::memory_order_relaxed);
+        }
+        g_targetCacheBytesNow.store(targetCacheBytes, std::memory_order_relaxed);
+        g_targetCacheBlocks.store(uint32_t(targetCache.size()), std::memory_order_relaxed);
+    }
+
+    DkMemBlock Deko3DDevice::takeCachedTargetBlockLocked(uint32_t size, uint32_t &blockSize) {
+        if (targetCache.empty()) {
+            g_targetCacheMisses.fetch_add(1, std::memory_order_relaxed);
+            return nullptr;
+        }
+        // the smallest block of the size or up to an eighth bigger
+        const uint64_t most = uint64_t(size) + size / 8;
+        size_t best = SIZE_MAX;
+        for (size_t i = 0; i < targetCache.size(); i++) {
+            const uint32_t s = targetCache[i].size;
+            if (s >= size && s <= most && (best == SIZE_MAX || s < targetCache[best].size))
+                best = i;
+        }
+        if (best == SIZE_MAX) {
+            g_targetCacheMisses.fetch_add(1, std::memory_order_relaxed);
+            return nullptr;
+        }
+        const CachedBlock taken = targetCache[best];
+        targetCache.erase(targetCache.begin() + best);
+        targetCacheBytes -= taken.size;
+        g_targetCacheHits.fetch_add(1, std::memory_order_relaxed);
+        g_targetCacheBytesNow.store(targetCacheBytes, std::memory_order_relaxed);
+        g_targetCacheBlocks.store(uint32_t(targetCache.size()), std::memory_order_relaxed);
+        blockSize = taken.size;
+        return taken.block;
+    }
+
+    uint64_t Deko3DDevice::releaseTargetCacheLocked() {
+        uint64_t freed = 0;
+        for (const CachedBlock &c : targetCache) {
+            destroyBlock(c.block);
+            freed += c.size;
+        }
+        if (!targetCache.empty())
+            g_targetCacheReleased.fetch_add(targetCache.size(), std::memory_order_relaxed);
+        targetCache.clear();
+        targetCacheBytes = 0;
+        g_targetCacheBytesNow.store(0, std::memory_order_relaxed);
+        g_targetCacheBlocks.store(0, std::memory_order_relaxed);
+        return freed;
+    }
+
     Deko3DDevice::Deko3DDevice() { g_imageDevice = this; }
 
     uint64_t Deko3DReleaseEmptyImageChunks() {  // sasrt-nx (2026-11-09; port 58): plume_deko3d.h
@@ -1321,7 +1405,7 @@ namespace plume {
     }
 
     uint64_t Deko3DDevice::releaseEmptyChunksLocked() {
-        uint64_t freed = 0;
+        uint64_t freed = releaseTargetCacheLocked();  // sasrt-nx (2026-11-11, Deko3DSetTargetBlockCacheMb)
         for (Chunk &c : chunks) {
             if (c.block && c.freeList.size() == 1 && c.freeList[0].first == 0 && c.freeList[0].second == c.size) {
                 destroyBlock(c.block);
@@ -1357,9 +1441,15 @@ namespace plume {
         if (dedicated) {
             // sasrt-nx (2026-11-09, Deko3DSetDedicatedTargets; port 58): a chunk of the image's own size (in a slot a
             // freed one left, if any), placed as the first fit places an image at a chunk's start.
-            const uint32_t own = alignUp(size + alignment, DK_MEMBLOCK_ALIGNMENT);
+            uint32_t own = alignUp(size + alignment, DK_MEMBLOCK_ALIGNMENT);
+            // sasrt-nx (2026-11-11, Deko3DSetTargetBlockCacheMb): a kept block of the size (or a little bigger) first
+            uint32_t cachedSize = 0;
+            DkMemBlock block = takeCachedTargetBlockLocked(own, cachedSize);
+            if (block)
+                own = cachedSize;
             t_inImageAlloc = true;
-            DkMemBlock block = makeBlock(own, DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image, "render target (own chunk)");
+            if (!block)
+                block = makeBlock(own, DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image, "render target (own chunk)");
             if (!block) {
                 releaseEmptyChunksLocked();
                 block = makeBlock(own, DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image, "render target (own chunk)");
@@ -1516,7 +1606,7 @@ namespace plume {
                     // (its slot stays, empty, for the next one).
                     if (c.dedicated && c.block && c.freeList.size() == 1 && c.freeList[0].first == 0 &&
                         c.freeList[0].second == c.size) {
-                        destroyBlock(c.block);
+                        cacheTargetBlockLocked(c.block, c.size);  // sasrt-nx (2026-11-11): kept for the next target
                         c.block = nullptr;
                         c.size = 0;
                         c.freeList.clear();
@@ -2680,6 +2770,25 @@ namespace plume {
             };
             p->writesDepthStencil = desc.depthWriteEnabled ||
                                     (desc.stencilEnabled && (!keeps(desc.stencilFrontFace) || !keeps(desc.stencilBackFace)));
+            // sasrt-nx (2026-11-11, port 82; its GPU list's row 2; UNTESTED), Deko3DOptions::preciseStencilWrite:
+            // the stencil plane changes only through an outcome that can happen (pass always can; fail only when the
+            // test can fail; depth-fail only when the depth test can fail) whose operation is not keep, and only with
+            // write mask bits. Depth writes as before (not looked at).
+            if (g_deko3dOptions.preciseStencilWrite && p->writesDepthStencil && !desc.depthWriteEnabled) {
+                const bool depthCanFail = desc.depthEnabled && desc.depthFunction != RenderComparisonFunction::ALWAYS;
+                const auto writes = [&](const RenderStencilFaceDesc &f) {
+                    return f.passOp != RenderStencilOp::KEEP ||
+                           (f.compareFunction != RenderComparisonFunction::ALWAYS &&
+                            f.failOp != RenderStencilOp::KEEP) ||
+                           (depthCanFail && f.depthFailOp != RenderStencilOp::KEEP);
+                };
+                const bool stencilWrites = desc.stencilEnabled && (desc.stencilWriteMask & 0xFF) != 0 &&
+                                           (writes(desc.stencilFrontFace) || writes(desc.stencilBackFace));
+                if (!stencilWrites) {
+                    p->writesDepthStencil = false;
+                    g_deko3dPreciseStencilSaved.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
         }
         p->stencilReadMask = uint8_t(desc.stencilReadMask);
         p->stencilWriteMask = uint8_t(desc.stencilWriteMask);
