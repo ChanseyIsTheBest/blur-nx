@@ -8,8 +8,13 @@ graft the parts of this port's renderer the base does not have.
 This repo started as a copy of the base's files (commit `37d724df`: base github-main `1fd35fd8`, ports 1-62; ports 63/64
 applied after), not its history. So the rebase is a three-way merge with `37d724df` as the common ancestor:
 
-1. A branch `base-update` from `37d724df`; the new base's files copied over it (not `app/generated`, `out/`, `dist/`'s
-   generated tomls, game data); committed as "the ultimate base at <its commit>".
+1. A branch `base-update` from `37d724df`, in its own worktree (`git worktree add`, main's checkout untouched until
+   the merge); there `git rm -rq .`, the new base's committed tree extracted (`git -C <base> archive <commit> | tar -x`:
+   its commit, not its working tree, which may hold work in progress), `git add -A`: the branch's tree is then exactly
+   the base (files it deleted since port 62 deleted too). Committed as "the ultimate base at <its commit>".
+   Checked 2026-11-11: `37d724df` has the same 23,534 files as the base at port 62 (`14afc76d`); their blob hashes
+   differ only by line endings (the base keeps some files with CRLF; this repo's `core.autocrlf = true` stores LF), so
+   committing the new base's files here the same way normalises them alike, and unchanged files match the ancestor.
 2. `main` merged with `base-update`: git applies the base's changes since `1fd35fd8` onto this port's, and stops only
    where both changed the same lines. In a conflict: the base's version of a fix it now carries (below, "sent"), this
    port's version of what is Blur's own.
