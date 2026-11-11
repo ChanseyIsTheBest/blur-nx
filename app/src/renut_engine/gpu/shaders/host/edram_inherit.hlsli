@@ -1,8 +1,8 @@
-// blur-nx (2026-11-11, blur_renut_edram_inherit, A/B 220): one EDRAM view's samples written into another view of the same
-// tiles, through the console's layout (draw.cpp, InheritEdramBeforeDrawLocked). On the console all views of the EDRAM
-// are one memory: a view drawn with a write mask that leaves channels out (or blending) keeps what any view wrote there
-// before. Here each view is its own host target, so before such a draw the target takes the tiles other views wrote
-// since its own last write.
+// blur-nx (2026-11-11, port 76; its key 220: blur_renut_edram_inherit): one EDRAM view's samples written into another
+// view of the same tiles, through the console's layout (render/draw.cpp, InheritEdramBeforeDrawLocked). On the console
+// all views of the EDRAM are one memory: a view drawn with a write mask that leaves channels out (or blending) keeps
+// what any view wrote there before. Here each view is its own host target, so before such a draw the target takes the
+// tiles other views wrote since its own last write.
 //
 // The EDRAM is 2048 tiles of 80x16 32-bit samples (40x16 for the 64-bit formats). A surface of base tile B whose rows
 // are C tiles across holds sample (X, Y) in tile (B + (Y / 16) * C + X / W) mod 2048, at (X mod W, Y mod 16) in it

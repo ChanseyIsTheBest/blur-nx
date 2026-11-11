@@ -81,8 +81,8 @@ def main():
     ap.add_argument('--nb-image', required=True)
     ap.add_argument('--image', required=True)
     ap.add_argument('--out', default=None)
-    # blur-nx (2026-11-10): another reference than N&B's title update 3 (Katamari, the base: 0x82AD8E48 x101 and
-    # 0x82AD9308 x20, docs/katamari-notes.md)
+    # renut-ultimate (port 69, 2026-11-10, blur-nx): another reference than N&B's title update 3, such as the base's own
+    # (Katamari: --ref-render 82AD8E48 --ref-sampler 82AD9308, docs/katamari-notes.md); the same counts.
     ap.add_argument('--ref-render', type=lambda v: int(v, 16), default=NB_RENDER)
     ap.add_argument('--ref-sampler', type=lambda v: int(v, 16), default=NB_SAMPLER)
     a = ap.parse_args()

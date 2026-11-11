@@ -5,7 +5,10 @@
 #   powershell -File tools/run_pc_verify.ps1 [-Seconds 300] [-Name verify1] [-Every 15] [-Script "20:START,24:A"] [-Sticks 240]
 param([int]$Seconds = 300, [string]$Name = "verify1", [int]$Every = 15, [string]$Script = "", [int]$Sticks = 0)
 $root = Split-Path -Parent $PSScriptRoot
-$extra = "--banjo_cpu_verify=true --banjo_hot_guard_calls=4000 --banjo_hot_guard_period=1 " +
-         "--input_script=$Script"
+# blur-nx: Katamari's two hand-native checks taken out (Blur has neither cvar: an unknown flag fails the command line).
+$extra = "--banjo_cpu_verify=true --banjo_hot_guard_calls=4000 --banjo_hot_guard_period=1"
+# renut-ultimate (port 70, 2026-11-10): an empty --input_script= stopped the run at the command line ("1 required TEXT
+# missing"), so the documented command without -Script never started.
+if ($Script) { $extra += " --input_script=$Script" }
 if ($Sticks -gt 0) { $extra += " --input_script_sticks=$Sticks" }
 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "tools\run_pc.ps1") -Seconds $Seconds -Name $Name -Every $Every -Visible -Extra $extra

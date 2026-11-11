@@ -166,11 +166,12 @@ int main(int argc, char** argv)
                     i += originalSize;
                     continue;
                 }
-                // blur-nx (2026-11-10): a vertex shader with two bindings (flags bit 0x20, the bit Renut's
-                // XGRegisterVertexShader hook reads as "two slots") keeps the second binding's tables at 0x1C / 0x20.
-                // Blur's are about 1,000 of its run-time vertex shaders (container 0x102A1121); they were skipped here
-                // without a word, so every one stayed "not in the shader cache". One microcode serves both bindings,
-                // and Renut takes the input layout from the declaration, so the first binding's tables translate it.
+                // renut-ultimate (port 68, 2026-11-10, blur-nx): a vertex shader with two bindings (flags bit 0x20,
+                // which Renut's XGRegisterVertexShader hook reads as two slots) keeps the second binding's tables at
+                // 0x1C / 0x20. It was skipped here without a word, so it stayed "not in the shader cache" every run
+                // (Blur: about 1,000 run-time vertex shaders, container 0x102A1121). One microcode serves both
+                // bindings and Renut takes the input layout from the declaration: the first binding's tables
+                // translate it.
                 if ((shaderContainer->flags & 0xFFFFFF00) == 0x102A1100 &&
                     dataSize <= (fileSize - i) &&
                     ((shaderContainer->flags & 0x20) != 0 ||

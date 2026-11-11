@@ -393,10 +393,12 @@ void CountFetchAlignment(bool aligned);
 bool DepthHandOverReadOnlyOn();
 // kameo-nx (2026-11-03, the GPU round from the third console run; docs/kameo-notes.md). A/B targets 73-79.
 bool ColorHandOverOn();          // banjo_deko3d_color_handover (73)
-bool ViewReinterpretOn();        // blur_renut_view_reinterpret (210, blur-nx)
+// blur-nx (2026-11-10/11, port 76): its renderer fixes, A/B targets 211-221 (210 and 214 not ported).
 bool ExpandAliasOn();            // blur_renut_expand_alias (211, blur-nx)
 bool ResolveKeepDestOn();        // blur_renut_resolve_keep_dest (212, blur-nx)
 bool OcclusionQueriesOn();       // blur_renut_occlusion_queries (213, blur-nx)
+// blur-nx's own, not in the base (port 76 left them out): 210 off (not proven), 214 on (deko3d tiled MSAA resolves).
+bool ViewReinterpretOn();        // blur_renut_view_reinterpret (210, blur-nx)
 bool TileResolveStagingOn();     // blur_renut_tile_resolve_staging (214, blur-nx)
 bool StackSurfaceHeadersOn();    // blur_renut_stack_surface_headers (215, blur-nx)
 bool SampleGridResolveOn();      // blur_renut_sample_grid_resolve (216, blur-nx)

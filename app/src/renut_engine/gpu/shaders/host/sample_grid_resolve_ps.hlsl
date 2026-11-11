@@ -1,7 +1,7 @@
-// blur-nx (2026-11-10, blur_renut_sample_grid_resolve): the resolve of a multisampled view, read from the single-sampled
-// target over the same EDRAM. In the EDRAM a 4x view's pixel is a 2x2 block of samples and a 2x view's a 1x2 block, so the
-// single-sampled target of the same sample grid holds each of the view's samples as one of its pixels; the resolve
-// averages a pixel's samples, as here.
+// blur-nx (2026-11-10, port 76; its key 216: blur_renut_sample_grid_resolve): the resolve of a multisampled view, read
+// from the single-sampled target over the same EDRAM (render/draw.cpp DrawSampleGridResolveLocked). In the EDRAM a 4x
+// view's pixel is a 2x2 block of samples and a 2x view's a 1x2 block, so the single-sampled target of the same sample
+// grid holds each of the view's samples as one of its pixels; the resolve averages a pixel's samples, as here.
 //   translate: the view pixel that destination pixel (0, 0) resolves (the source rect's corner less the destination's)
 //   param0 / param1: the samples across / down of a view pixel (4x: 2 / 2; 2x: 1 / 2)
 //   scale.x: the colour scale (the resolve's exponent bias as 2^bias)
@@ -21,6 +21,6 @@ float4 main(float4 position : SV_Position) : SV_Target0
         for (int x = 0; x < samples.x; ++x)
             sum += source.Load(int3(min(origin + int2(x, y), last), 0));
     }
-    // scale.x: the resolve's colour scale, 2^exponent bias (blur_renut_resolve_exp_bias; 1 without).
+    // scale.x: the resolve's colour scale, 2^exponent bias (blur_renut_resolve_exp_bias, port 76's key 219; 1 without).
     return sum / float(samples.x * samples.y) * g_Push.scale.x;
 }

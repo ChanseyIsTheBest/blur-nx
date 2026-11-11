@@ -279,9 +279,9 @@ void PrefetchTextureGuestExtent(const TextureFetch &fetch);
 // GPU-written. 'header_format', when given, is the header's fetch constant as
 // it was when the resolve was recorded (the header may be a temporary the
 // game has since overwritten).
-// blur-nx (2026-11-10, blur_renut_resolve_keep_dest): 'cover_pixels', when not 0, is how many pixels a single-sampled
-// resolve writes: one that covers less than an existing destination of another format keeps it (the caller then writes
-// its part with a converting draw: dest->host_format != format).
+// blur-nx (2026-11-10, port 76; its key 212: blur_renut_resolve_keep_dest): 'cover_pixels', when not 0, is how many
+// pixels a single-sampled resolve writes: one that covers less than an existing destination of another format keeps it
+// (the caller then writes its part with a converting draw: dest->host_format != format).
 HostTexture *GetResolveTextureLocked(u32 texture_va, plume::RenderFormat format, RenderScale scale,
                                      const d3d::TextureFetchConstant *header_format = nullptr,
                                      uint32_t cover_pixels = 0);
@@ -324,14 +324,13 @@ void FlushResolveMipsLocked(HostTexture &t);
 // (plume's Vulkan resolve writes every level of its destination, from levels
 // the source does not have). Its texture and layout only; kept for reuse.
 HostTexture *ResolveStagingLocked(const HostTexture *dest);
-// blur-nx (2026-11-10, blur_renut_tile_resolve_staging): a single-sampled target of this format and host size (a scratch
-// target) to resolve a whole multisampled target into.
+// blur-nx (2026-11-10, port 76; its key 219: blur_renut_resolve_exp_bias): a single-sampled target of this format and
+// host size (a scratch target) to resolve a whole multisampled target into, and its bindless slot, to draw from it.
 HostTexture *ResolveSourceStagingLocked(plume::RenderFormat format, uint32_t width, uint32_t height);
-// blur-nx (2026-11-10, blur_renut_resolve_exp_bias): that staging target's bindless slot, to draw from it.
 uint32_t ResolveSourceStagingSlotLocked(plume::RenderFormat format, uint32_t width, uint32_t height);
-// blur-nx (2026-11-10, diagnostic): called by the Lock hooks (any thread). The first CPU lock of each texture a resolve
-// wrote is logged: Renut's resolves stay on the GPU (only 1x1 32-bit float ones are read back), so the CPU reads what
-// it wrote there itself.
+// blur-nx (2026-11-10, diagnostic; not in the base): called by the Lock hooks (any thread). The first CPU lock of each
+// texture a resolve wrote is logged: Renut's resolves stay on the GPU (only 1x1 32-bit float ones are read back), so the
+// CPU reads what it wrote there itself.
 void NoteCpuLockOfResolve(u32 texture_va, u32 level, u32 guest_format);
 
 // Bindless sampler slot matching the device fetch constant's sampler state.
