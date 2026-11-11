@@ -57,6 +57,12 @@ SHIPPED = {
     # them on for Blur. 218: Blur's motion-blur composite (the wipe left out when another view wrote the EDRAM since);
     # replay inheritance: Blur's recorded command buffers inherit the device state (blur-nx's port 67 crash was at the
     # first replay).
+    # blur-nx (2026-11-11): two machine copies the guard found writing r12 back where their originals keep it a local
+    # (the PC verify run of the first 1,509 copies: 194 M calls compared, these two switched off after "r12 copy=...
+    # original=0" every time). r12 is scratch by the calling convention, but a copy is kept only when exact: off until
+    # the copy tool is fixed (reported to the base).
+    'banjo_cpu_native_sub_8230B338': 'false  # blur-nx: the copy writes r12 back, the original does not (guard)',
+    'banjo_cpu_native_sub_8249CB30': 'false  # blur-nx: the copy writes r12 back, the original does not (guard)',
     'blur_renut_wipe_overwritten': 'true  # blur-nx: Blur needs it (off by default in the base since port 77)',
     'banjo_renut_replay_inherits': 'true  # blur-nx: Blur\'s replays inherit (off by default in the base since port 77)',
     'banjo_xma_frame_cache': 'false',
