@@ -81,8 +81,23 @@ device offsets and snapshot size, the command-buffer hooks, `D3DQuery_GetData`'s
 (`tools/make_blur_tomls.py`, `make_blur_builtin.py`, `package_switch.ps1`, `run_*.ps1`), the RenderDoc tools
 (`tools/rdc_*.py`), the PC test copy of the shipped settings, docs.
 
-**Kept off, not proven:** `blur_renut_view_reinterpret` (210, `shaders/host/view_reinterpret*`), `blur_renut_tile_resolve_staging`
-(214, `render/draw.cpp` TileResolveStagedLocked). They come along with the merge; off / as they are.
+**Not in the base, kept as they are:** `blur_renut_view_reinterpret` (210, `shaders/host/view_reinterpret*`): off, not
+proven; `blur_renut_tile_resolve_staging` (214, `render/draw.cpp` TileResolveStagedLocked): **on** (corrected
+2026-11-11, RR6's note: this plan first said "kept off"; its default in this tree is on, as deko3d's region resolves of
+Blur's tiled 4x scene need it in Ryujinx; not proven against its absence on the console).
+
+## Done (2026-11-11, 14:00-14:30)
+
+`base-update` (`1334e6d9`): base `a30f24f7` over `37d724df` (23,546 files; every file that differs from the ancestor
+is one the base changed). Merged into main (`7131f98d`): 26 files in conflict, 34 changed on both sides. The base's
+version where it carries this port's fixes; Blur's own kept (the merge commit's message lists both). Duplicates the
+automatic part of the merge left (no conflict marker: both sides added the same helper in different places) found by
+diffing each file against the base and by a scan for functions and cvars defined twice: `ConvertibleResolveFormat`
+(textures.cpp), `ResolveCoverPixels` (draw.cpp), the EDRAM span code (surfaces.cpp: the base's whole file, which holds
+everything Blur's had), Blur's own copy of 213's answer (state.cpp: its GetData entry now calls
+`native::AnswerOcclusionQuery`). The generator: the base's `sdk/out/win-amd64/rexglue.exe` (built 13:00, after its last
+SDK change, port 71), copied as the first one was (the old one in `C:\blur-nx-test\old_tools`). Build folders
+configured with `cmake --fresh` (the old caches in `C:\blur-nx-test\old_caches`).
 
 **Not touched by this port:** the CPU side's hot lists are this game's (empty machine-copy lists); the SASRT session's
 atomics patch is in `tools/localize_native.py` (not run). The new base's machine-copy round (the SASRT ports) comes in
