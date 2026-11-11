@@ -28,6 +28,22 @@ applied after), not its history. So the rebase is a three-way merge with `37d724
    far scenery's brightness), a Ryujinx race (0 verify differences, 0 memory emergencies), the in-run A/B keys still
    switch, the package.
 
+## The RR6 session's word (2026-11-11 ~12:30)
+
+The base at `ed33a5f4` has ports 71-75 (SASRT's machine-copy round and formats batch: rows 71-75 of its
+`docs/ultimate-fixes.md`, `D:\renut-ultimate\MERGES.md`, `D:\renut-ultimate\tools\ports\p71-p75`), but **not yet**:
+this port's renderer fixes (211-213, 215-221, the census mutex) go into the base next as port 76, and RR6 says when the
+base is ready. Do not rebase before that. Then:
+- codegen and post-codegen again (port 74's generator ideas: `SASRT_HOT_*` CMake options, `SASRT_LOCALIZE_*` env at
+  post-codegen); **fresh build folders**: an existing one keeps the new CMake options cached OFF;
+- port 72 (`SASRT_VMX_FAST_ESTIMATES`, `SASRT_VMX_FUSED_MADD`: vrsqrtefp / vrefp / vlogefp estimates and fused
+  vmaddfp / vnmsubfp on AArch64) is ON in the base and **not bit-exact** (the user's call for the base). Blur's rule is
+  pixel-identical with the verify keys at 0 differences: put to the user whether Blur keeps it on (not changed until
+  then);
+- port 75 (renderer formats: 2_10_10_10 as 10:10:10:2, EDRAM formats 10/12 not RGBA8, 32-bit float textures point
+  sampled) changes what Blur draws where it uses them: the PC comparison against the reference covers it;
+- PGO: not used for Blur (only when the user says), so "retrain PGO" does not apply.
+
 ## What is this port's own (the delta from `37d724df`, 2026-11-11)
 
 **Renderer fixes sent to the base** (the RR6 session has them; if the user approves them for the base, the new base
