@@ -518,6 +518,33 @@ reference, the user judged it off more accurate to their eye. The numbers do not
 session's generator patch (copies of functions with guest atomics) is applied to `tools/localize_native.py`; nothing
 runs it until post-codegen runs again.
 
+**Machine copies: the go-ahead (the user, 2026-11-11 ~11:40: "make machine copies for everything in the profiler and do
+codegen again after the rebase as both have improved").** After the rebase onto the new base (`docs/rebase-plan.md`).
+- *The profiles.* emu6-emu11 sampled (the emulator toml had `switch_profile_stacks` on), but their builds' ELFs were
+  overwritten by the next builds, and the one kept (the package's, `14c556d9`) is not theirs: 4bd2c6a6 to 14c556d9
+  added `blur_pc_speed_cap`'s cvar and the frame-timer diagnostics' cvars, compiled on the Switch too, so the code
+  after them moved (a profile read with another build's ELF names the wrong functions). Not used.
+  `tools/run_ryujinx.ps1` now keeps each run's ELF and both md5s in the run's folder (`C:\blur-nx-test\emu_runs`).
+- *emu12_profile* (11:45, 600 s, the package's NRO `fa9fcf64`, `out/test_tomls/renut_emu_profile.toml`: the shipped
+  settings with the input script to a race): menus, career, the first race; 7-13 fps in the race. Read with its ELF by
+  `tools/switch_hot_bulk.py --min-samples 1` against the current generated tree (a dry run in the scratchpad): 535
+  functions qualify; left out 40 tiny leaves (12 instructions or fewer, no calls: the generator inlines them, and a hook
+  made one slower in bejeweled3-nx), 3 refused forms (memory-mapped I/O stores/loads, the timebase read), 8 that a
+  source names:
+  - 6 in `app/renut_config.toml`'s `non_argument_as_local_keep` (functions that read r0/r2/r11/r12 from their caller,
+    nearly all MSVC exception funclets reading the parent's frame in r12, or return in them): a copy keeps those
+    registers in locals, so it would lose the caller's value. Rightly out, unless the copy tool learns to keep them in
+    the context for these (not done; 30 samples between them).
+  - 2 in `app/src/blur_write_watch.cpp` (sub_8216AE98, sub_8216CA28): the PC diagnostics wrap them in the indirect-call
+    table at run time (`SetFunction`, only with their cvars on, Windows only) and call `__imp__` (the generated original):
+    they coexist with a copy. The scan cannot tell a run-time wrapper or a cvar description string from a link-time hook;
+    to be taught on the new base's tool after the rebase (strings and `SetFunction` arguments are not hooks), as are the
+    other games' addresses in descriptions (`banjo_hot_guest.cpp`'s sub_82B6B258, `me_ring_wait.cpp`'s).
+- *pcprof1* (PC, 600 s, `banjo_pc_profile_s = 10`, 2000 functions a thread): added by hand from
+  `tools/pc_hot_functions.py --guest`, the method's rule for PC profiles.
+- After the rebase and the new codegen: a profile of the rebased build (with copies in, new functions show), merged
+  (`--merge`) until a new profile adds nothing; verify keys and `banjo_hot_guard_*` in Ryujinx.
+
 ## What belonged to Katamari, taken out (`tools/blur_strip_katamari.py`)
 
 rr6-nx's list (pacman-nx's before it): the N&B / NFS:MW / Mass Effect sources no CMake file builds, Katamari's stage

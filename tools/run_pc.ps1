@@ -5,11 +5,14 @@
 # The log is written unbuffered (log_file_writer = false): the run is stopped by force, which would drop the buffer.
 # -Visible: the window is shown (not minimised): Renut presents (and so captures and paces by vsync) only with a
 # swapchain, which a minimised window does not get.
-param([int]$Seconds = 90, [string]$Name = "run", [int]$Every = 15, [string]$Extra = "", [switch]$Visible, [int]$Max = 60)
+# -OutRoot (2026-11-11): the run's folder elsewhere (C:\blur-nx-test\pc_runs for the big ones: the request's rule). A PC
+# profile (--banjo_pc_profile_s=N in -Extra) is moved there from app\out\pc\logs\pc_profile.log at the end.
+param([int]$Seconds = 90, [string]$Name = "run", [int]$Every = 15, [string]$Extra = "", [switch]$Visible, [int]$Max = 60,
+      [string]$OutRoot = "")
 $root = Split-Path -Parent $PSScriptRoot
 $dir = Join-Path $root "app\out\pc"
 $exe = Join-Path $dir "renut.exe"
-$logs = Join-Path $root "out\pc_runs\$Name"
+$logs = if ($OutRoot) { Join-Path $OutRoot $Name } else { Join-Path $root "out\pc_runs\$Name" }
 New-Item -ItemType Directory -Force $logs | Out-Null
 $log = Join-Path $logs "$Name.log"
 Remove-Item $log -ErrorAction SilentlyContinue
@@ -32,4 +35,6 @@ Get-ChildItem $dir -Filter "*.png" -ErrorAction SilentlyContinue | Where-Object 
     Move-Item -Destination $logs -Force -ErrorAction SilentlyContinue
 Get-ChildItem (Join-Path $dir "capturas") -Filter "*.png" -ErrorAction SilentlyContinue |
     Where-Object { $_.LastWriteTime -gt $p.StartTime } | Move-Item -Destination $logs -Force -ErrorAction SilentlyContinue
+$prof = Join-Path $dir "logs\pc_profile.log"
+if ((Test-Path $prof) -and (Get-Item $prof).LastWriteTime -gt $p.StartTime) { Move-Item $prof (Join-Path $logs "pc_profile.log") -Force }
 if (Test-Path $log) { Get-Content $log -Tail 25 }
