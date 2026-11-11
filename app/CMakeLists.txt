@@ -607,10 +607,9 @@ if(REXGLUE_PLATFORM_SWITCH)
     # their C and C++ only: about 8 % of busy CPU in the console profile of 3 Nov. They were out only because every build
     # folder shared the SDK's libraries (REXGLUE_OUTPUT_IN_BUILD above).
     option(BANJO_SWITCH_SDK_OPT "The SDK runtime and FFmpeg in the Switch LTO and PGO (renut-ultimate)" ON)
-    # blur-nx (2026-11-11): the two groups added to the SDK list below, each a switch of its own: the first LTO+PGO NRO
-    # with both (instrumented, Ryujinx pgo1) stopped at 43 s on a null mutant in NtReleaseMutant, so they are bisected.
+    # blur-nx (2026-11-11): the SDK's other libraries, a switch of their own (the first LTO+PGO NRO, with them, stopped once
+    # at 43 s on a null mutant in NtReleaseMutant: a race, it did not repeat).
     option(BLUR_SWITCH_SDK_OPT_THIRDPARTY "blur-nx: the SDK's other libraries and the app's zstd/xxHash/smol-v in LTO/PGO" ON)
-    option(BLUR_SWITCH_SDK_OPT_OBJECTS "blur-nx: the SDK's OBJECT libraries (rexaudio, rexcore, ...) in LTO/PGO" ON)
     set(_banjo_sdk_opt_targets)
     if(BANJO_SWITCH_SDK_OPT AND REXGLUE_OUTPUT_IN_BUILD)
         set(_banjo_sdk_opt_targets rexruntime libavcodec libavutil)
@@ -625,30 +624,29 @@ if(REXGLUE_PLATFORM_SWITCH)
                         glslang GenericCodeGen MachineIndependent OSDependent OGLCompiler SPIRV
                         renut_zstd renut_xxhash renut_smolv)
         endif()
-        # blur-nx (2026-11-11): the SDK's OBJECT libraries too. Their objects go into rexruntime but compile with their own
-        # options, so the list above left them without LTO and PGO (the flags of the first instrumented build's
-        # build.ninja: sdk/src/audio, core, filesystem, input and ui at -O3 only). rexaudio holds XmaContext (about 8 % of
-        # a core in the console race). The linker's --wrap functions (rexglue_switch.cmake: threadCreate, svcSleepThread,
-        # the nv* calls) are defined in switch_perf.cpp, which is in rexglue_switch_startup (the start-up and crash hooks:
-        # it stays out), and in threading_switch.cpp (__wrap_svcSetThreadCoreMask), which stays a regular object (-fno-lto
-        # after the target's -flto) so the wraps resolve as before; it keeps PGO. So do the two files whose assembly names
-        # C symbols (exception_handler_switch.cpp: g_rex_exc_*; fiber_switch.cpp: rex_fiber_trampoline): LTO cannot see
-        # a reference inside an asm string, dropped those symbols and the link failed ("undefined reference to
-        # g_rex_exc_neon_tmp", the second instrumented build). None of the three is hot.
-        if(BLUR_SWITCH_SDK_OPT_OBJECTS)
-            list(APPEND _banjo_sdk_opt_targets rexaudio rexcore rexfilesystem rexinput rexui)
-        endif()
-        if(BANJO_SWITCH_LTO AND BLUR_SWITCH_SDK_OPT_OBJECTS AND TARGET rexcore)
-            foreach(_banjo_no_lto threading_switch.cpp exception_handler_switch.cpp fiber_switch.cpp)
-                set_property(SOURCE "${REXSDK_DIR}/src/core/${_banjo_no_lto}" TARGET_DIRECTORY rexcore
-                             APPEND PROPERTY COMPILE_OPTIONS -fno-lto)
-            endforeach()
-        endif()
+        # blur-nx (2026-11-11): the SDK's OBJECT libraries were blur-nx's own switch until the base's port 89
+        # (BANJO_SWITCH_SDK_OBJECT_OPT, below), which is that finding with the same files kept out of LTO.
         foreach(target ${_banjo_sdk_opt_targets})
             if(NOT TARGET ${target})
                 message(WARNING "banjo: BANJO_SWITCH_SDK_OPT names ${target}, which this build has no target of")
             endif()
         endforeach()
+    endif()
+    # renut-ultimate (2026-11-12, port 89; sasrt-nx's batch B, B1, Blur's finding): the SDK's OBJECT libraries are compiled
+    # with their own options, so they had neither LTO nor PGO. sasrt-nx's console race (in place, handheld clocks):
+    # process CPU -0.7 %, render thread -1.9 %, its audio worker -4.9 %. Four of their files stay out of LTO
+    # (_banjo_sdk_no_lto, below): threading_switch.cpp and switch_perf.cpp define --wrap's __wrap_ functions, which the
+    # link must see as ordinary definitions; exception_handler_switch.cpp and fiber_switch.cpp have top-level asm that
+    # names C symbols (g_rex_exc_*, rex_fiber_trampoline), invisible to LTO, which would drop them.
+    option(BANJO_SWITCH_SDK_OBJECT_OPT "The SDK's OBJECT libraries in the Switch LTO and PGO too (port 89)" ON)
+    set(_banjo_sdk_no_lto)
+    if(BANJO_SWITCH_SDK_OPT AND REXGLUE_OUTPUT_IN_BUILD AND BANJO_SWITCH_SDK_OBJECT_OPT)
+        list(APPEND _banjo_sdk_opt_targets rexaudio rexcore rexfilesystem rexinput rexui)
+        set(_banjo_sdk_no_lto
+            "${CMAKE_CURRENT_SOURCE_DIR}/../sdk/src/core/threading_switch.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../sdk/src/ui/switch_perf.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../sdk/src/core/exception_handler_switch.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../sdk/src/core/fiber_switch.cpp")
     endif()
     if(BANJO_SWITCH_LTO)
         set(_banjo_lto_compile -flto -fno-fat-lto-objects)
@@ -671,6 +669,10 @@ if(REXGLUE_PLATFORM_SWITCH)
             endif()
         endforeach()
         target_link_options(renut PRIVATE ${_banjo_lto_link})
+        if(_banjo_sdk_no_lto)  # port 89: after the targets' -flto, so it wins
+            set_property(SOURCE ${_banjo_sdk_no_lto} TARGET_DIRECTORY rexcore rexui APPEND PROPERTY COMPILE_OPTIONS
+                         -fno-lto)
+        endif()
         message(STATUS "banjo: Switch LTO (${BANJO_SWITCH_LTO_JOBS} jobs)")
     endif()
     get_filename_component(_banjo_pgo_dir "${_banjo_pgo_profile}" ABSOLUTE)

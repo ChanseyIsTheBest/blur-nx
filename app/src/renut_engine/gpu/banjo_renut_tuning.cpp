@@ -1092,6 +1092,8 @@ const char *AbName(int target) {
   case 214: return "multisampled region resolves through a whole-target staging image (blur_renut_tile_resolve_staging)";
   // vivapinata-nx (2026-11-11, port 87; its number, 85 being its own vivapinata_worker_idle_wait, not in the base).
   case 86: return "a tile's command buffer run and its twin replayed once for both tiles (vivapinata_tiles_once; off half: once per tile)";
+  // vivapinata-nx (2026-11-12, port 88; its number).
+  case 87: return "a resolve of an unchanged multisampled target copied from the destination it was resolved into (vivapinata_resolve_from_sibling; off half: resolved again)";
   // blur-nx (2026-11-10/11, port 76; its keys, the same numbers; 210 and 214 not ported).
   case 211: return "an EXPAND resolve sampled as its FLOAT twin through the resolve's texture (blur_renut_expand_alias)";
   case 212: return "a partial resolve keeps a destination of another format and converts (blur_renut_resolve_keep_dest)";

@@ -433,10 +433,8 @@ __asm__(".text\n"
  * abort() and exit() use it too, see switch_crash_hooks.c. That is why ctx can be null: then there
  * are no registers, only the stack from 'stack'.
  */
-// blur-nx (2026-11-11): declared as the other files of the SDK and the app declare it (guest_memory_switch.cpp,
-// switch_code_blocks.cpp, cpu_profiler_switch.cpp: a char, only its address is taken). With the SDK's OBJECT libraries in
-// the Switch LTO (rexcore here), a function here and a variable there stopped the link ("function '_start' redeclared
-// as variable", lto1).
+// renut-ultimate (2026-11-12, port 89; sasrt-nx): a variable, as switch_code_blocks.cpp and guest_memory_switch.cpp
+// declare it: in one LTO link lto1 refuses a function and a variable of the same name. Only its address is used.
 extern "C" char _start;
 
 namespace {

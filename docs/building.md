@@ -95,7 +95,12 @@ its form, so with the defaults these steps make and use `pgo-inplace/`; with `IN
 Keep the temporary folder's path free of spaces (GCC's parallel LTO link writes a makefile with it unquoted). Each build
 folder keeps its own SDK libraries (`<folder>/rexglue-sdk/out`, renut-ultimate's `REXGLUE_OUTPUT_IN_BUILD`), so the
 stages no longer replace each other's, and the SDK runtime and FFmpeg get the folder's LTO and PGO options
-(`BANJO_SWITCH_SDK_OPT`). Their counts need an instrumented run of this build: the profile in `pgo/` has none.
+(`BANJO_SWITCH_SDK_OPT`), and since port 89 the SDK's OBJECT libraries too (rexaudio, rexcore,
+rexfilesystem, rexinput, rexui; `BANJO_SWITCH_SDK_OBJECT_OPT`), but for four files kept out of LTO:
+threading_switch.cpp and switch_perf.cpp (they define `--wrap`'s `__wrap_` functions),
+exception_handler_switch.cpp and fiber_switch.cpp (top-level asm naming C symbols, which LTO cannot
+see). A new SDK file with either needs the same (`_banjo_sdk_no_lto` in app/CMakeLists.txt), or the LTO
+link fails. Their counts need an instrumented run of this build: the profile in `pgo/` has none.
 
 The fixed settings are `app/katamari_switch_defaults.toml`, compiled in; the player's are `app/katamari_switch.toml`,
 written next to the NRO as `katamari.toml` when it is missing. A key added to `katamari.toml` overrides a fixed one (the

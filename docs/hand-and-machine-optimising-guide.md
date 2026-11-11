@@ -21,6 +21,8 @@ katamari-nx, banjo-nx and sa2-nx and are in the base under the same names). Numb
 >   `SASRT_LIVE_OUT_LISTS_NAMED`, `SASRT_HOT_LR_ELIDE` (OFF by default in the base, port 84), `sasrt_test_vmx_fuzz` and
 >   the in-run A/B `banjo_renut_ab_target = 70` keep their names (A/B 70 does nothing in an in-place build).
 > - Beautiful Katamari's results for in-place copies are in [ultimate-fixes.md](ultimate-fixes.md), row 81.
+> - Section 4, step 1's OBJECT libraries are in the base's LTO and PGO since port 89
+>   (`BANJO_SWITCH_SDK_OBJECT_OPT`).
 
 There are three tiers, cheapest first:
 
