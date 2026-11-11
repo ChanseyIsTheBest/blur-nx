@@ -540,8 +540,15 @@ codegen again after the rebase as both have improved").** After the rebase onto 
     they coexist with a copy. The scan cannot tell a run-time wrapper or a cvar description string from a link-time hook;
     to be taught on the new base's tool after the rebase (strings and `SetFunction` arguments are not hooks), as are the
     other games' addresses in descriptions (`banjo_hot_guest.cpp`'s sub_82B6B258, `me_ring_wait.cpp`'s).
-- *pcprof1* (PC, 600 s, `banjo_pc_profile_s = 10`, 2000 functions a thread): added by hand from
-  `tools/pc_hot_functions.py --guest`, the method's rule for PC profiles.
+- *pcprof1* (PC, 12:00, 600 s, the 05:51 PC build, `banjo_pc_profile_s = 10`, 2000 functions a thread, the race
+  reached at ~2 min): 4,103 guest functions sampled (1,000 Hz on every thread: far more samples than the emulator's);
+  through the bulk tool's rules (a scratch script with its filters), 518 are on emu12's list already, 3,304 more
+  qualify; left out 177 tiny leaves, 95 named by a source, 10 refused forms (memory-mapped I/O, the timebase,
+  `ppc_setjmp`). Added by hand to the bulk list (the method's rule for PC profiles: `switch_hot_bulk.py` reads ARM
+  profiles only).
+- *Size.* ~3,840 copies in all; at the method doc's ~11 KB a copy, the NRO grows by ~40 MB (56 MB now). So in batches
+  (emu12's first, then the PC's by samples), each built and run in Ryujinx, watching the NRO's size, the free heap
+  and the build time, and stopping to tell the user where one of them hurts.
 - After the rebase and the new codegen: a profile of the rebased build (with copies in, new functions show), merged
   (`--merge`) until a new profile adds nothing; verify keys and `banjo_hot_guard_*` in Ryujinx.
 
