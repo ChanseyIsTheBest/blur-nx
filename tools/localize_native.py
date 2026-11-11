@@ -957,6 +957,9 @@ F_FUNC = re.compile(r'^[^\n]*\bvoid f_\w+\(PPCContext& __restrict ctx, uint8_t\*
 
 
 MERGED = [0, 0, 0]  # stvlx / stvrx pairs, stvewx quads, headers with either
+# blur-nx (2026-11-11): the stvewx lane as tools/vec_lane_index.py writes it, and the indexed form MS_QUAD matches.
+LANE_FORM = re.compile(r'REX_LANE_U32\((\w+), 3 - \(\(ea & 0xF\) >> 2\)\)')
+IDX_FORM = re.compile(r'(?<![\w.])(\w+)\.u32\[3 - \(\(ea & 0xF\) >> 2\)\]')
 
 
 def merge_vector_stores(text):
@@ -990,8 +993,13 @@ def merge_vector_stores(text):
                 f'#if !defined(SASRT_HOT_MERGED_STORES_OFF)\n{i}}}\n#endif\n')
 
     def func(m):
-        t = MS_PAIR.sub(pair, m.group(0))
-        return MS_QUAD.sub(quad, t)
+        # blur-nx (2026-11-11): tools/vec_lane_index.py (before the copies) writes the stvewx lanes as REX_LANE_U32, so
+        # the quads are matched in the indexed form here and the lanes written back after (the round trip is exact:
+        # both forms read the same lane; only bare vector names are taken, the only ones MS_QUAD matches).
+        t = LANE_FORM.sub(r'\1.u32[3 - ((ea & 0xF) >> 2)]', m.group(0))
+        t = MS_PAIR.sub(pair, t)
+        t = MS_QUAD.sub(quad, t)
+        return IDX_FORM.sub(r'REX_LANE_U32(\1, 3 - ((ea & 0xF) >> 2))', t)
 
     text = F_FUNC.sub(func, text)
     return text, counts[0], counts[1]
