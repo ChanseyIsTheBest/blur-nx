@@ -120,6 +120,12 @@ def main():
     ap.add_argument('--merge', action='store_true', help='with --write: keep what the list has and add to it')
     ap.add_argument('--min-samples', type=float, default=3)
     ap.add_argument('--tiny', type=int, default=12, help='leaves of at most this many guest instructions stay out')
+    # sasrt-nx's machine-copy idea 30 (blur-nx 2026-11-11, the user's request): a small function's copy costs more than
+    # it saves (its hook stops its callers inlining it; sasrt-nx's console: the samples of copies under 40 guest
+    # instructions +188 %), so functions under --min-instructions stay out unless they have --small-keep-samples. With
+    # --merge the rule also prunes the list's own lines (their "N ... samples, M instructions").
+    ap.add_argument('--min-instructions', type=int, default=0, help='idea 30: functions under this size stay out')
+    ap.add_argument('--small-keep-samples', type=float, default=50, help='idea 30: ... unless they have this many samples')
     a = ap.parse_args()
     if len(a.pairs) % 2:
         ap.error('PROFILE ELF pairs')
@@ -183,6 +189,9 @@ def main():
             why = 'an app or SDK source mentions it'
         elif sub in threaded:
             why = 'threaded dispatch (switch_goto.py)'
+        elif (a.min_instructions and sizes.get(sub, (0, 0))[1] // 4 < a.min_instructions
+              and n < a.small_keep_samples):
+            why = f'small (idea 30: under {a.min_instructions} instructions, under {a.small_keep_samples:g} samples)'
         else:
             why = ln.fits(index, hooks, sub)
             if why == 'raw guest access' and raw_ok(index, sub):
@@ -203,6 +212,12 @@ def main():
     kept = []
     if a.merge and os.path.isfile(a.write):
         kept = open(a.write, encoding='utf-8').read().split('\n')
+        if a.min_instructions:  # idea 30 on the list's own lines too
+            small = re.compile(r'\s*[0-9A-Fa-f]{8} ([0-9.]+) console samples, (\d+) instructions')
+            before = len(kept)
+            kept = [l for l in kept for m in [small.match(l)]
+                    if not (m and int(m.group(2)) < a.min_instructions and float(m.group(1)) < a.small_keep_samples)]
+            left['small, pruned from the list (idea 30)'] += before - len(kept)
         have = {m.group(1).upper() for l in kept for m in [re.match(r'\s*([0-9A-Fa-f]{8})\b', l)] if m}
         rows = [r for r in rows if r[0][4:].upper() not in have]
         lines = [l for l in kept if l.strip()]
