@@ -166,6 +166,21 @@ def main():
                                       'renut_gpu_backend': '"d3d12"  # PC test copy: the PC default (deko3d on the '
                                                            'Switch)'}))
         print('PC test copy written to', pc)
+    # blur-nx (2026-11-11): the emulator's test tomls (not shipped; tools/run_ryujinx.ps1 -Toml): the input script
+    # that reaches a race (START at the title, then A every 6 s through the menus and the career's first event) and a
+    # capture every 15 s. renut_emu_profile.toml is the shipped settings (the sampler is on in them) for the machine
+    # copies' profiles: what a player runs, no verify modes in the samples. renut_emu_verify.toml is every verify mode
+    # and the censuses (emu2-emu11 ran with these).
+    script = ','.join(['40:START'] + [f'{t}:A' for t in range(52, 401, 6)])
+    emu = {'input_script': f'"{script}"', 'nfsmw_captura_cada_s': '15', 'nfsmw_captura_max': '60'}
+    tests = os.path.join(ROOT, 'out', 'test_tomls')
+    write(os.path.join(tests, 'renut_emu_profile.toml'), 'Ryujinx: the shipped settings (sampler on), the input script '
+          'to a race, captures every 15 s', apply(shipped, emu))
+    censuses = {k: 'true' for k in ('banjo_renut_diag_fast_census', 'banjo_renut_diag_shadow_census',
+                                    'banjo_renut_diag_unleashed_census')}
+    write(os.path.join(tests, 'renut_emu_verify.toml'), 'Ryujinx: every verify mode, the censuses, the input script to a '
+          'race, captures every 15 s', apply(apply(shipped, VERIFY), {**emu, **censuses}))
+    print('emulator test tomls written to', tests)
 
 
 if __name__ == '__main__':

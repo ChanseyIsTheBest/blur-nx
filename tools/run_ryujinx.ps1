@@ -7,14 +7,19 @@
 # blur-nx (2026-11-10, the request): this port's own data folder (ryu-data\blur: katamari's system folders, keys and
 # firmware, not its sdcard), the SD's /switch/blur-nx, at most two Ryujinx runs across all ports (start only when fewer
 # than two run), 6 GB of free commit memory or more.
-param([int]$Seconds = 240, [string]$Name = "emu", [string]$Toml = "", [double]$MinCommitGB = 6, [string]$Build = "switch")
+# blur-nx (2026-11-11): the run's folder on C: (-OutRoot; the request: big test outputs on C:), with the ELF of the NRO it
+# ran (elf\renut, its md5 and the NRO's in build.txt): a profile read with another build's ELF names the wrong functions,
+# and emu6-emu11's ELFs were overwritten by later builds.
+param([int]$Seconds = 240, [string]$Name = "emu", [string]$Toml = "", [double]$MinCommitGB = 6, [string]$Build = "switch",
+      [string]$OutRoot = "C:\blur-nx-test\emu_runs")
 $root = Split-Path -Parent $PSScriptRoot
 $ryu = "D:\New folder\Ryubing-src\ryubing\build\Ryujinx.exe"
 $data = "D:\New folder\ryu-data\blur"
 # Ryujinx starts an NRO without argv: the app then takes REX_SWITCH_FALLBACK_EXE (app/CMakeLists.txt) as its own path.
 $sd = Join-Path $data "sdcard\switch\blur-nx"
 $nro = Join-Path $sd "blur-nx.nro"
-$out = Join-Path $root "out\emu_runs\$Name"
+$out = Join-Path $OutRoot $Name
+if (Test-Path $out) { Write-Output "$out exists: give the run another -Name"; exit 5 }
 $running = @(Get-Process -Name Ryujinx -ErrorAction SilentlyContinue).Count
 if ($running -ge 2) { Write-Output "$running Ryujinx runs already (other ports'): not starting"; exit 2 }
 $os = Get-CimInstance Win32_OperatingSystem
@@ -29,6 +34,15 @@ if ($Toml) {
   Copy-Item $Toml (Join-Path $sd "blur.toml") -Force
 }
 New-Item -ItemType Directory -Force $out | Out-Null
+$elf = Join-Path $root "app\out\$Build\renut"
+$info = @("nro $built", "nro md5 $((Get-FileHash -Algorithm MD5 $built).Hash.ToLower())")
+if (Test-Path $elf) {
+  New-Item -ItemType Directory -Force (Join-Path $out "elf") | Out-Null
+  Copy-Item $elf (Join-Path $out "elf\renut") -Force
+  $info += "elf md5 $((Get-FileHash -Algorithm MD5 $elf).Hash.ToLower())"
+} else { $info += "no ELF at $elf (a profile of this run cannot be read)" }
+if ($Toml) { Copy-Item $Toml (Join-Path $out "run.toml") -Force; $info += "toml $Toml" }
+$info | Set-Content -Encoding utf8 (Join-Path $out "build.txt")
 $logs = Join-Path $sd "logs"
 if (Test-Path $logs) { Remove-Item -Recurse -Force $logs }
 $env:DOTNET_ROOT = "D:\New folder\dotnet10"
