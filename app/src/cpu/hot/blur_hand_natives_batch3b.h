@@ -200,8 +200,8 @@ template <class S>
 // Registers (everything the generated function writes back): r3 (16 after a 32-block), r4 = 16, r5-r10 and f1-f13 as the
 // last pass of the last stretch leaves them (the formulas follow the generated statements: 64-bit values where it adds
 // 64-bit, a pointer updated by lhzu / stfsu keeps its upper word); the stack: the back-chain word at r1 - 192 and the
-// doublewords at (r1 - 192) + 80, 88, 96, 104 that the scalar stretches stored last. The flush mode: what the last
-// stretch that ran sets (the scalar ones off, the vector ones on), unchanged for n == 0.
+// doublewords at (r1 - 192) + 80, 88, 96, 104 that the scalar stretches stored last. The flush mode: off (the lfs of the
+// scale on every path turns it off; since VX-01 the vector stretches' conversions leave it alone).
 // Declined: n > 1024, an output that is not 4-byte aligned (stvx would round it down), the input and output ranges or the
 // frame (r1 - 192 .. r1) overlapping each other, ranges that wrap 4 GB or cross the physical-view boundary.
 namespace n_822D92D8 {
@@ -381,8 +381,11 @@ template <class S>
     ::banjo::hot::Card(base, out, 4u * n);
     CvtI16F32(::banjo::hot::Raw(base, in), ::banjo::hot::Raw(base, out), n);
   }
-  if (mode == 1) ctx.fpscr.enableFlushMode();
-  else if (mode == 2) ctx.fpscr.disableFlushMode();
+  // blur-nx (2026-11-12, after CPU batch 2's VX-01): the vector stretches' vcsxwfp128 no longer set the flush mode, and
+  // every path of the original runs the lfs of the scale (0x8202E414) with the mode off before the stretches, n == 0
+  // included, so the original always leaves it off (the guarded PC verify of 2026-11-12: the copy left it on).
+  (void)mode;
+  ctx.fpscr.disableFlushMode();
   ctx.r3.u64 = g3;
   ctx.r4.u64 = g4;
   ctx.r5.u64 = g5;
