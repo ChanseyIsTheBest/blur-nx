@@ -123,6 +123,13 @@ CONFIGS = {
                             "accurate)"),
     'renut_smaa.toml': ({'banjo_renut_smaa': 'true'},
                         "SMAA 1x on the 3D image before the HUD (smooths edges: not the game's picture; costs GPU time)"),
+    # blur-nx (2026-11-11): the machine copies and the hand natives in front of them measured in one scene: A/B target
+    # 70 (all copies on / off in 30 s halves) against target 1 (a Vulkan-only key: nothing on the Switch, the control).
+    # Two minutes a round; the "[renut A/B]" lines give each half's frame time.
+    'renut_ab_copies.toml': ({'banjo_renut_ab_targets': '"70,1"', 'banjo_renut_ab_s': '30',
+                              'banjo_renut_dynamic_resolution': 'false'},
+                             'the in-run A/B of the machine copies and the hand natives (70) against the do-nothing '
+                             'control (1), 30 s halves: stand still in one place (a race, a menu) for 10 minutes or more'),
     'renut_profile.toml': ({'switch_profile_stacks': 'true'},
                            'the console profile: the sampler on (logs/rex/rex_profile.log, one report every 10 s)'),
 }
