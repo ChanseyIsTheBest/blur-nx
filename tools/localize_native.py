@@ -118,7 +118,18 @@ def live_out_keep(name):
 BULK_SLOT = 9999  # past PPCContext::host_counters: the guard's countdown is the hook's own (banjo_hot_guest.h)
 HAND = os.path.join(APP, 'src', 'cpu', 'hot', 'hand.txt')
 IMAGE_BASE = 0x82000000
-INDEX_FORMAT = 9  # raise when summarise() changes: the cached index is rebuilt (5: carded vector stores; 6, 7: inline leaves; 8: r1 mirror, 2026-10-23; 9: atomics, sasrt-nx 2026-11-10)
+INDEX_FORMAT = 10  # raise when summarise() changes: the cached index is rebuilt (5: carded vector stores; 6, 7: inline leaves; 8: r1 mirror, 2026-10-23; 9: atomics, sasrt-nx 2026-11-10; 10: promoted fallbacks counted, blur-nx 2026-11-13)
+# blur-nx (2026-11-13, M-25 of docs/cpu-moonshots-50-1113.md and its audit): a promoted indirect call (tools/
+# indirect_calls.py: `if (REX_PROMOTED_IS(ctr, T)) { sub_T(ctx, base); } else { REX_CALL_INDIRECT_FUNC_AT(..); }`) no
+# longer keeps a function out of a closure: its fallback is an open call like any other (the copy's running form
+# hands over every register around it, the logged forms stop there), and its guarded direct call is a call of T,
+# which comes along when T's own tree qualifies. Before, every function with such a site counted as making an indirect
+# call, and the promoted targets were real calls from the copies: of the copies' 623 M promoted calls in the PC
+# census, the targets of 514 M (82.5 %) have trees closed but for promoted fallbacks. A member's reach stays everything
+# when it has a fallback (Reach.own): the hand-over around the call is the same; the call, the target's entry and
+# return and the context round trip go when it is inlined. BLUR_LOCALIZE_PROMOTED_MEMBERS=0: as before.
+PROMOTED_MEMBERS = os.environ.get('BLUR_LOCALIZE_PROMOTED_MEMBERS', '1') != '0'
+PROMOTED_SITE = re.compile(r'^\tif \(REX_PROMOTED_IS\(')
 
 REG = re.compile(r'\bctx\.(r\d+|f\d+|v\d+|cr\d|ctr|xer|reserved)\b')
 DEF = re.compile(r'^DEFINE_REX_FUNC\((\w+)\) \{$')
@@ -402,6 +413,7 @@ def summarise(name, lines):
     callees = []
     unknown = 0
     traps = 0
+    promoted = 0  # blur-nx (2026-11-13, M-25): of `unknown`, the fallbacks of promoted sites
     for l in lines:
         for m in CALL.finditer(l):
             if m.group(1) is None:
@@ -409,6 +421,8 @@ def summarise(name, lines):
                     traps += 1
                 else:
                     unknown += 1
+                    if PROMOTED_SITE.match(l):
+                        promoted += 1
             elif m.group(1) not in callees:
                 callees.append(m.group(1))
     if traps:
@@ -427,7 +441,7 @@ def summarise(name, lines):
                                          (ATOMICS and (ATOMIC_LOAD.match(l) or ATOMIC_CAS.match(l)))):
             special.append('raw guest access')
     return {'regs': regs, 'written': written_registers(regs, text), 'callees': callees, 'unknown': unknown,
-            'traps': traps, 'special': sorted(set(special)), 'lines': len(lines)}
+            'promoted': promoted, 'traps': traps, 'special': sorted(set(special)), 'lines': len(lines)}
 
 
 class Index:
@@ -854,7 +868,7 @@ def closed_tree(index, hooks, name, limit, memo):
             continue
         f = index.funcs.get(n)
         why = fits(index, hooks, n)
-        if why is None and f['unknown']:
+        if why is None and f['unknown'] - (f.get('promoted', 0) if PROMOTED_MEMBERS else 0):  # M-25
             why = 'it (or %s under it) makes an indirect call' % n if n != name else 'it makes an indirect call'
         if why is not None:
             if n != name and not why.startswith('it (or'):
@@ -1499,7 +1513,8 @@ def survey(index, hooks, reach, names):
         members, left_out = closure_of(index, hooks, name, 6000, 1200)
         opens = sorted(left_out.items())
         print(f'{name}: {f["lines"]} lines, {len(f["regs"])} ctx registers ({len(f["written"])} written), '
-              f'{len(f["callees"])} direct callees, {f["unknown"]} indirect calls or traps'
+              f'{len(f["callees"])} direct callees, {f["unknown"]} indirect calls or traps '
+              f'({f.get("promoted", 0)} of them promoted sites\' fallbacks)'
               f'{"; CANNOT be a copy: " + why if why else ""}'
               f'{"; replaced by an app hook already?" if hooks.replaced(name) else ""}')
         print(f'    closure: {len(members)} functions, {sum(index.funcs[m]["lines"] for m in members)} lines'
