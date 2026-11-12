@@ -127,8 +127,13 @@ INDEX_FORMAT = 10  # raise when summarise() changes: the cached index is rebuilt
 # call, and the promoted targets were real calls from the copies: of the copies' 623 M promoted calls in the PC
 # census, the targets of 514 M (82.5 %) have trees closed but for promoted fallbacks. A member's reach stays everything
 # when it has a fallback (Reach.own): the hand-over around the call is the same; the call, the target's entry and
-# return and the context round trip go when it is inlined. BLUR_LOCALIZE_PROMOTED_MEMBERS=0: as before.
-PROMOTED_MEMBERS = os.environ.get('BLUR_LOCALIZE_PROMOTED_MEMBERS', '1') != '0'
+# return and the context round trip go when it is inlined.
+# 2026-11-13, cycle 2's PC guard runs: OFF unless BLUR_LOCALIZE_PROMOTED_MEMBERS=1. With it on, guarded boots hung
+# before boot.pak in 6 of 8 runs (all 203 copies it changed switched off at run time: 2 of 2 booted; a bisect was misled
+# by the hang being random), and the light guard found copies of promoted targets writing back r12 where the original
+# leaves it (sub_82507988, sub_825087A0; harmless by the calling convention, but the guard turns them off). Not
+# verifiable as it stands: parked.
+PROMOTED_MEMBERS = os.environ.get('BLUR_LOCALIZE_PROMOTED_MEMBERS', '0') == '1'
 PROMOTED_SITE = re.compile(r'^\tif \(REX_PROMOTED_IS\(')
 
 REG = re.compile(r'\bctx\.(r\d+|f\d+|v\d+|cr\d|ctr|xer|reserved)\b')
