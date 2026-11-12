@@ -705,3 +705,50 @@ the 45 % that is the largest single share of GM, and I could not see from retire
   `[census] denormal sites (CG-13 ...)`, read by `tools/census_sites.py --denormal`.
 - **What is known already.** census_flush1 (this morning's PC race, the cold paths alone): 2,500-3,800 a second in the
   race, 0-900 in the menus; the FPU-mode regions are counted from the next PC run on.
+
+- **Measured (2026-11-12/13):** CG-13 on the console, ABBA, +4.6 % (22.10 against 21.13 fps; CPU a frame 155 -> 147 ms).
+  **On in Blur from batch 5** (the user, 2026-11-13: on in this port, off in the base; RR6 ports 123-125, OFF).
+
+## 8. sasrt-nx's tried and audited CPU ideas (received 2026-11-13; do not redo)
+
+SASRT sent its list so Blur does not repeat the work (the user's request). Write-ups, readable on this PC:
+`D:\sonic transformed\sasrt-nx\docs\cpu-moonshots-20-1112.md` (20 moonshots, an independent audit, top 5),
+`docs\calling-convention-plan.md` (the CC ladder), `docs\cpu-moonshots-1112.md` (ideas 1-2),
+`docs\handoff\batch_cc2\README.md` (measured cycles); census scripts in `tools\census_1112\` (profdiff,
+profdiff_thread, insn_class_census, ctx_where, hotins).
+
+- **Measured on SASRT's console:** CC1 (scratch registers not handed to calls that cannot read them) noise; **CC2 /
+  cycle A -2.5 % process CPU** (exit bound for pointer-only functions, hook and import bounds, indirect-call scratch
+  vectors, multi-target promoted calls, traps read only their operands + r3/r4) - in the base as port 121, so Blur gets
+  it at the final base merge (the user: no base merges until the end); stack forwarding (vector loads of stack slots
+  forwarded from their four stores, REX_STACK_FWD_VERIFY: 14 M forwards, 0 differences) kept; CC3-2 (argument
+  registers garbage after indirect calls) near no-op, dropped; saved registers across calls ~0.2 %, parked;
+  frame-pointer-free copies (-fomit-frame-pointer on the copy sources) and host wait functions (static_cast instead of
+  __dynamic_cast, WaitMultiple per-thread buffers) being measured in SASRT's cycle C; lock-free GetNativeObject cache
+  parked (~0.1-0.4 % of a core).
+- **Vector ABI fact:** 360 code passes and returns vectors in v1 (not v2); scratch vectors are v0 and v32-v63 only.
+  Treating v1 as scratch breaks silently and the guard cannot see it.
+- **Flush-mode ideas (SASRT's 1 and 7):** FP-mode lookahead run 4 + fused single any-mode forms dropped (the water loop
+  got slower); flush-mode hand scheduling needs a per-function flush-write census. **Moot in Blur with CG-13 on** (one
+  flush mode: no FPCR switch after a thread's first).
+- **Audit of the 20 moonshots (share of process CPU):** keep: 6 relaxed guest atomics (gated, 0.1-0.5 %, microbenchmark
+  ldxr/stxr against ldaxr/stlxr first, litmus tests on the console only), 8 trace-guided prefetch (0.2-1 %, weeks), 10
+  frame-pointer-free copies (0.2-0.5 %, hours); rework: 1 pinning Main + SlRenderer (0-0.5 %), 2 dispatchers on the
+  address arbiter (0.2-0.8 %), 3 thread-caching allocator (0.2-0.4 %), 4 per-thread card logs (0.2-0.5 %; measure a
+  cards-off build first), 7 flush-mode scheduling, 15 L2 streams / L1 colouring (0-0.4 %), 19 console-in-the-loop
+  autotuning; census first: 9 callee side-effect summaries (0.1-0.5 %); later / defer: 16 shipping keys compiled in,
+  17 per-shader draw plans, 18 draw cohorts (no L1I evidence); drop: 5 lock-free draw queue, 11 constant window
+  address, 12 lane = iteration vectorisation, 13 SMT superoptimised idioms, 14 run-ahead helper on core 3, 20 trace
+  JIT. All kept or reworked together: ~2-4 % of process CPU.
+- **Traps:** merge exactly one PGO stream from this instrumented build and never change the tree between the training
+  race and the use build (tools/pgo_merge.py now stops on more than one); the console drifts ~2.5 % after a reboot and
+  two runs of one build differ ~1 % in process CPU (always a same-session control); bot screenshots stall the game
+  ~250 ms (none in measured races but the one at 20 s).
+- **Coordination:** SASRT does its cycle C, then FP lookahead run 4 alone, then maybe the cards-off ceiling; it leaves
+  3, 4, 6, 7 or 9 to Blur if Blur picks one (tell SASRT first).
+- **SASRT's cycle C (2026-11-13 02:08, same-session control):** process CPU flat (82.59 against 82.59 ms a frame).
+  Frame-pointer-free copies: no gain (Main XThread +1.6 %, +3.3 % in cycle B, in two big main-thread copies): SASRT
+  reverts it, **not worth trying in Blur**. Host wait functions (no __dynamic_cast, per-thread WaitMultiple buffers): no
+  visible change (as estimated, <= 0.3 %). Relaxed guest atomics: an exclusive increment ldxr/stxr 17.6 ns against
+  ldaxr/stlxr 26.4 ns (8.8 ns a pair, cache-resident): under its ~10 ns gate, **parked**. GPU: its R2 (the depth words
+  probe kept when a resolve destination is remade) took the shadow atlas from 49 % of resolves writing words to 0.

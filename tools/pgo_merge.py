@@ -8,7 +8,7 @@ folder to the PC and run this: every session's counts are added into the .gcda f
 (gcov-tool merge-stream), then their summary is filled in (tools/pgo_summary.py: the stream API writes it as zero).
 Step 3: a build folder configured with -DBANJO_PGO=use (and -DBANJO_SWITCH_LTO=ON); docs/pgo-lto.md.
 
-  python tools/pgo_merge.py <folder with the .stream files> [<profile folder>]
+  python tools/pgo_merge.py <folder with the .stream files> [<profile folder>] [--all]   (more than one stream: --all)
 
 The profile folder is pgo/ at the root of the repository (the build's BANJO_PGO_DIR): one .gcda per object, named by
 the object's path in the build folder with # for each separator (GCC's names with -fprofile-prefix-path). The streams
@@ -29,13 +29,22 @@ TOOL = 'C:/devkitPro/devkitA64/bin/aarch64-none-elf-gcov-tool.exe'
 
 def main():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    streams = sys.argv[1]
-    out = os.path.abspath(sys.argv[2]) if len(sys.argv) > 2 else os.path.join(root, 'pgo')
+    # blur-nx (2026-11-13, sasrt-nx's trap): --all merges every stream of the folder; without it more than one stops the
+    # merge. A run folder reused for a second training kept the older build's stream: both merged, gcov-tool skipped
+    # hundreds of functions ("cfg_checksum mismatch, skipping") and the use build came out 1.4 % slower (SASRT's cycle B).
+    argv = [a for a in sys.argv[1:] if a != '--all']
+    merge_all = len(argv) != len(sys.argv) - 1
+    streams = argv[0]
+    out = os.path.abspath(argv[1]) if len(argv) > 1 else os.path.join(root, 'pgo')
     if not os.path.exists(TOOL):
         sys.exit('gcov-tool not found: ' + TOOL)
     files = sorted(f for f in os.listdir(streams) if f.startswith('banjo_pgo_') and f.endswith('.stream'))
     if not files:
         sys.exit('no banjo_pgo_*.stream in ' + streams)
+    if len(files) > 1 and not merge_all:
+        sys.exit("%d streams in %s (%s): one training run gives one; a reused folder may hold an older build's, whose "
+                 "functions gcov-tool skips (cfg_checksum mismatch). Keep the right one, or pass --all to merge every "
+                 "stream" % (len(files), streams, ', '.join(files)))
     os.makedirs(out, exist_ok=True)
     if any(f.endswith('.gcda') for f in os.listdir(out)):
         sys.exit(out + ' already has .gcda files: move them aside first (merge-stream would add to them)')

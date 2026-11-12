@@ -82,7 +82,10 @@ endif()
 # keeps denormals (values below FLT_MIN / DBL_MIN), which this flushes to zero as its VMX unit does. The PC census
 # (banjo_diag_runtime_census: "[census] CG-13" lines, tools/census_sites.py --denormal) counts the results it changes.
 # A compile-time switch: every generated file, the copies and the SDK runtime change with it (retrain the PGO profile).
-option(BLUR_FPCR_ONE_MODE "All guest float code in the flush mode (no FPCR switches; not bit-exact for scalar denormals)" OFF)
+# 2026-11-13 (the user: "I want CG-13 to be on by default in this port, off by default in the base"): ON for Blur
+# (console ABBA +4.6 %: 22.10 against 21.13 fps); the base keeps it OFF (sent to RR6 so). A build folder configured
+# before this keeps its cached OFF: configure with -DBLUR_FPCR_ONE_MODE=ON (the build scripts pass it).
+option(BLUR_FPCR_ONE_MODE "All guest float code in the flush mode (no FPCR switches; not bit-exact for scalar denormals)" ON)
 if(BLUR_FPCR_ONE_MODE)
     add_compile_definitions(REX_FPCR_ONE_MODE)
 endif()
