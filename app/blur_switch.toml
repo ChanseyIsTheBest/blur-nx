@@ -2,9 +2,10 @@
 # Delete this file and the game writes it again at the next start.
 
 # SMAA edge smoothing on the 3D (the HUD and text stay sharp). Not the game's own picture; costs GPU time.
-banjo_renut_smaa = false
+banjo_renut_smaa = true
 
-# The game's own edge smoothing (4x MSAA, as on the Xbox 360). true turns it off (lighter on the GPU, rougher edges).
+# The game's own edge smoothing (4x MSAA, as on the Xbox 360). Leave it false: true turns it off, and Blur draws
+# its 3D image in strips laid out for 4x MSAA, so without it most of the picture stays black (2026-11-12).
 disable_msaa = false
 
 # Controller vibration (rumble). false = none.

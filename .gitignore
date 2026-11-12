@@ -48,3 +48,5 @@ pgo/*
 # 2026-11-11 (port 81): the in-place copies' form has a profile of its own (CMake BANJO_PGO_DIR_IN_PLACE), kept the same way
 pgo-inplace/*
 !pgo-inplace/*.gcda
+# 2026-11-12: CG-13's own profile (BLUR_FPCR_ONE_MODE, off by default): not the released NRO's, kept locally
+pgo-inplace-cg13/

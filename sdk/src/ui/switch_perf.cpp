@@ -505,8 +505,10 @@ void Report(u64 elapsed_ticks, u64 tick_freq, u64 counters_last[kCounterCount],
   std::fprintf(f,
                "     audio: %.0f client blocks mixed, %.0f requests without data, "
                "%.0f/%.0f audout buffers with non-zero PCM, %.0f saturated samples (above 1.0 before clipping), "
-               "%.0f buffers with a peak of 0.98 or more, maximum peak %.3f | console in %s mode\n",
+               "%.0f buffers with a peak of 0.98 or more, maximum peak %.3f | audout played %.0f samples (%.0f Hz), "
+               "%.0f wakes with every buffer released | console in %s mode\n",
                delta(24), delta(25), delta(26), delta(27), delta(21), delta(22), double(audio_peak) / 10000.0,
+               delta(57), delta(57) / seconds, delta(58),
                rex::ui::switch_saltynx::BaseMode(appletGetOperationMode() == AppletOperationMode_Console)
                    ? "docked"
                    : "handheld");

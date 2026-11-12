@@ -37,7 +37,13 @@ SHIPPED = {
     'banjo_renut_render_height_handheld': '720',
     'banjo_renut_render_height_docked': '720',
     'banjo_renut_dynamic_resolution': 'false',
-    'disable_msaa': 'false',
+    # blur-nx (2026-11-12, the user: "can we please turn off x4 MSAA change it to SMAA please"): the game's MSAA off
+    # (one sample per pixel: less GPU time and bandwidth), SMAA 1x on instead (banjo_renut_smaa, below).
+    'disable_msaa': "false  # blur-nx: the game's 4x MSAA kept: with it off Blur's picture breaks (console races 2026-11-12: only the first of the game's three EDRAM strips drawn, the rest black)",
+    # blur-nx (2026-11-12 evening): disable_msaa is read by nothing in this build (a key of katamari-nx's own renderer);
+    # Renut's control is msaa_level (render/surfaces.cpp: the most samples any target gets). 1: every MSAA target
+    # single-sampled, its resolves plain copies. The races of 21:17-21:57 still had the game's 4x MSAA under SMAA.
+    'msaa_level': "4  # blur-nx: the game's 4x. 1 (the user, 2026-11-12: \"turn off x4 MSAA change it to SMAA\") breaks Blur's picture: the game draws the 720p scene in three EDRAM strips laid out for 4x; with 1 sample only the first lands (the race intro a band, the race's lower part black). Back to 4 until Renut handles it",
     'renut_post_process_precision': '"Game"',
     # The game paces itself; no extra cap.
     'frame_cap': '"Off"',
@@ -80,8 +86,18 @@ SHIPPED = {
     # blur-nx (2026-11-12, CPU batch 4): the cache's room, the cvar's maximum. The default 24 MB filled in the first
     # minute of the console race (11,302 frames) and answered 26 % of the frames; 128 MB answered 37 %, 256 MB 65 %
     # (119,441 frames, full after about 90 s of racing): the XMA Decoder 15.2 -> 10.9 ms a frame, the race 23.84 ->
-    # 24.77 fps (build A of batch 3). The heap had 1,692 MB of its 3,089 free at the end of the race.
-    'banjo_xma_frame_cache_mb': '256  # blur-nx: the most the cvar allows (24 -> 256: 26 -> 65 % of the frames answered)',
+    # 24.77 fps (build A of batch 3). The heap's room never handed out at the end of the race: 834 MB with 24 MB, ~600 MB with 256 MB (Renut's texture reserve, banjo_renut_textures_reserve_mb, is 384).
+    'banjo_xma_frame_cache_mb': '256  # blur-nx: 24 -> 256 (26 -> 65 % of the frames answered); the cvar allows up to 512 since 2026-11-12 (320 not measured yet)',
+    # blur-nx (2026-11-12, the user: "maybe 8mb is safer"): each guest thread's host stack (heap on the Switch, port 58),
+    # 16 -> 8 MB: 152 MB of heap back for 19 threads. The profiler's deepest sampled stack of a guest thread in every
+    # console run since 2026-11-11 is 13-17 KB, except one reading of 4,226 KB (LayerManagerThr, the 4-core LTO+PGO run
+    # of 2026-11-11, beside a 4,216 KB reading of the render thread, a host thread this key does not size): 8 MB is
+    # twice even that one.
+    'switch_guest_stack_mb': '8  # blur-nx: 16 -> 8 (deepest sampled 13-17 KB; one 4.2 MB reading); 152 MB of heap back',
+    # blur-nx (2026-11-12 evening; the user: "Try turning off the lock free XMA kick ... compare perf"): one NRO
+    # (17c319b9), SMAA settings, the first two minutes of each race by Renut's wall clock: the kick with the lock 18.52
+    # fps, without it 19.36 (32 and 17 shader compiles on the console in those runs). Not worse: on.
+    'audio_xma_kick_without_lock': 'true  # blur-nx: on (A/B 2026-11-12: 18.52 locked, 19.36 lock-free)',
     'banjo_shader_misses': '"sdmc:/switch/blur-nx/shader_misses"',
     'log_level': '"info"',
     # blur-nx (2026-11-12, CPU batch 3): the file log from a thread of its own (the base's writer, from futari-nx). The
@@ -113,7 +129,8 @@ SHIPPED = {
     # 2026-11-10: banjo-nx ships SMAA on (its user's call); it smooths edges, not the game's picture: off here,
     # configs/renut_smaa.toml for the user to decide on. Banjo's fur-shell cuts (also its user's calls) act only on Banjo's
     # four fur shaders (render/draw.cpp, by pixel shader hash): inert for Blur, set to the game's own all the same.
-    'banjo_renut_smaa': "false  # blur-nx: off (not the game's picture; the note above is banjo-nx's); configs/renut_smaa.toml: on",
+    'banjo_renut_smaa': "true  # blur-nx: on with the game's MSAA off (the user, 2026-11-12: \"turn off x4 MSAA change it to SMAA\")",
+    'banjo_renut_smaa_after_ps': "\"91C0712EC807B3DF\"  # blur-nx: Blur's final composite (the tone-mapped 3D image before the HUD; draw log of a race, 2026-11-12); N&B's 981A6A58F2ABFA42 never ran in Blur, so SMAA did nothing. Also the composite the internal resolution scales after (docked: the 3D at 720, the HUD at 1080)",
     'banjo_renut_fur_shells': '1',
     'banjo_renut_portrait_fur_shells': '1',
     'banjo_renut_fur_shells_percent': '100',

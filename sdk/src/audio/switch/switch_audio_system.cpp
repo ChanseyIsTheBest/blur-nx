@@ -363,6 +363,18 @@ void SwitchAudioSystem::FillAndAppend(size_t buffer_index) {
     RexSwitchPerfAdd(26, pcm_nonzero ? 1 : 0);
     RexSwitchPerfAdd(27, 1);
   }
+  // blur-nx (2026-11-12, diagnostic): audout's own count of the samples it has played, beside the buffers appended
+  // (counter 27). Blur's console races appended ~12 % more 1,024-sample buffers than 48 kHz plays (52.9 a second
+  // against 46.9; the menus at 60 fps 47.1): either the device releases some buffers without playing them, or the
+  // count is wrong. Counter 57: samples played in the interval (the output thread is the only caller).
+  {
+    static u64 last_played = 0;
+    u64 played = 0;
+    if (R_SUCCEEDED(audoutGetAudioOutPlayedSampleCount(&played))) {
+      if (last_played && played >= last_played) RexSwitchPerfAdd(57, played - last_played);
+      last_played = played;
+    }
+  }
   if (R_FAILED(rc)) {
     REXLOG_ERROR("SwitchAudioSystem: audoutAppendAudioOutBuffer failed: 0x{:08X}", rc);
   }
@@ -420,7 +432,9 @@ void SwitchAudioSystem::OutputThreadMain() {
     Result rc = audoutWaitPlayFinish(&released, &released_count, timeout_ns);
     // libnx hands back one released buffer per call; drain the rest so none is
     // left out of the rotation.
+    uint32_t released_in_wake = 0;  // blur-nx (2026-11-12, diagnostic): counter 58, below
     while (R_SUCCEEDED(rc) && released && released_count) {
+      ++released_in_wake;
       const ptrdiff_t index = released - output.buffers.data();
       if (index >= 0 && index < ptrdiff_t(kBufferCount)) {
         FillAndAppend(size_t(index));
@@ -429,6 +443,8 @@ void SwitchAudioSystem::OutputThreadMain() {
       released_count = 0;
       rc = audoutGetReleasedAudioOutBuffer(&released, &released_count);
     }
+    // blur-nx (2026-11-12, diagnostic): a wake that found every buffer released: the device had nothing left to play.
+    if (released_in_wake >= kBufferCount) RexSwitchPerfAdd(58, 1);
   }
 }
 

@@ -690,3 +690,18 @@ the 45 % that is the largest single share of GM, and I could not see from retire
   tools/leaf_dead_stores.py counted app/indirect_promotions.txt and the hand natives' *.draft.txt as naming 216 functions
   (133 in the race, 32.5 ms a frame of CPU): their copies wrote back every volatile register at a return. Fixed in the
   tool; it reaches the copies with the next codegen (batch 4, with the rebase).
+
+## 7. CG-13 built as a switch (2026-11-12 evening; the user: "build CG 13 and do that process please ... it probably should be off by default")
+
+- **The switch.** CMake `BLUR_FPCR_ONE_MODE` (OFF) defines `REX_FPCR_ONE_MODE`: rex/ppc/context.h keeps the flush mode on
+  for all guest code (InitHost sets it for a guest thread; any other thread's first switch on writes it once; every
+  switch off is nothing; the generated pch's REX_FLUSH_KNOWN_* / REX_FLUSH_HOIST_KNOWN_* are nothing), and
+  rex/ppc/diet_ops.h's any-mode forms are the plain operations. `GeZeroAnyMode` (fsel's test on the bits) stays: it is as
+  cheap as the plain compare and exact.
+- **The census (PC, game code, `banjo_diag_runtime_census`).** Two counts of the scalar results the switch would change:
+  the any-mode helpers' cold paths (scalar results in VMX code that met a denormal; counted since sa2-nx's round 7), and,
+  new, the FPU-mode regions whose x86 sticky flags (MXCSR DE / UE) show a denormal operand or an underflow (a lower
+  bound: x86 raises UE only on an inexact tiny result). Both name their code addresses in a table of their own:
+  `[census] denormal sites (CG-13 ...)`, read by `tools/census_sites.py --denormal`.
+- **What is known already.** census_flush1 (this morning's PC race, the cold paths alone): 2,500-3,800 a second in the
+  race, 0-900 in the menus; the FPU-mode regions are counted from the next PC run on.

@@ -247,6 +247,8 @@ REXCVAR_DEFINE_INT32(msaa_level, 4, "Katamari/Graphics",
                      "Samples per pixel of the game's MSAA targets: 4 (the game's own), 2 or 1 (off). Fewer: rougher "
                      "edges, less GPU work")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// blur-nx (2026-11-12): the player's blur.toml option, defined in app/src/blur_keys.cpp (MsaaLevel reads it).
+REXCVAR_DECLARE(bool, disable_msaa);
 REXCVAR_DEFINE_INT32(banjo_renut_portrait_msaa_samples, 0, "Banjo/Enhancements",
                      "NOT exact, the user's call (2026-10-21): the samples of the colour and depth targets of 128 x 128 "
                      "or less that the game makes with MSAA (the dialogue portrait's 96 x 96 box, 4x). 0 as the game; 2: "
@@ -1669,7 +1671,9 @@ uint32_t FurShellPercent() { return uint32_t(REXCVAR_GET(banjo_renut_fur_shells_
 uint32_t PortraitFurShellPercent() { return uint32_t(REXCVAR_GET(banjo_renut_portrait_fur_shells_percent)); }
 uint32_t PortraitMsaaSamples() { return uint32_t(REXCVAR_GET(banjo_renut_portrait_msaa_samples)); }
 uint32_t MsaaLevel() {
-  const int32_t level = REXCVAR_GET(msaa_level);
+  // blur-nx (2026-11-12): disable_msaa (app/src/blur_keys.cpp, the player's blur.toml option) was read by nothing in this
+  // build (a key of katamari-nx's own renderer): true now means msaa_level 1, so the option does what blur.toml says.
+  const int32_t level = REXCVAR_GET(disable_msaa) ? 1 : REXCVAR_GET(msaa_level);
   return level >= 4 ? 4u : level >= 2 ? 2u : 1u;
 }
 void CountFurShell(bool drawn) { Bump(g_fur_shells[drawn ? 0 : 1], 1); }

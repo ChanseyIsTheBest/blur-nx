@@ -20,6 +20,10 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SYMBOLIZER = [os.path.join(os.path.dirname(ROOT), '_tools', 'llvm', 'bin', 'llvm-symbolizer.exe'), 'llvm-symbolizer']
 LINE = re.compile(r'\[census\] flush-mode switch sites.*?:((?: \+[0-9A-F]+:\d+)+)')
+# blur-nx (2026-11-12, codegen-ideas-3 CG-13's census): --denormal reads the denormal sites instead: the scalar results
+# one flush mode for all code would change (an any-mode cold path's caller, or the switch on that ended an FPU-mode
+# region with a denormal operand or an underflow inside).
+DENORMAL_LINE = re.compile(r'\[census\] denormal sites \(CG-13.*?:((?: \+[0-9A-F]+:\d+)+)')
 PER_SECOND = re.compile(r'\[census\] guest code per second: (\d+) flush-mode switches')
 MNEMONIC = re.compile(r'^\s*// (\S+)\s*(.*)$')
 
@@ -29,10 +33,12 @@ def main():
     ap.add_argument('log')
     ap.add_argument('--exe', default=os.path.join(ROOT, 'out', 'pc', 'sa2.exe'))
     ap.add_argument('--top', type=int, default=40)
+    ap.add_argument('--denormal', action='store_true', help="CG-13's census: the denormal sites")
     a = ap.parse_args()
+    line_re = DENORMAL_LINE if a.denormal else LINE
     sites, rates = None, []
     for line in open(a.log, encoding='utf-8', errors='replace'):
-        m = LINE.search(line)
+        m = line_re.search(line)
         if m:
             sites = [(int(x.split(':')[0][1:], 16), int(x.split(':')[1])) for x in m.group(1).split()]
         m = PER_SECOND.search(line)
