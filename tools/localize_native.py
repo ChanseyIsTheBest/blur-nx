@@ -534,6 +534,38 @@ def skip_literal(regs):
             % (gpr, fpr, vr[0], vr[1], cr, 'true' if ctr else 'false', 'true' if xer else 'false'))
 
 
+def strip_windows_only(text):
+    """blur-nx (2026-11-13, M-28 of docs/cpu-moonshots-50-1113.md): the text without its Windows-only branches (#if
+    defined(_WIN32) / #ifdef _WIN32 up to the matching #else, #elif or #endif; an #else branch is kept, the Switch
+    compiles it). Code the Switch never compiles hooks nothing there. In Blur only blur_write_watch.cpp/.h has such
+    branches naming guest addresses: a PC diagnostic that wraps sub_8216AE98, sub_8216CA28 and sub_8256D6D8 through the
+    indirect-call table (SetFunction) and calls their __imp__ originals, which a copy leaves as they are; it kept those
+    three out of the copies (0.1-0.2 ms a frame)."""
+    out, skip_depth, depth = [], None, 0
+    for line in text.split('\n'):
+        d = re.match(r'\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b(.*)', line)
+        if d:
+            kind, rest = d.group(1), d.group(2)
+            if kind in ('if', 'ifdef', 'ifndef'):
+                depth += 1
+                windows = (kind == 'ifdef' and rest.strip() == '_WIN32') or \
+                          (kind == 'if' and re.fullmatch(r'\s*defined\s*\(?\s*_WIN32\s*\)?\s*(//.*)?', rest))
+                if skip_depth is None and windows:
+                    skip_depth = depth
+                    continue
+            elif kind in ('else', 'elif') and skip_depth == depth:
+                skip_depth = None  # the other branch is compiled on the Switch
+                continue
+            elif kind == 'endif':
+                depth -= 1
+                if skip_depth is not None and depth < skip_depth:
+                    skip_depth = None
+                    continue
+        if skip_depth is None:
+            out.append(line)
+    return '\n'.join(out)
+
+
 class Hooks:
     """What an app or SDK hook may replace: every 82xxxxxx address and every identifier their sources' code mentions
     (comments and __imp__ references left out, as in sa2-nx's tool: a comment hooks nothing and __imp__sub_X is the
@@ -565,6 +597,8 @@ class Hooks:
             except OSError:
                 continue
             text = strip_comments(text, toml)
+            if not toml:
+                text = strip_windows_only(text)  # blur-nx (2026-11-13, M-28)
             text = re.sub(r'__imp__\w+', ' ', text)
             self.addresses.update(m.upper() for m in re.findall(r'(?<![0-9A-Fa-f])(82[0-9A-Fa-f]{6})(?![0-9A-Fa-f])', text))
             if not toml:
