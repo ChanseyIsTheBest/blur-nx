@@ -174,6 +174,12 @@ def main():
     # single precision, as the Xenon does (sdk/include/rex/ppc/fma_single.h; not bit-exact to the double rounding the
     # generator wrote; CMake BLUR_FMADDS_SINGLE=OFF gives it back). Before the copies, so they take the same form.
     run(tool('fma_single.py'), '--gen', gen)
+    # blur-nx (2026-11-13, M-23 of docs/cpu-moonshots-50-1113.md): float_loads.py again, now with the any-mode pairs
+    # (CG-13: the helpers are the plain conversions, so their loads and stores go through the vector unit too), and the
+    # plain single loads the steps above made after its first run (single_floats.py turns proven any-mode loads into
+    # plain ones: 10,239 sites were left in the integer form). After ro_constants_cfg.py and dead_ctx_defs.py, before
+    # the copies (so they take the same forms) and store_cards.py (which marks the new stores' cards).
+    run(tool('float_loads.py'), '--gen', gen, '--any-mode')
     if not scratch:
         # The localized native copies (app/generated/hot, from sa2-nx): made from the text as it stands after every
         # step above, so each copy matches the function the build compiles. The list is app/src/cpu/hot/localized.txt;

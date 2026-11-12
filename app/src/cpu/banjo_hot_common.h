@@ -201,6 +201,13 @@ struct Counting {
   (s.Note((u32)(r) + (u32)(d), 4) ? (void)(REX_STORE_D_U32(r, d, y), REX_CARD((u32)(r) + (u32)(d))) : (void)0)
 #define BANJO_HOT_STORE_D_U64_C(r, d, y) \
   (s.Note((u32)(r) + (u32)(d), 8) ? (void)(REX_STORE_D_U64(r, d, y), REX_CARD((u32)(r) + (u32)(d))) : (void)0)
+// blur-nx (2026-11-13, M-23): tools/float_loads.py's single stores from the vector unit, as the 32-bit ones.
+#define BANJO_HOT_STORE_F32ANY(x, v) (s.Note((u32)(x), 4) ? (void)(REX_STORE_F32ANY(x, v)) : (void)0)
+#define BANJO_HOT_STORE_D_F32ANY(r, d, v) \
+  (s.Note((u32)(r) + (u32)(d), 4) ? (void)(REX_STORE_D_F32ANY(r, d, v)) : (void)0)
+#define BANJO_HOT_STORE_F32ANY_C(x, v) (s.Note((u32)(x), 4) ? (void)(REX_STORE_F32ANY(x, v), REX_CARD(x)) : (void)0)
+#define BANJO_HOT_STORE_D_F32ANY_C(r, d, v) \
+  (s.Note((u32)(r) + (u32)(d), 4) ? (void)(REX_STORE_D_F32ANY(r, d, v), REX_CARD((u32)(r) + (u32)(d))) : (void)0)
 // sasrt-nx (2026-11-11, port 74; its idea 52): a prefetch of the guest node a pointer-chasing loop just loaded
 // (tools/localize_native.py, PREFETCH). A hint: it cannot fault. CMake SASRT_HOT_PREFETCH=OFF: nothing.
 #ifndef REX_PREFETCH_GUEST
