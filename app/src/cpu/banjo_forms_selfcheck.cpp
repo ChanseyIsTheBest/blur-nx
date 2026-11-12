@@ -525,6 +525,10 @@ void FmaSingle(Tally& t) {
     const double got = rex::ppc::FmaddsSingle(da, db, dc);
     const std::string in = fmt::format("{:08X} {:08X} {:08X}", std::bit_cast<uint32_t>(a), std::bit_cast<uint32_t>(b),
                                        std::bit_cast<uint32_t>(c));
+    // blur-nx (2026-11-13, M-24): the known-single form (three single inputs) against the tested one, bit for bit
+    // (NaN payloads too: the same instruction on the same operands).
+    t.Expect("FmaddsSingleKnown", in, std::bit_cast<uint64_t>(rex::ppc::FmaddsSingleKnown(da, db, dc)),
+             std::bit_cast<uint64_t>(got));
     if constexpr (sizeof(long double) > 8) {
       const long double exact = (long double)a * (long double)b + (long double)c;
       const float want = float(exact);
