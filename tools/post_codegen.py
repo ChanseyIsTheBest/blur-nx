@@ -180,6 +180,10 @@ def main():
     # plain ones: 10,239 sites were left in the integer form). After ro_constants_cfg.py and dead_ctx_defs.py, before
     # the copies (so they take the same forms) and store_cards.py (which marks the new stores' cards).
     run(tool('float_loads.py'), '--gen', gen, '--any-mode')
+    # blur-nx (2026-11-13, the user: "force the game to stereo"): Blur's audio graph mixes two channels with the key
+    # audio_stereo_mix (app/src/blur_stereo.cpp; off: the original statements' paths). Before the copies, so they take
+    # the same statements (the guard compares them).
+    run(tool('stereo_mix.py'), '--gen', gen)
     if not scratch:
         # The localized native copies (app/generated/hot, from sa2-nx): made from the text as it stands after every
         # step above, so each copy matches the function the build compiles. The list is app/src/cpu/hot/localized.txt;
