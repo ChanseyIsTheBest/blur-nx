@@ -111,6 +111,13 @@ struct HostTexture {
   bool sample_known = false;
   uint32_t sample_pages[2] = {};
   uint32_t sample_sizes[2] = {};
+  // dishonored-nx (2026-10-31, dishonored_renut_zero_level_recheck; port 104): a tiled texture with a level whose guest
+  // data was all zeros at the upload. Its whole guest extent is hashed (zero_hash) every 8 frames (zero_check_frame)
+  // until it changes, then uploaded again: SampleHash reads the ends and eight 64-byte probes, and a game's streaming
+  // writes the small levels (the packed tail) between them after the texture was first bound.
+  bool zero_levels = false;
+  uint64_t zero_hash = 0;
+  uint64_t zero_check_frame = 0;
 
   // Depth resolve destinations: the guest words the resolve wrote (see
   // shaders/host/depth_resolve.hlsli) and the framebuffer over both targets.

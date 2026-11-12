@@ -691,7 +691,14 @@ struct alignas(64) SlotRecordCache {
 };
 SlotRecordCache g_record_cache_slots[native::kTouchSlots];
 
-void SyncPendingCount() { g_pending_count.store(g_pending_vertices.size(), std::memory_order_release); }
+// sasrt-nx (2026-11-12, batch C/D, item C11; port 93): a changed count only (the sole writer holds g_record_mutex):
+// the line every op's memo check reads is not written at each op with the same value. A reader that sees the count
+// unchanged needs nothing the store would have published (0: it takes no pending data; not 0: it takes the mutex).
+void SyncPendingCount() {
+  const size_t n = g_pending_vertices.size();
+  if (g_pending_count.load(std::memory_order_relaxed) != n)
+    g_pending_count.store(n, std::memory_order_release);
+}
 
 u32 RecordingBuffer(u32 device_va) {
   const auto *word = GuestPtr<const be_u32>(device_va + d3d::kDeviceOffsetCommandBuffer);
@@ -2773,6 +2780,12 @@ void Replay(const u8 *running, const BufferSet &buffers, u32 command_buffer_va, 
         const char *three_ahead = reinterpret_cast<const char *>(&ops[op_index + 3]);
         __builtin_prefetch(three_ahead);
         __builtin_prefetch(three_ahead + 64);
+        // sasrt-nx (2026-11-12, batch C/D, item C7; port 93): the op's other line its replay reads: 'binding'
+        // (halo3-nx's recorded binds, tested at every replayed draw). sasrt-nx's other lines (+384 .. +640: its recorded
+        // surfaces and index buffer) are not in the base's op. Prefetches only.
+        static_assert(offsetof(Op, binding) >= 192 && offsetof(Op, binding) + sizeof(u32) <= 256,
+                      "C7 prefetches the line of 'binding'");
+        __builtin_prefetch(three_ahead + 192);
       }
       // (Without the shader stages, A/B 49: the next op's sets, as c2 did.)
       const size_t sets_at = stream_shaders && op_index + 2 < op_count ? op_index + 2 : op_index + 1;

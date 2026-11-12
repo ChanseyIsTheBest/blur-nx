@@ -398,6 +398,30 @@ REXCVAR_DEFINE_BOOL(vivapinata_resolve_from_sibling, true, "Banjo/Enhancements",
                     "(EndTiling). The same texels either way. Off: resolved again")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_BOOL(vivapinata_shader_round, true, "Banjo/Enhancements",
+                    "vivapinata-nx (2026-11-12, the shader round; A/B 150): the shader round's GLSL passes (samplerk, "
+                    "onexsize: vivapinata-nx's docs/shader-round.md) act in the pixel shaders, constant 975 at its default 1. Off (or the "
+                    "A/B's off half): the pipelines are built with 975 = 0 and each of those passes' code does what it did "
+                    "before the pass. The same pixels either way: a switch to measure them in one run")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_BOOL(vivapinata_shader_noearly, false, "Banjo/Enhancements",
+                    "vivapinata-nx (2026-11-12, the shader round; A/B 151): the pixel shaders without Renut's early alpha "
+                    "test (constant 976 = 0, tools/deko3d_glsl_opt.py noearly): a quad that test would discard is "
+                    "discarded by the shader's own alpha test instead, so the same pixels. It pays where the shader after "
+                    "the test is short (the grass shells: the test is 19 of their 80 instructions). Off: as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+// renut-ultimate (2026-11-12, port 99): on by default in the base (vivapinata-nx ships it on in its tomls: -0.33 ms of
+// GPU a frame in its garden, run c24, A/B 152, steady over 5-6 cycles; the same pixels. Its first number, -4.32 ms,
+// had the plain fetches off in the A/B's off half too: the A/B was then numbered 92, sasrt::gpu_round's item 2).
+REXCVAR_DEFINE_BOOL(vivapinata_shader_earlykill, true, "Banjo/Enhancements",
+                    "vivapinata-nx (2026-11-12, the shader round; A/B 152): the pixel shaders' alpha test moved up to right "
+                    "after what it needs, the colour arithmetic it does not need after it (constant 977 = 1, "
+                    "tools/deko3d_glsl_opt.py earlykill): a discarded pixel skips that arithmetic, the same pixels. Off: "
+                    "the test last, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DECLARE(bool, banjo_renut_neon_compare);  // banjo-nx (2026-10-20, from sa2-nx): backend/queued.cpp
 
 namespace renut::gpu {
@@ -1099,6 +1123,9 @@ struct HeldExport {
 };
 std::map<u32, HeldExport> g_held_exports;
 std::vector<std::shared_ptr<std::vector<u8>>> g_held_retired;
+// sasrt-nx (2026-11-12, batch C/D, item D2; port 93): retired buffers nothing points into any more (the flush), for the
+// next holds.
+std::vector<std::shared_ptr<std::vector<u8>>> g_held_pool;
 uint64_t g_held_reads = 0;
 // Keeps an export's results ('size' bytes at 'data', physical base 'base'), dropping kept ones it overlaps.
 void HoldExport(u32 base, const u8 *data, u32 size, uint64_t frame) {
@@ -1116,7 +1143,13 @@ void HoldExport(u32 base, const u8 *data, u32 size, uint64_t frame) {
     it = g_held_exports.erase(it);
   }
   HeldExport &h = g_held_exports[base];
-  h.data = std::make_shared<std::vector<u8>>(data, data + size);
+  if (!g_held_pool.empty()) {  // sasrt-nx (2026-11-12, batch C/D, item D2; port 93): a pooled buffer, the same bytes
+    h.data = std::move(g_held_pool.back());
+    g_held_pool.pop_back();
+    h.data->assign(data, data + size);
+  } else {
+    h.data = std::make_shared<std::vector<u8>>(data, data + size);
+  }
   h.frame = frame;
   h.checked = UINT64_MAX;
   h.overwritten = false;
@@ -7013,11 +7046,19 @@ struct FetchSpec {
   u32 types[4];
   u32 kind;
 };
+// vivapinata-nx (2026-11-12, the shader round; A/B 150): with vivapinata_shader_round the types for every draw whose vertex
+// shader has bound fetches, not only the tessellated ones (DescribeBoundFetches wrote them before both key paths call
+// this): such a shader decodes its vertex data from memory in every format its fetches could have (98381523's vertex
+// shaders: 1,561 instructions, about 205 with the type known). The off half of A/B 150: as before (tessellated only).
 FetchSpec FetchSpecWords(const SharedConstants &sc, const ShaderRecord &vs, bool per_instance, int ab_off) {
   FetchSpec s{};
-  if (!per_instance || !banjo::renut_gpu::FetchSpecOn() || ab_off == 83)  // A/B 83 here (69 in vivapinata-nx)
+  if (!banjo::renut_gpu::FetchSpecOn() || ab_off == 83)  // A/B 83 here (69 in vivapinata-nx)
     return s;
-  s.kind = sc.tessellation[0] + 1;
+  static const bool round_on = REXCVAR_GET(vivapinata_shader_round);
+  if (per_instance)
+    s.kind = sc.tessellation[0] + 1;
+  else if (!round_on || ab_off == 150 || !IsDeko3D())  // deko3d's GLSL has the types (pass fetchspec); Vulkan's not
+    return s;
   if (DrawSummaryOf(vs).bound_fetches) {
     for (u32 k = 0; k < 4; ++k)
       s.types[k] = sc.bound_fetch[k][3] + 1;
@@ -7047,15 +7088,23 @@ inline u32 SasrtClipBit(const SharedConstants &sc) {
 // sasrt-nx (2026-11-08, sasrt_gpu_one_x): bit 31 (fetch constant 31 is never a pixel shader's, so never plain here): the
 // draw's targets are 1x (SharedConstants.resolution_scale) and every texture word its pixel shader samples has scale
 // code 0 (bits 26-28, kResolutionScaleShift): tools/deko3d_glsl_opt.py pass onex folds both.
-[[gnu::always_inline]] inline u32 SasrtPlainFetchMask(const SharedConstants &sc, const ShaderCacheEntry *ps_entry) {
+// vivapinata-nx (2026-11-12, the shader round): with vivapinata_shader_round, the vertex shader's fetches too (vs_entry):
+// the same words (SharedConstants is the draw's, whichever stage samples a fetch constant), so bit r says the same of
+// fetch constant r for both stages, and bit 31 also needs the vertex shader's words at scale code 0. The vertex shaders'
+// passes act on it only with constant 975 (A/B 150). The grass shells' tessellated vertex shader samples its heightmap
+// three times through fetch constant 16, which no pixel shader of theirs samples.
+[[gnu::always_inline]] inline u32 SasrtPlainFetchMask(const SharedConstants &sc, const ShaderCacheEntry *ps_entry,
+                                                      const ShaderCacheEntry *vs_entry = nullptr) {
   if (!ps_entry || !IsDeko3D())
     return 0;
   const bool plain_on = sasrt::gpu_round::On(sasrt::gpu_round::kPlainFetches);
   const bool one_x_on = sasrt::gpu_round::On(sasrt::gpu_round::kOneX);
   if (!plain_on && !one_x_on)
     return 0;
+  static const bool round_on = REXCVAR_GET(vivapinata_shader_round);
+  const u32 fetches = ps_entry->textureFetchMask | (round_on && vs_entry ? vs_entry->textureFetchMask : 0u);
   u32 mask = 0, codes = 0;
-  for (u32 bits = ps_entry->textureFetchMask & 0x7FFFFFFFu; bits; bits &= bits - 1) {
+  for (u32 bits = fetches & 0x7FFFFFFFu; bits; bits &= bits - 1) {
     const u32 r = u32(std::countr_zero(bits));
     const u32 words = sc.texture_indices[0][r] | sc.texture_indices[1][r] | sc.texture_indices[2][r];
     const u32 any = (sc.sampler_indices[r] & 0x000FE000u) | (words & 0x03F00000u);
@@ -7064,7 +7113,7 @@ inline u32 SasrtClipBit(const SharedConstants &sc) {
   }
   if (!plain_on)
     mask = 0;
-  if (one_x_on && codes == 0 && sc.resolution_scale == 1.0f && !(ps_entry->textureFetchMask >> 31))
+  if (one_x_on && codes == 0 && sc.resolution_scale == 1.0f && !(fetches >> 31))
     mask |= 1u << 31;
   return mask;
 }
@@ -7120,10 +7169,27 @@ static_assert(sizeof(SasrtSpecWords::w) == sizeof(PipelineKey::sasrt_words));
 }
 [[gnu::always_inline]] inline SasrtSpecWords SasrtSpecWordsOf(const SharedConstants &sc, const ShaderCacheEntry *vs_entry,
                                                               const ShaderCacheEntry *ps_entry,
-                                                              const FloatConstants *vsc = nullptr) {
+                                                              const FloatConstants *vsc = nullptr,
+                                                              const Targets *targets = nullptr) {
   SasrtSpecWords s{};
   if (!IsDeko3D())
     return s;
+  // dishonored-nx (2026-10-31, dishonored_renut_clamp_7e3; port 106): [7] bits 28-31, colour target i a
+  // 2_10_10_10_FLOAT (7e3) one with colour exponent bias 0 (RB_COLOR_INFO format 3, or 12,
+  // 2_10_10_10_FLOAT_AS_16_16_16_16, the same storage on the Xenos and here: render/format.cpp; dishonored-nx: 3 only;
+  // bits 20-25 zero): the pixel shader clamps that output to the 7e3 range (constant 990, tools/deko3d_glsl_opt.py
+  // clamp7e3). The host target is 16-bit float: Dishonored's negative light passes stayed negative (black walls) and
+  // its highlights far above 31.875 (a washed-out frame). With a bias the Xenos clamps the biased value, which Renut
+  // scales only at the resolve: left unclamped, as dishonored-nx does. In the spec words, not the key's reserved bits
+  // (all of them taken), so the fast paths' word compares see it.
+  if (ps_entry && targets && banjo::renut_gpu::Clamp7e3On()) {
+    for (u32 i = 0; i < targets->color_count && i < 4; ++i) {
+      const HostSurface *c = targets->colors[i];
+      if (c && (((c->color_info_word >> 16) & 0xFu) == 3u || ((c->color_info_word >> 16) & 0xFu) == 12u) &&
+          ((c->color_info_word >> 20) & 0x3Fu) == 0u)
+        s.w[7] |= 0x10000000u << i;
+    }
+  }
   if (vs_entry && vsc && vs_entry->memExportConstants[0] && sasrt::gpu_round::On(sasrt::gpu_round::kExportFmtSpec))
     [[unlikely]] SasrtExportFormatWords(s, *vs_entry, *vsc);
   // sasrt-nx (2026-11-08, sasrt_gpu_export_window_ubo; the fourth GPU round): [7] bit 2, a memexport vertex shader's export
@@ -7145,6 +7211,23 @@ static_assert(sizeof(SasrtSpecWords::w) == sizeof(PipelineKey::sasrt_words));
       s.w[7] |= 1u;
     else if (h == 0x9041AFF62011FC58ull && sasrt::gpu_round::On(sasrt::gpu_round::kGprCapFilter))
       s.w[7] |= 2u;
+    // vivapinata-nx (2026-11-12, the shader round; A/B 150): [7] bit 8, the pixel shader built with constant 975 = 0 (the
+    // shader round's passes as before them) when vivapinata_shader_round is off or in the A/B's off half.
+    static const bool round_on = REXCVAR_GET(vivapinata_shader_round);
+    if (!round_on || banjo::renut_gpu::g_ab_off.load(std::memory_order_relaxed) == 150)
+      s.w[7] |= 0x100u;
+    // vivapinata-nx (2026-11-12, the shader round; A/B 151): [7] bit 9, the pixel shader built with constant 976 = 0 (its
+    // early alpha test skipped, tools/deko3d_glsl_opt.py noearly) when vivapinata_shader_noearly is on, but in the A/B's
+    // off half.
+    static const bool noearly_on = REXCVAR_GET(vivapinata_shader_noearly);
+    if (noearly_on && banjo::renut_gpu::g_ab_off.load(std::memory_order_relaxed) != 151)
+      s.w[7] |= 0x200u;
+    // vivapinata-nx (2026-11-12, A/B 152): [7] bit 10, the pixel shader with constant 977 = 1 (its alpha test moved up
+    // ahead of the colour arithmetic, tools/deko3d_glsl_opt.py earlykill) when vivapinata_shader_earlykill is on, but in
+    // the A/B's off half.
+    static const bool earlykill_on = REXCVAR_GET(vivapinata_shader_earlykill);
+    if (earlykill_on && banjo::renut_gpu::g_ab_off.load(std::memory_order_relaxed) != 152)
+      s.w[7] |= 0x400u;
   }
   if (vs_entry && vs_entry->vertexFetchMemoryMask && sasrt::gpu_round::On(sasrt::gpu_round::kFetchEndianSpec)) {
     for (u32 bits = vs_entry->vertexFetchMemoryMask; bits; bits &= bits - 1) {
@@ -9040,10 +9123,97 @@ void FinishRecordingLocked(VideoState &) {
 
 } // namespace detail
 
+// dishonored-nx (2026-10-30; port 101): whether the guest bytes at host pointer 'p' are committed and readable, from
+// the guest heaps' page tables. A fetch constant's range can reach past what the game committed (a stream's last vertex
+// at the end of a heap allocation, or a buffer freed between the draw and the kick): on the Xbox 360 the GPU reads
+// whatever is there, here the read faulted the render thread in ConvertVertices (dishonored-nx: guest 0x9192B000, its
+// rex_crash.log of 2026-10-29). Host memory (a draw's copied user-pointer vertices) is always readable.
+static bool GuestBytesReadable(const u8 *p, size_t len) {
+  if (!p || !len)
+    return true;
+#if REX_PLATFORM_WIN32 || (REX_PLATFORM_MAC && defined(__aarch64__))
+  return true;  // heaps with host offsets there: a guest pointer is not a plain sum
+#else
+  rex::memory::Memory *memory = REX_KERNEL_MEMORY();
+  const u8 *pbase = detail::GuestPhysicalBase();
+  const u8 *vbase = detail::GuestVirtualBase();
+  rex::memory::BaseHeap *heap = nullptr;
+  uint64_t address = 0;
+  if (p >= pbase && uint64_t(p - pbase) < 0x20000000ull) {
+    address = uint64_t(p - pbase);
+    heap = memory->GetPhysicalHeap();
+  } else if (p >= vbase && uint64_t(p - vbase) < 0x100000000ull) {
+    address = uint64_t(p - vbase);
+    heap = memory->LookupHeap(uint32_t(address));
+    // dishonored-nx (2026-11-01, the black objects): a view of physical memory (0xA0000000 64 KB pages, 0xC0000000
+    // 16 MB, 0xE0000000 4 KB) keeps a page table of its own allocations only; memory the game allocated through
+    // another view, or as physical memory, is committed in the physical heap and read "no access" there (Unreal's
+    // vertex buffers in the 0xC0000000 view came out all zeros: black models). The physical heap answers for every view.
+    if (heap && heap->heap_type() == rex::memory::HeapType::kGuestPhysical) {
+      const uint32_t physical = memory->GetPhysicalAddress(uint32_t(address));
+      if (physical != UINT32_MAX) {
+        address = physical;
+        heap = memory->GetPhysicalHeap();
+      }
+    }
+  } else {
+    return true;
+  }
+  if (!heap || address + len - 1 > 0xFFFFFFFFull)
+    return false;
+  return uint32_t(heap->QueryRangeAccess(uint32_t(address), uint32_t(address + len - 1))) &
+         uint32_t(rex::memory::PageAccess::kReadOnly);
+#endif
+}
+
+// dishonored-nx (2026-10-31; port 101): how many bytes from 'p' on are readable (whole 4 KB pages, as far as the first
+// page that is not). A stream whose range ran a little past its allocation keeps its real vertices; only the part past
+// the commit is zero (dishonored-nx: zeroing it all made black models at a distance).
+static size_t GuestReadablePrefix(const u8 *p, size_t len) {
+  if (!banjo::renut_gpu::VertexReadableCheckOn() || GuestBytesReadable(p, len))
+    return len;
+  constexpr size_t kPage = 4096;
+  size_t done = 0;
+  const size_t head = kPage - size_t(reinterpret_cast<uintptr_t>(p) & (kPage - 1));
+  size_t step = std::min(len, head);
+  while (done < len) {
+    if (!GuestBytesReadable(p + done, step))
+      break;
+    done += step;
+    step = std::min(kPage, len - done);
+  }
+  return done;
+}
+
 void FlushVertexFillsLocked() {
   ++g_flush_serial;  // banjo-nx: banjo_renut_exact_streams' intervals
   banjo::renut_gpu::CountKick();
+  static uint32_t unreadable_logged = 0;  // dishonored-nx (2026-10-30; port 101)
   for (const PendingStreamFill &f : g_stream_fills) {
+    // dishonored-nx (2026-10-30/31; port 101): a range with an uncommitted page: the vertices before the first such page
+    // convert, the rest are zeros, and the stream is not cached.
+    const size_t bytes = size_t(f.count) * f.stride;
+    const size_t readable = GuestReadablePrefix(f.guest, bytes);
+    if (readable < bytes) [[unlikely]] {
+      const u32 good = f.stride ? u32(readable / f.stride) : 0u;
+      if (unreadable_logged < 16) {
+        ++unreadable_logged;
+        const u8 *pbase = detail::GuestPhysicalBase();
+        const u8 *vbase = detail::GuestVirtualBase();
+        const bool physical = f.guest >= pbase && uint64_t(f.guest - pbase) < 0x20000000ull;
+        const bool virt = !physical && f.guest >= vbase && uint64_t(f.guest - vbase) < 0x100000000ull;
+        RGPU_WARN("[streams] vertex stream {} bytes (guest {} {:08X}) not committed in guest memory past {} bytes: {} of "
+                  "{} vertices converted, the rest zeros (dishonored_renut_vertex_readable_check)",
+                  bytes, physical ? "physical" : (virt ? "virtual" : "?"),
+                  physical ? uint32_t(f.guest - pbase) : (virt ? uint32_t(f.guest - vbase) : 0u), readable, good,
+                  f.count);
+      }
+      if (good)
+        ConvertVertices(g_fill_elements.data() + f.first_element, f.element_count, f.host_stride, f.guest, f.stride,
+                        good, f.endian, f.host);
+      std::memset(f.host + size_t(good) * f.host_stride, 0, size_t(f.count - good) * f.host_stride);
+      continue;
+    }
     ConvertVertices(g_fill_elements.data() + f.first_element, f.element_count, f.host_stride, f.guest, f.stride,
                     f.count, f.endian, f.host);
     if (f.cacheable)
@@ -9051,10 +9221,20 @@ void FlushVertexFillsLocked() {
   }
   g_stream_fills.clear();
   g_fill_elements.clear();
+  // sasrt-nx (2026-11-12, batch C/D, item D2; port 93): the ones only this list holds go to the pool (64 at most, up
+  // to 1 MB each)
+  for (auto &p : g_held_retired)
+    if (p && p.use_count() == 1 && g_held_pool.size() < 64 && p->capacity() <= (1u << 20))
+      g_held_pool.push_back(std::move(p));
   g_held_retired.clear();  // sasrt-nx (2026-10-21, sasrt_renut_exports_held): no fill points into them now
   ++g_queued_generation;  // banjo-nx (2026-10-19): the table emptied
   for (const PendingCopy &c : g_copy_fills) {
-    std::memcpy(c.dst, c.src, c.size);
+    // dishonored-nx (2026-10-30/31; port 101): the fetch data copies the same way: the readable part, the rest zeros.
+    const size_t readable = GuestReadablePrefix(c.src, c.size);
+    if (readable)
+      std::memcpy(c.dst, c.src, readable);
+    if (readable < c.size) [[unlikely]]
+      std::memset(c.dst + readable, 0, c.size - readable);
     g_fetch_fill_bytes += c.size;  // banjo-nx (2026-10-27): the 10 s line's
   }
   g_copy_fills.clear();
@@ -10808,9 +10988,9 @@ int FastDrawLocked(const u8 *device_state, const DrawCall &call, const ReplayCon
   // banjo-nx (2026-10-27, shadow sort): the key reads the shaders through their cache entries and the declaration
   // through its layout hash (MakeKey, BoolSpecMask), so another shader object of the same contents (N&B makes one per
   // mesh: a new address at 69 % of the shadow draws) keeps the key and the pipeline; compared with the key's own.
-  const u32 plain_fetches = SasrtPlainFetchMask(sc, ps_entry);  // sasrt-nx (2026-11-08, sasrt_gpu_plain_fetches)
+  const u32 plain_fetches = SasrtPlainFetchMask(sc, ps_entry, vs->entry);  // sasrt-nx (2026-11-08); vivapinata-nx: vs
   const u32 clip_bit = SasrtClipBit(sc);  // sasrt-nx (2026-11-08, sasrt_gpu_clip_spec)
-  const SasrtSpecWords spec_words = SasrtSpecWordsOf(sc, vs->entry, ps_entry, &vs_constants);  // sasrt-nx (third round)
+  const SasrtSpecWords spec_words = SasrtSpecWordsOf(sc, vs->entry, ps_entry, &vs_constants, &targets);  // sasrt-nx (third round)
   const bool key_inputs = f.key_rs_epoch != f.rs_epoch || !f.pipeline || !f.kp || depth_only != f.depth_only ||
                           std::memcmp(f.kp->sasrt_words, spec_words.w, sizeof(spec_words.w)) != 0 ||  // sasrt-nx
                           misc != f.key_misc || f.prebuild_epoch != prebuild_epoch ||
@@ -10819,7 +10999,7 @@ int FastDrawLocked(const u8 *device_state, const DrawCall &call, const ReplayCon
                           ((shaders_changed || (fields & kFieldDecl)) &&
                            (vs->entry != f.kp->vertex_shader || ps_entry != f.kp->pixel_shader ||
                             declaration->layout_hash != f.kp->layout_hash || ab_off == 41)) ||  // A/B 41: as before
-                          (geometry.per_instance && FetchSpecDiffers(*f.kp, fetch_spec));  // banjo_gpu_fetch_spec
+                          FetchSpecDiffers(*f.kp, fetch_spec);  // banjo_gpu_fetch_spec; vivapinata-nx (2026-11-12): every draw
   if (key_inputs) {
     FastPipeline &c = g_fast_pipelines[FastPipelineIndex(f.rs_epoch, vs->entry, ps_entry, declaration->layout_hash,
                                                          misc)];
@@ -10830,7 +11010,7 @@ int FastDrawLocked(const u8 *device_state, const DrawCall &call, const ReplayCon
         c.generation == g_fast_pipeline_generation && c.key.fetch_pad == (c.key.pixel_shader ? plain_fetches : 0u) &&  // sasrt-nx
         (c.key.reserved & 8u) == clip_bit &&  // sasrt-nx (2026-11-08, sasrt_gpu_clip_spec)
         std::memcmp(c.key.sasrt_words, spec_words.w, sizeof(spec_words.w)) == 0 &&  // sasrt-nx (the third round)
-        (!geometry.per_instance || !FetchSpecDiffers(c.key, fetch_spec))) {  // banjo_gpu_fetch_spec
+        !FetchSpecDiffers(c.key, fetch_spec)) {  // banjo_gpu_fetch_spec; vivapinata-nx (2026-11-12): every draw
       ++g_fast_pipeline_hits;
       f.kp = &c.key;
       f.kp_hot = c.hot;
@@ -12719,7 +12899,7 @@ bool DrawStateLocked(const u8 *device_state, const DrawCall &call, const ReplayC
   for (u32 i = 0; reused && i < targets.color_count; ++i)
     reused = reuse.colors[i] == targets.colors[i];
   const FetchSpec fetch_spec = FetchSpecWords(sc, *vs, geometry.per_instance, ab_off);  // banjo-nx (banjo_gpu_fetch_spec)
-  if (reused && geometry.per_instance && FetchSpecDiffers(reuse.key, fetch_spec))
+  if (reused && FetchSpecDiffers(reuse.key, fetch_spec))  // vivapinata-nx (2026-11-12): every draw (the shader round)
     reused = false;
   // sasrt-nx (2026-11-08, sasrt_gpu_export_raster_discard; decided here since the fourth round): an export draw recorded
   // with the rasterizer off. The export-only draws this tree can tell: vivapinata-nx's export-mode shaders, or a memexport
@@ -12757,7 +12937,7 @@ bool DrawStateLocked(const u8 *device_state, const DrawCall &call, const ReplayC
     key = MakeKey(device, vs, ps, declaration, targets, call.primitive, geometry.per_instance, sc.booleans,
                   sc.alpha_test_func, fetch_spec);
   }
-  key.fetch_pad = key.pixel_shader ? SasrtPlainFetchMask(sc, ps_entry) : 0u;  // sasrt-nx (2026-11-08, sasrt_gpu_plain_fetches)
+  key.fetch_pad = key.pixel_shader ? SasrtPlainFetchMask(sc, ps_entry, vs->entry) : 0u;  // sasrt-nx; vivapinata-nx: vs
   if (call.primitive == kPointList && State().point_sprite_gs) {  // sasrt-nx (2026-11-09, sasrt_gpu_export_no_point_gs)
     key.point_sprite = sasrt_no_point_gs ? 0 : 1;  // (a reused key holds the decision of the draw it came from)
     if (sasrt_no_point_gs)
@@ -12765,7 +12945,7 @@ bool DrawStateLocked(const u8 *device_state, const DrawCall &call, const ReplayC
   }
   key.reserved = (key.reserved & ~8u) | SasrtClipBit(sc);  // sasrt-nx (2026-11-08, sasrt_gpu_clip_spec)
   {  // sasrt-nx (2026-11-08, the third round: SasrtSpecWordsOf)
-    const SasrtSpecWords words = SasrtSpecWordsOf(sc, vs->entry, ps_entry, &vs_constants);
+    const SasrtSpecWords words = SasrtSpecWordsOf(sc, vs->entry, ps_entry, &vs_constants, &targets);
     std::memcpy(key.sasrt_words, words.w, sizeof(words.w));
   }
   if (reuse_on) {
@@ -15663,6 +15843,9 @@ PresentImage FrontBufferImageLocked(u32 texture_va) {
   image.height = texture->alloc_height;
   image.source_width = texture->scale.Size(texture->width);
   image.source_height = texture->scale.Size(texture->height);
+  // vivapinata-nx (2026-11-12, vivapinata_present_lut): a hand-over image is the target's, of the same format.
+  image.unorm8 = texture->host_format == plume::RenderFormat::R8G8B8A8_UNORM ||
+                 texture->host_format == plume::RenderFormat::B8G8R8A8_UNORM;
   // kameo-nx (2026-11-03, banjo_deko3d_scanout_handover): the frame's last resolve left in the target's image is scanned out
   // from there (or from the image the destination took): no copy of a whole frame to read it once. With the key off, or
   // with no room for a view, it is drawn first and scanned out from the destination as before.

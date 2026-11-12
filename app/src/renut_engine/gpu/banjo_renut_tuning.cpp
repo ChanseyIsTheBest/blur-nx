@@ -1094,6 +1094,13 @@ const char *AbName(int target) {
   case 86: return "a tile's command buffer run and its twin replayed once for both tiles (vivapinata_tiles_once; off half: once per tile)";
   // vivapinata-nx (2026-11-12, port 88; its number).
   case 87: return "a resolve of an unchanged multisampled target copied from the destination it was resolved into (vivapinata_resolve_from_sibling; off half: resolved again)";
+  // vivapinata-nx (2026-11-12, port 91; its number).
+  case 89: return "the scan-out's gamma ramp read from a 256 x 256 table of its entries, two fetches a pixel (vivapinata_present_lut; off half: three)";
+  // vivapinata-nx (2026-11-12, port 94; its number since its commit 7502c604: 90-145 are sasrt::gpu_round's items,
+  // kAbBase + item, so 90's off half also switched sasrt_gpu_skip_inert_draws off).
+  case 150: return "the shader round's GLSL passes in the pixel shaders, constant 975 (vivapinata_shader_round; off half: 975 = 0, the code as before them)";
+  case 152: return "the pixel shaders' alpha test moved up ahead of the colour arithmetic, constant 977 = 1 (vivapinata_shader_earlykill; off half: the test last)";
+  case 151: return "the pixel shaders without Renut's early alpha test, constant 976 = 0 (vivapinata_shader_noearly; off half: the test as before)";
   // blur-nx (2026-11-10/11, port 76; its keys, the same numbers; 210 and 214 not ported).
   case 211: return "an EXPAND resolve sampled as its FLOAT twin through the resolve's texture (blur_renut_expand_alias)";
   case 212: return "a partial resolve keeps a destination of another format and converts (blur_renut_resolve_keep_dest)";

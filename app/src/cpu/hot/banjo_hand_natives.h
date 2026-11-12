@@ -49,8 +49,8 @@
 #include "cpu/hot/blur_block_copy.h"  // blur-nx (2026-11-11): the natives' block copies (VS-07)
 #include "cpu/hot/blur_gather.h"  // blur-nx (2026-11-11): the resampler natives' table pairs
 #include "cpu/hot/blur_swap.h"  // blur-nx (2026-11-12): word swaps for lane-wise natives (CPU batch 3)
-// blur-nx (2026-11-12): the natives' fmadds / fnmsubs take the generated code's form (tools/fma_single.py writes it into
-// the pch; a file without the pch gets the same definition here).
+// blur-nx (2026-11-12; port 96): the natives' fmadds / fnmsubs take the generated code's form (tools/fma_single.py
+// writes it into the pch; a file without the pch gets the same definition here).
 #ifndef REX_FMADDS
 #include <rex/ppc/fma_single.h>
 #define REX_FMADDS(a, b, c) rex::ppc::FmaddsSingle((a), (b), (c))

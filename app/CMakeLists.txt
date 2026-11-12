@@ -141,6 +141,7 @@ set(RENUT_SOURCES
     # the start-up check of every instruction form that only one processor has.
     src/cpu/banjo_codegen_checks.cpp
     src/cpu/banjo_forms_selfcheck.cpp
+    # blur-nx (2026-11-11, port 90): timings of a few processor forms at boot (blur_microbench, off).
     src/cpu/blur_microbench.cpp
     # blur-nx (2026-11-10): katamari-nx's stage diagnostic (src/cpu/katamari_stage_diag.cpp) went with its game.
     # katamari-nx: the native copies of hot game functions (banjo_hot_guest.cpp and its shards), from this game's PC
