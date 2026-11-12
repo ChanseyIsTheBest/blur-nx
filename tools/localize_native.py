@@ -194,7 +194,36 @@ LOOP_LABEL = re.compile(r'^(loc_[0-9A-F]+):\s*$')
 CTR_DEC = re.compile(r'^\t--(?:ctx\.)?ctr\.u64;$')
 CTR_BACK = re.compile(r'^\tif \((?:ctx\.)?ctr\.u32 != 0\) goto (loc_[0-9A-F]+);$')
 CTR_WRITE = re.compile(r'\b(?:ctx\.)?ctr\.(?:u|s)(?:32|64) = ')
-LOOP_STATS = [0, 0]  # idea 52 prefetches, idea 60 barriers left out
+LOOP_STATS = [0, 0, 0]  # idea 52 prefetches, idea 60 barriers left out, M-19 rules applied
+# blur-nx (2026-11-13, M-19 of docs/cpu-moonshots-50-1113.md and its audit): hand-named prefetches. Each line of
+# app/src/cpu/hot/prefetch_rules.txt, `<function> <label> <statement>`, puts the statement right after that label in
+# the copy's running form (and its logged twin, the same text; not in the original statements' form), written in the
+# generated code's names (ctx.<register> becomes the copy's local, as everywhere). For the node loops whose callee first
+# touches the next node's object cold: its first lines, prefetched one iteration ahead (REX_PREFETCH_GUEST cannot fault;
+# a load the statement makes must be one the guest could make there, e.g. the next entry while one is left). A rule of a
+# function that is copied but no longer has the label stops the tool (the guest code under the rule changed).
+# SASRT_LOCALIZE_PREFETCH=0: none written.
+PREFETCH_RULES_FILE = os.path.join(APP, 'src', 'cpu', 'hot', 'prefetch_rules.txt')
+
+
+def load_prefetch_rules():
+    rules = {}
+    if not os.path.isfile(PREFETCH_RULES_FILE):
+        return rules
+    for number, raw in enumerate(open(PREFETCH_RULES_FILE, encoding='utf-8'), 1):
+        line = raw.strip()
+        if not line or line.startswith('#'):
+            continue
+        parts = line.split(None, 2)
+        if len(parts) != 3 or not re.fullmatch(r'(?:sub_)?[0-9A-Fa-f]{8}', parts[0]) or \
+                not re.fullmatch(r'loc_[0-9A-F]{8}', parts[1]) or not parts[2].endswith(('}', ';')):
+            sys.exit(f'localize_native: prefetch_rules.txt:{number}: not `<function> <label> <statement>`: {line}')
+        name = parts[0] if parts[0].startswith('sub_') else 'sub_' + parts[0].upper()
+        rules.setdefault(name, {}).setdefault(parts[1], []).append(parts[2])
+    return rules
+
+
+PREFETCH_RULES = load_prefetch_rules() if PREFETCH else {}
 CONST_ARGS = os.environ.get('SASRT_LOCALIZE_CONST_ARGS', '1') != '0'  # port 74, its idea 34 (localize())
 CONST_ARG_FORCED = [0]
 
@@ -1180,6 +1209,12 @@ def localize(index, hooks, reach, root, what, opts, out_dir, quiet=False, hand=N
             dead_out.update((name, r) for r in written if not keep_out(r))
         for m in PROMOTED.finditer(text):
             externs.add(m.group(1))
+        if name in PREFETCH_RULES:  # blur-nx (2026-11-13, M-19): the rule's labels must still be there
+            have = {l.strip()[:-1] for l in lines if LABEL.match(l)}
+            gone = sorted(set(PREFETCH_RULES[name]) - have)
+            if gone:
+                sys.exit(f'localize_native: {name}: prefetch_rules.txt names {", ".join(gone)}, which its code no '
+                         f'longer has (the guest code under the rule changed: check the rule)')
         dirty, writes, dirty_end = dirty_sets(name, lines, lambda l: [call_reach(m)[0] for m in CALL.finditer(l)])
         in_loop, counted_barriers = loop_info(lines)  # port 74, its ideas 52 and 60
         file_lines = original_lines.setdefault(funcs[name]['file'], {})
@@ -1211,6 +1246,9 @@ def localize(index, hooks, reach, root, what, opts, out_dir, quiet=False, hand=N
                         pending = False
                         body.append((l, block))
                         body.append((f'\ts.Hit({block});', block))
+                        for stmt in PREFETCH_RULES.get(name, {}).get(l.strip()[:-1], ()):
+                            body.append(('\t' + REG.sub(lambda m: 'l_' + m.group(1), stmt), block))  # M-19
+                            LOOP_STATS[2] += 1
                         file_lines[number] = block
                         continue
                     if pending:
@@ -1507,7 +1545,7 @@ def main():
         write_list(entries, a.out, made)
         print(f'localize_native: {LIVE_OUT_DROPPED[0]} return write-backs left out by LiveOut (idea 37)')
         print(f'localize_native: {LOOP_STATS[0]} pointer-chase prefetches (idea 52), {LOOP_STATS[1]} counted loops\' '
-              f'barriers left out (idea 60)')
+              f'barriers left out (idea 60), {LOOP_STATS[2]} hand-named prefetches (M-19, prefetch_rules.txt)')
         print(f'localize_native: {CONST_ARG_FORCED[0]} members with a constant argument forced inline (idea 34)')
         # Port 74 (its idea 39; sasrt-nx's batch 2 audit, finding 2): the shards turn the card runs on only for copies
         # written with them (app/src/cpu/banjo_hot_prelude.h reads this header).

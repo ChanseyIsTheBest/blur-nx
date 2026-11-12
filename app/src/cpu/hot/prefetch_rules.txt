@@ -1,0 +1,11 @@
+# blur-nx (2026-11-13, M-19 of docs/cpu-moonshots-50-1113.md and its audit): hand-named prefetches in the copies
+# (tools/localize_native.py, PREFETCH_RULES: each statement goes right after its label in the copy's running form).
+#   <function> <label> <statement, in the generated code's names>
+# A rule only hints (REX_PREFETCH_GUEST cannot fault); a guest load in it must be one the guest could make there.
+#
+# sub_8230AD50, the audio graph's node loop (loc_8230AE3C .. loc_8230B06C): r24 walks 8-byte entries {type, offset}
+# (r24 at the offset), r27 counts them up to the u16 at r31+36 (re-read at every pass), and each entry's node is the
+# object at r26[24] + offset, handed as r3 to sub_822E17C8 (type 2: its first touch `ldr w2, [x23, #8]`, 85 of its
+# 127 entry samples, and +44..+59 next), sub_8230AD50 itself (type 3: +22..+46), sub_8230A4D8 (type 0) or
+# sub_822BD548 (type 4). The next entry's node, its two first lines, one node ahead (while an entry is left).
+sub_8230AD50 loc_8230AE3C if (r27.u32 + 1 < uint32_t(REX_LOAD_D_U16(r31.u32, 36))) { const uint32_t next_node = uint32_t(REX_LOAD_D_U32(r26.u32, 24)) + uint32_t(REX_LOAD_D_U32(r24.u32, 8)); REX_PREFETCH_GUEST(next_node + 8); REX_PREFETCH_GUEST(next_node + 44); }
