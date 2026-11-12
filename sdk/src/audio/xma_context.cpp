@@ -74,6 +74,11 @@ REXCVAR_DEFINE_BOOL(banjo_xma_frame_cache, true, "Banjo/Audio",
 REXCVAR_DEFINE_BOOL(banjo_xma_frame_cache_verify, false, "Banjo/Debug",
                     "XMA frame cache: decode every frame anyway and compare the cached samples with FFmpeg's; the log "
                     "counts the answers and the differences every 10 s");
+// blur-nx (2026-11-13, M-05 of docs/cpu-moonshots-50-1113.md): PrepareDecoder / OpenCodec.
+REXCVAR_DEFINE_BOOL(banjo_xma_codec_lazy_open, true, "Banjo/Audio",
+                    "XMA, with the frame cache on: a new sound's codec is opened before its first decode, not at its "
+                    "first frame (a sound the cache answers whole never opens one; exact: the codec is opened fresh "
+                    "before it decodes anything of the sound)");
 // blur-nx (2026-11-13, M-01 of docs/cpu-moonshots-50-1113.md): the proof of the one-frame catch-up.
 REXCVAR_DEFINE_BOOL(banjo_xma_frame_cache_chain_verify, false, "Banjo/Debug",
                     "Diagnostic (M-01): a second FFmpeg codec per context decodes every frame, the ones the frame cache "
@@ -409,6 +414,10 @@ struct FrameCache {
   size_t live = 0;  // nodes
   // The 10 s counts (the XMA decoder's report).
   uint64_t answered = 0, decoded = 0, caught_up = 0, unkeyed = 0, verified = 0, differ = 0, evicted = 0;
+  // blur-nx (2026-11-13, M-05 lazy open): new sounds (under the lock), and codecs really opened (OpenCodec, which runs
+  // outside it)
+  uint64_t fresh = 0;
+  std::atomic<uint64_t> opens{0};
   uint64_t chain_verified = 0, chain_differ = 0;  // blur-nx (2026-11-13): banjo_xma_frame_cache_chain_verify
 };
 FrameCache& Cache() {
@@ -581,11 +590,12 @@ static std::string XmaFrameCacheReport() {
   std::string out = fmt::format(
       "XMA frame cache (banjo_xma_frame_cache): {} frames answered, {} decoded ({:.1f} % answered), {} decoded again "
       "to catch the codec up (one a run), {} decoded unkeyed (after an error); verify {} checked, {} differ; chain "
-      "verify {} checked, {} differ; {} nodes, {:.1f} MB, {} evicted",
+      "verify {} checked, {} differ; {} nodes, {:.1f} MB, {} evicted; {} new sounds, {} codecs opened",
       c.answered, c.decoded, 100.0 * double(c.answered) / double(c.answered + c.decoded), c.caught_up, c.unkeyed,
-      c.verified, c.differ, c.chain_verified, c.chain_differ, c.live, double(c.bytes) / 1048576.0, c.evicted);
+      c.verified, c.differ, c.chain_verified, c.chain_differ, c.live, double(c.bytes) / 1048576.0, c.evicted,
+      c.fresh, c.opens.exchange(0, std::memory_order_relaxed));
   c.answered = c.decoded = c.caught_up = c.unkeyed = c.verified = c.differ = c.chain_verified = c.chain_differ = 0;
-  c.evicted = 0;
+  c.evicted = c.fresh = 0;
   return out;
 }
 
@@ -613,6 +623,10 @@ bool XmaContext::DecodeFrame(int prepared, int sample_rate, bool stereo) {
     cache_behind_ = false;
   }
   auto decode = [&]() {
+    if (!OpenCodec()) {
+      codec_open_failed_ = true;  // (ProcessFrame: error_status 4, as PrepareDecoder's failure was)
+      return false;
+    }
     if (!DecodePacket(av_context_, av_packet_, av_frame_)) return false;
     ConvertFrame(reinterpret_cast<const uint8_t**>(&av_frame_->data), stereo, raw_frame_.data());
     return true;
@@ -626,8 +640,8 @@ bool XmaContext::DecodeFrame(int prepared, int sample_rate, bool stereo) {
       if (chain_context_) avcodec_free_context(&chain_context_);
       if (!chain_frame_) chain_frame_ = av_frame_alloc();
       chain_context_ = avcodec_alloc_context3(av_codec_);
-      chain_context_->sample_rate = av_context_->sample_rate;
-      chain_context_->channels = av_context_->channels;
+      chain_context_->sample_rate = codec_rate_;
+      chain_context_->channels = codec_channels_;
       chain_context_->flags2 |= AV_CODEC_FLAG2_SKIP_MANUAL;
       if (avcodec_open2(chain_context_, av_codec_, NULL) < 0) avcodec_free_context(&chain_context_);
     }
@@ -667,6 +681,7 @@ bool XmaContext::DecodeFrame(int prepared, int sample_rate, bool stereo) {
         std::memcpy(raw_frame_.data(), hit->pcm(), pcm_bytes);
         hit->referenced = 1;
         ++c.answered;
+        if (prepared == 1) ++c.fresh;
         if (chain_ok) {
           ++c.chain_verified;
           if (std::memcmp(raw_frame_.data(), chain_raw_.data(), pcm_bytes) != 0) {
@@ -691,7 +706,7 @@ bool XmaContext::DecodeFrame(int prepared, int sample_rate, bool stereo) {
     // depends on it alone, above): the context's copy of its packet, output discarded.
     av_packet_->data = cache_prev_packet_.data();
     av_packet_->size = int(cache_prev_size_);
-    const bool ok = DecodePacket(av_context_, av_packet_, av_frame_);
+    const bool ok = OpenCodec() && DecodePacket(av_context_, av_packet_, av_frame_);
     av_packet_->data = data;
     av_packet_->size = size;
     cache_behind_ = false;
@@ -704,6 +719,7 @@ bool XmaContext::DecodeFrame(int prepared, int sample_rate, bool stereo) {
   {
     std::lock_guard<std::mutex> lock(c.mutex);
     if (caught_up) ++c.caught_up;
+    if (prepared == 1) ++c.fresh;
     if (!ok) return false;
     ++c.decoded;
     if (!keyed) ++c.unkeyed;
@@ -1088,10 +1104,9 @@ void XmaContext::ResetDecoderState() {
   // flush callback, so the call never reaches the code clearing channel[].out.
   // Invalidating the cached format makes PrepareDecoder reopen the codec on the
   // next decode, which does discard the history.
-  if (av_context_) {
-    av_context_->sample_rate = 0;
-    av_context_->channels = 0;
-  }
+  // blur-nx (2026-11-13, M-05 lazy open): the format PrepareDecoder compares is codec_rate_ / codec_channels_.
+  codec_rate_ = 0;
+  codec_channels_ = 0;
   raw_frame_.fill(0);
   in_silence_ = false;  // a new sound does not inherit the previous one's silence
   current_frame_remaining_subframes_ = 0;
@@ -1420,28 +1435,52 @@ uint32_t XmaContext::Consume(memory::RingBuffer* output_rb, const XMA_CONTEXT_DA
   return written;
 }
 
+// blur-nx (2026-11-13, M-05 of docs/cpu-moonshots-50-1113.md, as a lazy open): a new format (or a new sound:
+// ResetDecoderState) makes a fresh codec, 1, as before; with the frame cache on, it is opened by OpenCodec before its
+// first decode instead of here. The frame cache v2 answers most frames of a sound it has met (the first frame's key is
+// the format and its own packet), and a sound whose frames are all answered never needs the codec: per new sound, an
+// avcodec_alloc_context3 (a zeroed ~140 KB WMA Pro context) and decode_init's set-up no longer run (the moonshot's
+// 0.2-0.4 ms a frame of the audio thread). Exact: the codec is opened fresh before it decodes anything of the sound,
+// and a codec behind by answered frames is caught up by M-01's one-frame decode, whose state does not depend on what
+// the codec held before (DecodeFrame). With the cache off (or its key off): opened here, as before.
 int XmaContext::PrepareDecoder(int sample_rate, bool is_two_channel) {
   sample_rate = GetSampleRate(sample_rate);
 
-  uint32_t channels = is_two_channel ? 2 : 1;
-  if (av_context_->sample_rate != sample_rate ||
-      av_context_->channels != static_cast<int>(channels)) {
-    REXAPU_NOISY_DEBUG("XmaContext {}: Codec reinit: rate {} -> {}, channels {} -> {}", id(),
-                       av_context_->sample_rate, sample_rate, av_context_->channels, channels);
-    avcodec_free_context(&av_context_);
-    av_context_ = avcodec_alloc_context3(av_codec_);
-
-    av_context_->sample_rate = sample_rate;
-    av_context_->channels = channels;
-    av_context_->flags2 |= AV_CODEC_FLAG2_SKIP_MANUAL;
-
-    if (avcodec_open2(av_context_, av_codec_, NULL) < 0) {
-      REXAPU_ERROR("XmaContext: Failed to reopen FFmpeg context");
-      return -1;
-    }
+  const int channels = is_two_channel ? 2 : 1;
+  if (codec_rate_ != sample_rate || codec_channels_ != channels) {
+    REXAPU_NOISY_DEBUG("XmaContext {}: Codec reinit: rate {} -> {}, channels {} -> {}", id(), codec_rate_,
+                       sample_rate, codec_channels_, channels);
+    codec_rate_ = sample_rate;
+    codec_channels_ = channels;
+    codec_stale_ = true;
+    static const bool lazy = REXCVAR_GET(banjo_xma_frame_cache) && REXCVAR_GET(banjo_xma_codec_lazy_open);
+    if (!lazy && !OpenCodec()) return -1;
     return 1;
   }
   return 0;
+}
+
+// The codec opened fresh for codec_rate_ / codec_channels_ when PrepareDecoder made a new one (codec_stale_).
+bool XmaContext::OpenCodec() {
+  if (!codec_stale_) return true;
+  avcodec_free_context(&av_context_);
+  av_context_ = avcodec_alloc_context3(av_codec_);
+  if (!av_context_) {
+    REXAPU_ERROR("XmaContext {}: Couldn't allocate context", id());
+    codec_rate_ = codec_channels_ = 0;  // (the next frame tries again)
+    return false;
+  }
+  av_context_->sample_rate = codec_rate_;
+  av_context_->channels = codec_channels_;
+  av_context_->flags2 |= AV_CODEC_FLAG2_SKIP_MANUAL;
+  if (avcodec_open2(av_context_, av_codec_, NULL) < 0) {
+    REXAPU_ERROR("XmaContext: Failed to reopen FFmpeg context");
+    codec_rate_ = codec_channels_ = 0;
+    return false;
+  }
+  codec_stale_ = false;
+  Cache().opens.fetch_add(1, std::memory_order_relaxed);  // (the 10 s report)
+  return true;
 }
 
 void XmaContext::PreparePacket(uint32_t frame_size, uint32_t frame_padding) {
@@ -1656,6 +1695,12 @@ void XmaContext::Decode(XMA_CONTEXT_DATA* data) {
   PreparePacket(packet_info.current_frame_size_, padding_start);
   // banjo-nx (2026-10-27, #4): decoded, or answered by the frame cache (DecodeFrame converts it into raw_frame_).
   const bool decoded = DecodeFrame(prepared, GetSampleRate(data->sample_rate), bool(data->is_stereo));
+  if (codec_open_failed_) {
+    // blur-nx (2026-11-13, M-05 lazy open): the codec failed to open (PrepareDecoder's -1 before).
+    codec_open_failed_ = false;
+    data->error_status = 4;
+    return;
+  }
   if (decoded) {
     // Diagnostic (audio_dump_xma_s): the whole frame as it comes out of FFmpeg.
     DumpXma(id(), 0, GetSampleRate(data->sample_rate), data->is_stereo ? 2 : 1, raw_frame_.data(),

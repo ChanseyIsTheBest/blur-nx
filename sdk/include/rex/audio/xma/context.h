@@ -353,6 +353,14 @@ class XmaContext {
   uint64_t cache_prev_hash_ = 0;
   std::array<uint8_t, 1 + 4096 + 64> cache_prev_packet_;  // (xma_frame_'s size and AV_INPUT_BUFFER_PADDING_SIZE)
   void CacheKeepPrev(const uint8_t* data, uint32_t size, uint64_t hash);
+  // blur-nx (2026-11-13, M-05 lazy open, xma_context.cpp PrepareDecoder): the format of the codec (0: none yet, or a
+  // new sound: ResetDecoderState), whether it still has to be opened fresh for it (OpenCodec, which counts the opens
+  // for the 10 s report), and an open that failed in DecodeFrame (ProcessFrame's error_status 4).
+  int codec_rate_ = 0;
+  int codec_channels_ = 0;
+  bool codec_stale_ = false;
+  bool codec_open_failed_ = false;
+  bool OpenCodec();
   bool DecodeFrame(int prepared, int sample_rate, bool stereo);
   // blur-nx (2026-11-13, M-01's proof: banjo_xma_frame_cache_chain_verify): a second codec decoding every frame of
   // the context (the full chain), whose samples every frame the first one decodes or the cache answers is compared
