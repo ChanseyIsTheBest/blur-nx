@@ -147,6 +147,46 @@ toml, so a port that finds one wrong for its game doesn't have to change the cod
   (vivapinata-nx: two of its four 2D-engine blits a frame gone, -0.14 ms of GPU).
 - Port 89 puts the SDK's OBJECT libraries (audio, core, file system, input, UI) in the Switch LTO and
   PGO too, four files kept out (sasrt-nx: process CPU -0.7 %, render thread -1.9 %).
+- Port 90 takes blur-nx's CPU batches 1 and 2: vector conversions, shifts, prefetches and zeroing in
+  fewer instructions, grouped card checks, NoteSetWords and the XMA sweep faster (blur-nx's console:
+  16.6 -> 18.3 fps). Two of them change the code generator: run a code generation
+  (`tools/codegen.ps1`) and `python tools/post_codegen.py` after it.
+- Port 91 applies the game's gamma ramp at scan-out from a table (two fetches a pixel instead of three;
+  vivapinata-nx: -0.60 ms a frame), port 92 simplifies the fetches through sampler index + k
+  (tools/deko3d_glsl_opt.py's samplerk: a shader package made again takes it).
+- Port 93 takes sasrt-nx's exact items from its batches C and D the base has the code for: the critical
+  section's leave as a raw export, replay and capture prefetches, the render scale's factor and
+  coordinates without divisions, pooled held exports.
+- Port 97 turns pacman-nx's vblank display sync off by default (`pacman_vblank_display_sync`): it fixed
+  pacman-nx's input lag at full speed but cost blur-nx 15-18 % of its frame rate at 18-21 fps with no latency
+  gain. A game at the refresh rate that wants it turns it on in its toml (docs/off-by-default.md).
+- Port 98 fixes the specialised pipelines in an in-run A/B's off half (A/B 15-17): each draw made a job it
+  never matched (vivapinata-nx: 153 thousand jobs in 13 minutes, the off halves at 1.5-10 fps).
+- Port 96 rounds the single-precision fused multiply-adds (fmadds and kin) once, as the Xenon does, instead of
+  a double fused multiply-add rounded again to single; chains stay in float registers (blur-nx: CPU 190 -> 184
+  ms a frame). On by default (CMake BLUR_FMADDS_SINGLE); it needs the code generated again (tools/codegen.ps1,
+  then tools/post_codegen.py).
+- Port 103 (from dishonored-nx) applies the guest core layout from each thread at its own next wait instead of
+  re-masking running threads, the cause of the first-Swap hangs that keep `banjo_renut_core_layout` off.
+- Port 104 (from dishonored-nx) watches a tiled texture uploaded with an all-zero level until the game streams
+  its data in, then uploads it again (Dishonored's black walls and heads at a distance).
+- Port 105 (from dishonored-nx, sa2-nx's) feeds Renut's render thread from a lock-free ring instead of a vector
+  under a mutex (`dishonored_renut_lockfree_queue`; sa2-nx: the queue's locks 0.83 -> 0.18 ms of the game thread).
+- Port 94 takes vivapinata-nx's shader round: the fetch folding on vertex shaders too, a fetch's texel step at
+  1x without its scale chain, the vertex fetch types for every draw (vivapinata-nx: -8.13 ms of GPU a
+  frame with port 92). Take it with a shader package made again (tools/switch_shaders.ps1).
+- Port 95 (from vivapinata-nx) makes Renut's early alpha test optional per game (`vivapinata_shader_noearly`, off;
+  A/B 151 on the console says which shaders gain, tools/noearly_keep.txt keeps the others' test). Take it with a shader package made again (tools/switch_shaders.ps1).
+- Port 99 (from vivapinata-nx) moves a pixel shader's final alpha test up to right after what it needs, so a
+  discarded pixel skips the colour arithmetic (`vivapinata_shader_earlykill`, on; the same pixels). Take it with a shader package made again (tools/switch_shaders.ps1).
+- Port 100 (from dishonored-nx) declares `invariant gl_Position` in every vertex shader, so depth-equal passes
+  drawn with different vertex shaders cover the same pixels (Unreal Engine 3's bright silhouette edges). Take it with a shader package made again (tools/switch_shaders.ps1).
+- Port 101 (from dishonored-nx) converts only the committed part of a vertex stream or fetch copy and zeros the
+  rest, where a range past the game's allocation faulted the render thread (Switch).
+- Port 102 (from dishonored-nx) lets XenosRecomp translate a vertex shader that exports to an interpolator its
+  table does not list (an assert or a crash before). Take it with a shader package made again (tools/switch_shaders.ps1).
+- Port 106 (from dishonored-nx) clamps a pixel shader's output into a 7e3 target to the 7e3 range, as the Xenos
+  stores it (`dishonored_renut_clamp_7e3`; constant 990, sasrt_words[7] bits 28-31). Take it with a shader package made again (tools/switch_shaders.ps1).
 - Port 44 and the translator changes take effect when a game's shader package is made again. Before measuring on the
   console, build its DKSH cache on the PC (`tools/deko3d_variant_cache.py`): a first run that compiles its shaders while
   it draws is slower on the GPU than the build is.

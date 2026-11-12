@@ -52,6 +52,7 @@ different may measure them again.
 
 | Key | What it does | Speed |
 |---|---|---|
+| `pacman_vblank_display_sync` (port 97) | The display's refresh starts the game's frames (pacman-nx's, from futari-nx): the game waits at its Swap for the refresh, so frames do not queue up behind each other. Needs `banjo_display_sync`. | **Slower in a game under the refresh rate:** blur-nx's 4-core console races (2026-11-12, 240 s each): 17.67 fps with it, 20.83 without (+18 %), input -> present 60.7 -> 60.4 ms (no latency cost); its Game Master waited in the pacing wait for 13-16 % of its samples (frames held to whole refreshes: 3 or 4, 20 or 15 fps), 1.4 % without. It fixed pacman-nx's input lag at its full frame rate: pacman-nx turns it on in its toml (2026-11-12, the user's call) |
 | `banjo_renut_shadow_sort` | Depth-only draws of a recorded command buffer replayed sorted by shader. | **Slower:** render thread +1.1 ms, GPU +0.65 ms a frame (banjo-nx's console run of 2026-10-27) |
 | `banjo_renut_replay_lookahead` | The next replayed op's lookups prefetched while a draw is drawn. | **Slower:** render thread +2.15 ms a frame (2026-10-27) |
 | `banjo_renut_replay_stream_shaders` | The shader memo's sets prefetched two ops ahead instead of one. | **Slower:** +0.7 ms a frame, 4 of 5 periods worse (run c4, 2026-10-27) |
@@ -72,6 +73,7 @@ different may measure them again.
 
 | Key | What it does | Why it is off | Speed |
 |---|---|---|---|
+| `vivapinata_shader_noearly` (port 95; A/B 151) | Renut's early alpha test skipped (constant 976 = 0, GLSL pass noearly): a quad the early test would discard is discarded by the shader's own alpha test instead. The same pixels. | **Per game:** it pays where the shader after the test is short; with long bodies and many quads killed early it is slower. Each game measures A/B 151 on the console and lists its slower shaders in tools/noearly_keep.txt (2026-11-12). | vivapinata-nx's garden: -1.66 ms a frame with its keep list (39.45 -> 37.78, run c24, A/B 151, stock clocks; its first run, c18, -1.30 ms, had the A/B numbered 91, whose off half also switched sasrt_gpu_precise_depth_resolve off); two of its shaders +0.28 and +0.06 ms without the test (they keep it) |
 | `banjo_display_sync` | A thread follows the display's vsync; the frame limiter releases frames on it. | In Ryujinx every run with it stalled or hung (banjo-nx runs 65, 67, 68); for a console trial. | A latency change; not measured on the console |
 | `banjo_renut_core_layout` | Pins the drawing thread to core 0 and the other game threads to cores 1-2 at the first Swap. | Hung the first Swap in Ryujinx in 4 of 12 runs (re-masking running threads). | Faster in sa2-nx: render thread 12.5 -> 11.5 ms, game thread 17.6 -> 17.3 ms |
 | `banjo_renut_deferred_chain` | Begin*Vertices draws join the snapshot delta chain instead of a whole device copy. | The chain is one for every device; a game drawing on two devices from two threads gets a delta on the wrong device (emulator hangs in 4 of 8 runs). | Less copying; not measured since |
