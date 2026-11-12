@@ -386,7 +386,16 @@ struct FrameCache {
   std::mutex mutex;
   uint32_t epoch = 1;                                         // a node id is epoch << 32 | index + 1
   std::deque<FrameNode> nodes;  // (a deque: a node stays where it is while others are added)
-  std::unordered_map<uint64_t, std::vector<uint32_t>> by_key;  // hash of (parent, packet) -> node indices
+  // blur-nx (2026-11-13, M-04 of docs/cpu-moonshots-50-1113.md, the audit's rework): the key table as open addressing
+  // (a power-of-two array of (key, node index + 1) slots, linear probing, at most half full), where an unordered_map of
+  // vectors took a divide for the bucket and three dependent loads before the node. FindNode still compares the
+  // parent and the packet's bytes: the same answers.
+  struct KeySlot {
+    uint64_t key = 0;
+    uint32_t index_plus1 = 0;  // 0: empty
+  };
+  std::vector<KeySlot> table = std::vector<KeySlot>(size_t(1) << 16);
+  size_t table_used = 0;
   size_t bytes = 0;
   size_t pending = 0;  // contexts whose codec is behind the cache (blur-nx 2026-11-13: contexts, no longer frames)
   // The 10 s counts (the XMA decoder's report).
@@ -437,12 +446,35 @@ uint64_t PacketKey(uint64_t parent, const uint8_t* data, size_t size) {
 #endif
 }
 
+// The key table's first slot for a key (the keys are CRC / multiply-xor mixes: their low bits are spread).
+size_t SlotOf(const FrameCache& c, uint64_t key) { return size_t(key ^ (key >> 32)) & (c.table.size() - 1); }
+
+// One more (key, node) in the key table, doubled when it would pass half full. Under the cache's lock.
+void InsertKey(FrameCache& c, uint64_t key, uint32_t index) {
+  if ((c.table_used + 1) * 2 > c.table.size()) {
+    std::vector<FrameCache::KeySlot> old(c.table.size() * 2);
+    old.swap(c.table);
+    for (const FrameCache::KeySlot& s : old) {
+      if (!s.index_plus1) continue;
+      size_t i = SlotOf(c, s.key);
+      while (c.table[i].index_plus1) i = (i + 1) & (c.table.size() - 1);
+      c.table[i] = s;
+    }
+  }
+  size_t i = SlotOf(c, key);
+  while (c.table[i].index_plus1) i = (i + 1) & (c.table.size() - 1);
+  c.table[i].key = key;
+  c.table[i].index_plus1 = index + 1;
+  ++c.table_used;
+}
+
 // The node 'parent' leads to with this packet, or null. Under the cache's lock.
 FrameNode* FindNode(FrameCache& c, uint64_t parent, const uint8_t* data, size_t size, uint64_t* id) {
   if (!(parent & kRootBit) && uint32_t(parent >> 32) != c.epoch) return nullptr;
-  auto it = c.by_key.find(PacketKey(parent, data, size));
-  if (it == c.by_key.end()) return nullptr;
-  for (uint32_t index : it->second) {
+  const uint64_t key = PacketKey(parent, data, size);
+  for (size_t i = SlotOf(c, key); c.table[i].index_plus1; i = (i + 1) & (c.table.size() - 1)) {
+    if (c.table[i].key != key) continue;
+    const uint32_t index = c.table[i].index_plus1 - 1;
     FrameNode& n = c.nodes[index];
     if (n.parent == parent && n.packet.size() == size && std::memcmp(n.packet.data(), data, size) == 0) {
       *id = uint64_t(c.epoch) << 32 | (index + 1);
@@ -463,7 +495,8 @@ uint64_t AddNode(FrameCache& c, uint64_t parent, const uint8_t* data, size_t siz
     // chain of the old epoch becomes unknown (a root's children are made again). Otherwise no new node.
     if (c.pending) return 0;
     c.nodes.clear();
-    c.by_key.clear();
+    std::fill(c.table.begin(), c.table.end(), FrameCache::KeySlot{});
+    c.table_used = 0;
     c.bytes = 0;
     ++c.epoch;
     ++c.restarts;
@@ -475,7 +508,7 @@ uint64_t AddNode(FrameCache& c, uint64_t parent, const uint8_t* data, size_t siz
   n.packet.assign(data, data + size);
   std::memcpy(n.pcm.data(), pcm, pcm_bytes);
   n.pcm_bytes = pcm_bytes;
-  c.by_key[PacketKey(parent, data, size)].push_back(index);
+  InsertKey(c, PacketKey(parent, data, size), index);
   c.bytes += cost;
   return uint64_t(c.epoch) << 32 | (index + 1);
 }
