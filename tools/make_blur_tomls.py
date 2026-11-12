@@ -130,7 +130,7 @@ SHIPPED = {
     # configs/renut_smaa.toml for the user to decide on. Banjo's fur-shell cuts (also its user's calls) act only on Banjo's
     # four fur shaders (render/draw.cpp, by pixel shader hash): inert for Blur, set to the game's own all the same.
     'banjo_renut_smaa': "true  # blur-nx: on with the game's MSAA off (the user, 2026-11-12: \"turn off x4 MSAA change it to SMAA\")",
-    'banjo_renut_smaa_after_ps': "\"91C0712EC807B3DF\"  # blur-nx: Blur's final composite (the tone-mapped 3D image before the HUD; draw log of a race, 2026-11-12); N&B's 981A6A58F2ABFA42 never ran in Blur, so SMAA did nothing. Also the composite the internal resolution scales after (docked: the 3D at 720, the HUD at 1080)",
+    'banjo_renut_smaa_after_ps': "\"91C0712EC807B3DF,B20CDC973266527B\"  # blur-nx: Blur's two final composites (the tone-mapped 3D image before the HUD; it draws one or the other each frame: their draws a frame add up to 1.0 in every GPU profile block of two races; the first from a race frame's draw log, 2026-11-12). N&B's 981A6A58F2ABFA42 never ran in Blur, so SMAA did nothing. Also the composite the internal resolution scales after (docked: the 3D at 720, the HUD at 1080)",
     'banjo_renut_fur_shells': '1',
     'banjo_renut_portrait_fur_shells': '1',
     'banjo_renut_fur_shells_percent': '100',
