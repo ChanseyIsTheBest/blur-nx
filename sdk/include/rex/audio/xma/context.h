@@ -342,11 +342,17 @@ class XmaContext {
 
   // banjo-nx (2026-10-27, #4 of the CPU-gap table: banjo_xma_frame_cache, xma_context.cpp). The frames given to the codec
   // since it was last opened, as a node of the shared cache (0: not known, nothing cached until the codec is opened
-  // again), and the cached frames answered since that the codec has not decoded yet (decoded before the next frame
-  // the cache cannot answer).
+  // again), and the last frame the cache answered that the codec has not decoded (its node; 0: none). blur-nx
+  // (2026-11-13, M-01): one frame, not the run: the codec's state after a frame depends on that frame alone
+  // (xma_context.cpp, DecodeFrame), so it is decoded before the next frame the cache cannot answer.
   uint64_t cache_node_ = 0;
-  std::vector<uint64_t> cache_pending_;
+  uint64_t cache_behind_ = 0;
   bool DecodeFrame(int prepared, int sample_rate, bool stereo);
+  // blur-nx (2026-11-13, M-01's proof: banjo_xma_frame_cache_chain_verify): a second codec decoding every frame of
+  // the context (the full chain), whose samples every frame the first one decodes is compared with.
+  AVCodecContext* chain_context_ = nullptr;
+  AVFrame* chain_frame_ = nullptr;
+  std::array<uint8_t, kBytesPerFrameChannel * 2> chain_raw_;
 
 };
 

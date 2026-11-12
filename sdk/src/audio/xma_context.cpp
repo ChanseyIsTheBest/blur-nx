@@ -72,6 +72,11 @@ REXCVAR_DEFINE_BOOL(banjo_xma_frame_cache, true, "Banjo/Audio",
 REXCVAR_DEFINE_BOOL(banjo_xma_frame_cache_verify, false, "Banjo/Debug",
                     "XMA frame cache: decode every frame anyway and compare the cached samples with FFmpeg's; the log "
                     "counts the answers and the differences every 10 s");
+// blur-nx (2026-11-13, M-01 of docs/cpu-moonshots-50-1113.md): the proof of the one-frame catch-up.
+REXCVAR_DEFINE_BOOL(banjo_xma_frame_cache_chain_verify, false, "Banjo/Debug",
+                    "Diagnostic (M-01): a second FFmpeg codec per context decodes every frame, the ones the frame cache "
+                    "answered too (the full chain, as before 2026-11-13), and every frame the context's own codec decodes "
+                    "after its one-frame catch-up is compared with it, byte for byte (the 10 s line's 'chain verify')");
 // katamari-nx (2026-10-31): the console's constant tone (an XMA context repeating one 128-sample subframe).
 REXCVAR_DEFINE_INT32(audio_xma_loop_trace, 0, "Audio",
                      "Diagnostic: log the loop fields of a context each time it jumps back to its loop start "
@@ -328,6 +333,12 @@ XmaContext::~XmaContext() {
   if (av_frame_) {
     av_frame_free(&av_frame_);
   }
+  if (chain_context_) {
+    avcodec_free_context(&chain_context_);  // blur-nx (2026-11-13): banjo_xma_frame_cache_chain_verify's codec
+  }
+  if (chain_frame_) {
+    av_frame_free(&chain_frame_);
+  }
 }
 
 
@@ -339,16 +350,23 @@ XmaContext::~XmaContext() {
 // codec since it was opened form a chain, and the same chain gives the same samples. The cache keeps each chain as a
 // tree of nodes (the format at the root; a node per frame: its parent, the packet's exact bytes, the converted samples):
 // a sound played again from its start, frame for frame the same, is answered from the nodes without FFmpeg. The codec
-// does not see the frames the cache answered; they are kept (cache_pending_) and decoded, output discarded, before the
-// first frame the cache cannot answer, so the codec's state is always the one its chain gives. Exact: every answer is a
-// node reached by the same packets, compared byte for byte, from the same fresh codec.
-// Bounded: at most kMaxPending frames answered in a row (about 2.7 s of 48 kHz audio: short repeated sounds; a longer
-// run catches up and decodes as before), banjo_xma_frame_cache_mb of nodes (then the cache starts again, at a moment no
-// context has frames to catch up with: the contexts' chains of the old one are no longer known, nothing is lost).
+// does not see the frames the cache answered; before the first frame the cache cannot answer it decodes the last one
+// (cache_behind_), output discarded, so its state is the one its chain gives. Exact: every answer is a node reached by
+// the same packets, compared byte for byte, from the same fresh codec.
+// blur-nx (2026-11-13, M-01 of docs/cpu-moonshots-50-1113.md and its audit): one frame of catch-up, not the run. The
+// codec's state after a frame depends on that frame's bits alone (FFmpeg's wmaprodec.c: decode_frame resets reuse_sf
+// for every channel; the carry is out[spf .. 1.5 spf) of that frame's own IMDCT, which its subframes tile, while
+// wmapro_window mixes only a frame's first subframe with the carry, inside [0, spf); xmaframes_decode_packet starts a
+// fresh bit buffer every frame (save_bits(.., 0)); untouched channels are zeroed; a channel's first subframe reads
+// every scale factor band fresh). So the samples of frame k depend on (the format, frame k-1, frame k), and decoding
+// the last answered frame puts the codec where decoding the whole run would. The run was capped at 256 frames
+// (kMaxPending), and the cut runs made 74-84 % of the catch-up decodes (a third of all FFmpeg work in a race).
+// banjo_xma_frame_cache_chain_verify checks it: a second codec decodes the full chain.
+// Bounded: banjo_xma_frame_cache_mb of nodes (then the cache starts again, at a moment no context is behind: the
+// contexts' chains of the old one are no longer known, nothing is lost).
 // ---------------------------------------------------------------------------
 namespace {
 
-constexpr size_t kMaxPending = 256;
 constexpr uint64_t kRootBit = uint64_t(1) << 63;
 
 struct FrameNode {
@@ -364,9 +382,10 @@ struct FrameCache {
   std::deque<FrameNode> nodes;  // (a deque: a node stays where it is while others are added)
   std::unordered_map<uint64_t, std::vector<uint32_t>> by_key;  // hash of (parent, packet) -> node indices
   size_t bytes = 0;
-  size_t pending = 0;  // frames answered that a codec has not decoded yet, over every context
+  size_t pending = 0;  // contexts whose codec is behind the cache (blur-nx 2026-11-13: contexts, no longer frames)
   // The 10 s counts (the XMA decoder's report).
   uint64_t answered = 0, decoded = 0, caught_up = 0, verified = 0, differ = 0, restarts = 0;
+  uint64_t chain_verified = 0, chain_differ = 0;  // blur-nx (2026-11-13): banjo_xma_frame_cache_chain_verify
 };
 FrameCache& Cache() {
   static FrameCache c;
@@ -430,7 +449,7 @@ uint64_t AddNode(FrameCache& c, uint64_t parent, const uint8_t* data, size_t siz
   const size_t cost = sizeof(FrameNode) + size;
   const size_t limit = size_t(REXCVAR_GET(banjo_xma_frame_cache_mb)) << 20;
   if (c.bytes + cost > limit) {
-    // Full: start again, only while no context has frames to catch up with (their packets are the nodes'); every
+    // Full: start again, only while no context is behind (the frame it decodes next is a node's packet); every
     // chain of the old epoch becomes unknown (a root's children are made again). Otherwise no new node.
     if (c.pending) return 0;
     c.nodes.clear();
@@ -461,10 +480,11 @@ static std::string XmaFrameCacheReport() {
   if (!c.answered && !c.decoded) return {};
   std::string out = fmt::format(
       "XMA frame cache (banjo_xma_frame_cache): {} frames answered, {} decoded ({:.1f} % answered), {} decoded again "
-      "to catch the codec up; verify {} checked, {} differ; {} nodes, {:.1f} MB, {} restarts",
+      "to catch the codec up (one a run); verify {} checked, {} differ; chain verify {} checked, {} differ; {} nodes, "
+      "{:.1f} MB, {} restarts",
       c.answered, c.decoded, 100.0 * double(c.answered) / double(c.answered + c.decoded), c.caught_up, c.verified,
-      c.differ, c.nodes.size(), double(c.bytes) / 1048576.0, c.restarts);
-  c.answered = c.decoded = c.caught_up = c.verified = c.differ = 0;
+      c.differ, c.chain_verified, c.chain_differ, c.nodes.size(), double(c.bytes) / 1048576.0, c.restarts);
+  c.answered = c.decoded = c.caught_up = c.verified = c.differ = c.chain_verified = c.chain_differ = 0;
   return out;
 }
 
@@ -473,13 +493,14 @@ static std::string XmaFrameCacheReport() {
 bool XmaContext::DecodeFrame(int prepared, int sample_rate, bool stereo) {
   static const bool on = REXCVAR_GET(banjo_xma_frame_cache);
   static const bool verify = REXCVAR_GET(banjo_xma_frame_cache_verify);
+  static const bool chain_verify = on && REXCVAR_GET(banjo_xma_frame_cache_chain_verify);
   if (prepared == 1) {
-    // A fresh codec: the frames it was not given no longer matter.
-    if (!cache_pending_.empty()) {
+    // A fresh codec: the frame it was not given no longer matters.
+    if (cache_behind_) {
       FrameCache& c = Cache();
       std::lock_guard<std::mutex> lock(c.mutex);
-      c.pending -= cache_pending_.size();
-      cache_pending_.clear();
+      --c.pending;
+      cache_behind_ = 0;
     }
     cache_node_ = RootNode(sample_rate, stereo);
   }
@@ -489,6 +510,24 @@ bool XmaContext::DecodeFrame(int prepared, int sample_rate, bool stereo) {
     return true;
   };
   if (!on) return decode();
+  // banjo_xma_frame_cache_chain_verify: the second codec, opened when the first one is (the same fresh chain), decodes
+  // every frame, answered or not.
+  bool chain_ok = false;
+  if (chain_verify) {
+    if (prepared == 1 || !chain_context_) {
+      if (chain_context_) avcodec_free_context(&chain_context_);
+      if (!chain_frame_) chain_frame_ = av_frame_alloc();
+      chain_context_ = avcodec_alloc_context3(av_codec_);
+      chain_context_->sample_rate = av_context_->sample_rate;
+      chain_context_->channels = av_context_->channels;
+      chain_context_->flags2 |= AV_CODEC_FLAG2_SKIP_MANUAL;
+      if (avcodec_open2(chain_context_, av_codec_, NULL) < 0) avcodec_free_context(&chain_context_);
+    }
+    if (chain_context_ && chain_frame_ && DecodePacket(chain_context_, av_packet_, chain_frame_)) {
+      ConvertFrame(reinterpret_cast<const uint8_t**>(&chain_frame_->data), stereo, chain_raw_.data());
+      chain_ok = true;
+    }
+  }
   {
     static std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
     const auto now = std::chrono::steady_clock::now();
@@ -502,35 +541,44 @@ bool XmaContext::DecodeFrame(int prepared, int sample_rate, bool stereo) {
   std::lock_guard<std::mutex> lock(c.mutex);
   uint64_t id = 0;
   FrameNode* hit = cache_node_ ? FindNode(c, cache_node_, av_packet_->data, size_t(av_packet_->size), &id) : nullptr;
-  if (hit && hit->pcm_bytes == pcm_bytes && !verify && cache_pending_.size() < kMaxPending) {
+  if (hit && hit->pcm_bytes == pcm_bytes && !verify) {
     std::memcpy(raw_frame_.data(), hit->pcm.data(), pcm_bytes);
-    cache_pending_.push_back(id);
-    ++c.pending;
+    if (!cache_behind_) ++c.pending;
+    cache_behind_ = id;
     cache_node_ = id;
     ++c.answered;
     return true;
   }
-  // The codec catches up with the frames the cache answered (their samples are already out), then decodes this one.
-  if (!cache_pending_.empty()) {
+  // The codec catches up with the last frame the cache answered (its samples are already out; the state after it
+  // depends on it alone, above), then decodes this one.
+  if (cache_behind_) {
     uint8_t* const data = av_packet_->data;
     const int size = av_packet_->size;
-    for (uint64_t pending : cache_pending_) {
-      FrameNode& n = NodeOf(c, pending);  // (no restart while frames are pending: AddNode)
-      av_packet_->data = n.packet.data();
-      av_packet_->size = int(n.packet.size());
-      DecodePacket(av_context_, av_packet_, av_frame_);
-      ++c.caught_up;
-    }
+    FrameNode& n = NodeOf(c, cache_behind_);  // (no restart while a context is behind: AddNode)
+    av_packet_->data = n.packet.data();
+    av_packet_->size = int(n.packet.size());
+    DecodePacket(av_context_, av_packet_, av_frame_);
+    ++c.caught_up;
     av_packet_->data = data;
     av_packet_->size = size;
-    c.pending -= cache_pending_.size();
-    cache_pending_.clear();
+    --c.pending;
+    cache_behind_ = 0;
   }
   if (!decode()) {
     cache_node_ = 0;  // an error: its state from here is not one the cache knows
     return false;
   }
   ++c.decoded;
+  if (chain_ok) {
+    ++c.chain_verified;
+    if (std::memcmp(raw_frame_.data(), chain_raw_.data(), pcm_bytes) != 0) {
+      ++c.chain_differ;
+      static uint32_t logged = 0;
+      if (logged++ < 16)
+        REXAPU_ERROR("banjo_xma_frame_cache_chain_verify: context {}: a frame after the one-frame catch-up differs from "
+                     "the full chain's", id_);
+    }
+  }
   if (hit && hit->pcm_bytes == pcm_bytes) {
     // verify mode (or a long run): the decoded samples against the node's
     ++c.verified;
@@ -1312,7 +1360,10 @@ void XmaContext::Decode(XMA_CONTEXT_DATA* data) {
 
   uint8_t* current_input_buffer = GetCurrentInputBuffer(data);
 
-  input_buffer_.fill(0);
+  // blur-nx (2026-11-13, M-03): no whole fill of input_buffer_ here. Its first half is always copied over before it is
+  // read (below); its second half is copied over when a frame runs into the next packet, and zeroed below otherwise, as
+  // the fill left it.
+  bool input_second_half = false;
 
   // Loop-end frame: decode it here (output limited to loop_subframe_end),
   // jump to loop_start afterwards in the next-offset step.
@@ -1390,6 +1441,7 @@ void XmaContext::Decode(XMA_CONTEXT_DATA* data) {
     std::memcpy(input_buffer_.data(), packet + kBytesPerPacketHeader, kBytesPerPacketData);
     std::memcpy(input_buffer_.data() + kBytesPerPacketData, next_packet + kBytesPerPacketHeader,
                 kBytesPerPacketData);
+    input_second_half = true;
 
     BitStream combined(input_buffer_.data(), (kBitsPerPacket - kBitsPerPacketHeader) * 2);
     combined.SetOffset(relative_offset - kBitsPerPacketHeader);
@@ -1428,20 +1480,36 @@ void XmaContext::Decode(XMA_CONTEXT_DATA* data) {
       }
       std::memcpy(input_buffer_.data() + kBytesPerPacketData, next_packet + kBytesPerPacketHeader,
                   kBytesPerPacketData);
+      input_second_half = true;
     }
   }
 
   std::memcpy(input_buffer_.data(), packet + kBytesPerPacketHeader, kBytesPerPacketData);
+  if (!input_second_half)
+    std::memset(input_buffer_.data() + kBytesPerPacketData, 0, kBytesPerPacketData);  // M-03: as the fill left it
 
   stream = BitStream(input_buffer_.data(), (kBitsPerPacket - kBitsPerPacketHeader) * 2);
   stream.SetOffset(relative_offset - kBitsPerPacketHeader);
 
-  xma_frame_.fill(0);
+  // blur-nx (2026-11-13, M-03): not the whole 4 KB. BitStream::Copy keeps the bits of its first and last byte outside
+  // the frame (the padding, which is part of the packet's bytes: the cache's key and compare) and copies the bytes
+  // between whole; FFmpeg may read AV_INPUT_BUFFER_PADDING_SIZE bytes past the packet. So those bytes are zeroed, as the
+  // fill left them: the packet's data bytes (the frame's, within 8 of its ends rewritten whole) and 64 past them.
+  {
+    const uint32_t frame_bits = ((relative_offset - kBitsPerPacketHeader) & 7) + packet_info.current_frame_size_;
+    const size_t data_bytes = (frame_bits + 7) / 8;
+    const size_t head = std::min<size_t>(data_bytes, 8);
+    std::memset(xma_frame_.data() + 1, 0, head);
+    const size_t tail_begin = 1 + (data_bytes > 8 ? data_bytes - 8 : 0);
+    const size_t tail_end = std::min<size_t>(xma_frame_.size(), 1 + data_bytes + AV_INPUT_BUFFER_PADDING_SIZE);
+    if (tail_end > tail_begin) std::memset(xma_frame_.data() + tail_begin, 0, tail_end - tail_begin);
+  }
 
   const uint32_t padding_start =
       static_cast<uint8_t>(stream.Copy(xma_frame_.data() + 1, packet_info.current_frame_size_));
 
-  raw_frame_.fill(0);
+  // blur-nx (2026-11-13, M-03): no raw_frame_.fill(0): DecodeFrame writes every byte that is read (ConvertFrame the
+  // whole 512 samples of each channel, an answer the node's same bytes), and a frame that fails is not output.
 
   const int prepared = PrepareDecoder(data->sample_rate, bool(data->is_stereo));
   if (prepared < 0) {
