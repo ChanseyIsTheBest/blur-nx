@@ -39,11 +39,11 @@ SHIPPED = {
     'banjo_renut_dynamic_resolution': 'false',
     # blur-nx (2026-11-12, the user: "can we please turn off x4 MSAA change it to SMAA please"): the game's MSAA off
     # (one sample per pixel: less GPU time and bandwidth), SMAA 1x on instead (banjo_renut_smaa, below).
-    'disable_msaa': "false  # blur-nx: the game's 4x MSAA kept: with it off Blur's picture breaks (console races 2026-11-12: only the first of the game's three EDRAM strips drawn, the rest black)",
+    'disable_msaa': "false  # blur-nx: msaa_level decides (true forces no MSAA whatever it says); every level renders right since 2026-11-13",
     # blur-nx (2026-11-12 evening): disable_msaa is read by nothing in this build (a key of katamari-nx's own renderer);
     # Renut's control is msaa_level (render/surfaces.cpp: the most samples any target gets). 1: every MSAA target
     # single-sampled, its resolves plain copies. The races of 21:17-21:57 still had the game's 4x MSAA under SMAA.
-    'msaa_level': "4  # blur-nx: the game's 4x. 1 (the user, 2026-11-12: \"turn off x4 MSAA change it to SMAA\") breaks Blur's picture: the game draws the 720p scene in three EDRAM strips laid out for 4x; with 1 sample only the first lands (the race intro a band, the race's lower part black). Back to 4 until Renut handles it",
+    'msaa_level': "1  # blur-nx: no MSAA + SMAA by default (the user, 2026-11-13: '2xMSAA and SMAA or no MSAA and SMAA'; batch 5 on the console, ABBA: none 21.99 / 21.50 fps, GPU 27.6 ms; 2x 21.57 / 20.90, 32.1 ms; 4x 20.35 / 19.41, 36.0 ms). 2 or 4 (the game's) also render right since the 2026-11-13 fixes",
     'renut_post_process_precision': '"Game"',
     # The game paces itself; no extra cap.
     'frame_cap': '"Off"',
@@ -129,7 +129,7 @@ SHIPPED = {
     # 2026-11-10: banjo-nx ships SMAA on (its user's call); it smooths edges, not the game's picture: off here,
     # configs/renut_smaa.toml for the user to decide on. Banjo's fur-shell cuts (also its user's calls) act only on Banjo's
     # four fur shaders (render/draw.cpp, by pixel shader hash): inert for Blur, set to the game's own all the same.
-    'banjo_renut_smaa': "true  # blur-nx: on with the game's MSAA off (the user, 2026-11-12: \"turn off x4 MSAA change it to SMAA\")",
+    'banjo_renut_smaa': "true  # blur-nx: SMAA after Blur's two composites, with no MSAA by default (the user, 2026-11-12: 'turn off x4 MSAA change it to SMAA')",
     'banjo_renut_smaa_after_ps': "\"91C0712EC807B3DF,B20CDC973266527B\"  # blur-nx: Blur's two final composites (the tone-mapped 3D image before the HUD; it draws one or the other each frame: their draws a frame add up to 1.0 in every GPU profile block of two races; the first from a race frame's draw log, 2026-11-12). N&B's 981A6A58F2ABFA42 never ran in Blur, so SMAA did nothing. Also the composite the internal resolution scales after (docked: the 3D at 720, the HUD at 1080)",
     'banjo_renut_fur_shells': '1',
     'banjo_renut_portrait_fur_shells': '1',

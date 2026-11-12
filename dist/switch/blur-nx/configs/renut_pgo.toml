@@ -16,7 +16,7 @@ readback_memexport_fast = false
 # Package 28b (your choice, 2026-10-17): the game's 2x MSAA off for Renut's renderer (one sample per pixel: aliased
 # edges, less GPU bandwidth); configs/banjo_renut_msaa.toml puts it back. banjo-nx's renderer collapses MSAA itself and
 # its configs keep this false.
-disable_msaa = false  # blur-nx: the game's 4x MSAA kept: with it off Blur's picture breaks (console races 2026-11-12: only the first of the game's three EDRAM strips drawn, the rest black)
+disable_msaa = false  # blur-nx: msaa_level decides (true forces no MSAA whatever it says); every level renders right since 2026-11-13
 
 # Shaders the renderer cannot identify are written here once (raw microcode). Please send this folder back:
 # they get added to banjo_shaders.mesp (new areas of the game may have shaders the PC runs have not seen yet).
@@ -448,7 +448,7 @@ banjo_deko3d_eager_kicks = true
 # game's own picture. On in every config (your call); false here turns it off. configs/banjo_renut_smaa_ab.toml
 # switches it every 4 s (its GPU time in the "[renut A/B]" lines), _high.toml is the high preset, _compare.toml
 # writes same-frame before/after pictures.
-banjo_renut_smaa = true  # blur-nx: on with the game's MSAA off (the user, 2026-11-12: "turn off x4 MSAA change it to SMAA")
+banjo_renut_smaa = true  # blur-nx: SMAA after Blur's two composites, with no MSAA by default (the user, 2026-11-12: 'turn off x4 MSAA change it to SMAA')
 # NOT exact, your call (2026-10-21): 75 % of each fur part's shells (three of every four; 16 of Banjo's 21, his
 # outermost shell drawn, so the fur keeps its length; the dialogue portrait's too). 100 draws every shell as the
 # game; configs/banjo_renut_fur_shells_all.toml does that.
@@ -581,7 +581,7 @@ banjo_renut_diag_terrain = false
 renut_shadow_resolution = "1x"
 renut_ambient_occlusion = "Half"
 banjo_xma_frame_cache = true  # blur-nx: on (the user's word); exact
-msaa_level = 4  # blur-nx: the game's 4x. 1 (the user, 2026-11-12: "turn off x4 MSAA change it to SMAA") breaks Blur's picture: the game draws the 720p scene in three EDRAM strips laid out for 4x; with 1 sample only the first lands (the race intro a band, the race's lower part black). Back to 4 until Renut handles it
+msaa_level = 1  # blur-nx: no MSAA + SMAA by default (the user, 2026-11-13: '2xMSAA and SMAA or no MSAA and SMAA'; batch 5 on the console, ABBA: none 21.99 / 21.50 fps, GPU 27.6 ms; 2x 21.57 / 20.90, 32.1 ms; 4x 20.35 / 19.41, 36.0 ms). 2 or 4 (the game's) also render right since the 2026-11-13 fixes
 banjo_cpu_native_sub_8230B338 = false  # blur-nx: the copy writes r12 back, the original does not (guard)
 banjo_cpu_native_sub_8249CB30 = false  # blur-nx: the copy writes r12 back, the original does not (guard)
 blur_renut_wipe_overwritten = true  # blur-nx: Blur needs it (off by default in the base since port 77)

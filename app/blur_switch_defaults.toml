@@ -579,7 +579,6 @@ banjo_renut_diag_terrain = false
 renut_shadow_resolution = "1x"
 renut_ambient_occlusion = "Half"
 banjo_xma_frame_cache = true  # blur-nx: on (the user's word); exact
-msaa_level = 4  # blur-nx: the game's 4x. 1 (the user, 2026-11-12: "turn off x4 MSAA change it to SMAA") breaks Blur's picture: the game draws the 720p scene in three EDRAM strips laid out for 4x; with 1 sample only the first lands (the race intro a band, the race's lower part black). Back to 4 until Renut handles it
 banjo_cpu_native_sub_8230B338 = false  # blur-nx: the copy writes r12 back, the original does not (guard)
 banjo_cpu_native_sub_8249CB30 = false  # blur-nx: the copy writes r12 back, the original does not (guard)
 blur_renut_wipe_overwritten = true  # blur-nx: Blur needs it (off by default in the base since port 77)

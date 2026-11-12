@@ -19,7 +19,7 @@ import re
 import tomllib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PLAYER_KEYS = ('banjo_renut_smaa', 'disable_msaa', 'input_rumble', 'input_xbox_layout', 'input_joycon_sideways')
+PLAYER_KEYS = ('banjo_renut_smaa', 'msaa_level', 'disable_msaa', 'input_rumble', 'input_xbox_layout', 'input_joycon_sideways')
 PLAYER_TABLES = ('input_p1', 'input_p2')
 FINAL = {'log_level': '"off"'}
 
@@ -29,8 +29,11 @@ PLAYER_HEAD = '''# Blur for the Nintendo Switch (blur-nx): your options. Every o
 # SMAA edge smoothing on the 3D (the HUD and text stay sharp). Not the game's own picture; costs GPU time.
 banjo_renut_smaa = true
 
-# The game's own edge smoothing (4x MSAA, as on the Xbox 360). Leave it false: true turns it off, and Blur draws
-# its 3D image in strips laid out for 4x MSAA, so without it most of the picture stays black (2026-11-12).
+# The game's own edge smoothing (MSAA, 4x on the Xbox 360): 1 = none (the default, with SMAA above: the fastest),
+# 2 = 2x, 4 = the game's 4x (smoother edges, more GPU time: about 9 % lower frame rate than none).
+msaa_level = 1
+
+# true turns the game's MSAA off whatever msaa_level says.
 disable_msaa = false
 
 # Controller vibration (rumble). false = none.
