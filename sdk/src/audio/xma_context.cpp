@@ -650,7 +650,8 @@ bool XmaContext::DecodeFrame(int prepared, int sample_rate, bool stereo) {
       chain_ok = true;
     }
   }
-  {
+  // blur-nx (2026-11-13, M-37): the report's clock read every 64 frames of a thread, not every frame.
+  if (static thread_local uint32_t frames = 0; (++frames & 63) == 0) {
     static std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
     const auto now = std::chrono::steady_clock::now();
     if (now - last >= std::chrono::seconds(10)) {
@@ -800,11 +801,11 @@ int XmaContext::Setup(uint32_t id, memory::Memory* memory, uint32_t guest_ptr) {
  */
 void XmaContext::NoteProduction(bool produced, uint8_t reason, const XMA_CONTEXT_DATA& data) {
   static std::atomic<uint32_t> lines{0};
-  const auto now = std::chrono::steady_clock::now();
+  // blur-nx (2026-11-13, M-37): the clock only where a silence starts or ends (it was read every pass).
   if (!produced) {
     if (!in_silence_) {
       in_silence_ = true;
-      silence_from_ = now;
+      silence_from_ = std::chrono::steady_clock::now();
       passed_silence_ = 0;
     }
     ++passed_silence_;
@@ -815,6 +816,7 @@ void XmaContext::NoteProduction(bool produced, uint8_t reason, const XMA_CONTEXT
     return;
   }
   in_silence_ = false;
+  const auto now = std::chrono::steady_clock::now();
   const double ms = std::chrono::duration<double, std::milli>(now - silence_from_).count();
   if (ms >= 50.0 && lines.fetch_add(1, std::memory_order_relaxed) < 200) {
     REXLOG_INFO("[xma] silence: context {} spent {:.0f} ms without producing and plays again ({} empty passes, "
