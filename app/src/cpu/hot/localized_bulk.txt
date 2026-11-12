@@ -16,6 +16,10 @@
 # --min-instructions 0 --tiny 0 --min-samples 1): every function still sampled as generated code. Left out: 68 an
 # app or SDK source names (their own hooks), and the ones the copy tool refuses (the timebase, the special memory
 # forms, setjmp: 7).
+# 2026-11-13 morning (cycle 1; the user's rule: copies at every opportunity): 63 more from batch 5's two 4-core races
+# (b5_use, A/B 2026-11-13; --from-report 9 --merge --min-instructions 0 --tiny 0 --min-samples 1), among them the three
+# a Windows-only diagnostic kept out (M-28: sub_8216AE98, sub_8216CA28, sub_8256D6D8). Left out: 37 an app or SDK
+# source names, and the ones the copy tool refuses (the timebase, the special memory forms: 7).
 8251D238 2909 console samples, 318 instructions, 0 direct callees
 82953D90 1966 console samples, 290 instructions, 0 direct callees
 822EA500 1919 console samples, 150 instructions, 0 direct callees
@@ -2523,3 +2527,66 @@
 8275A320 1 console samples, 4 instructions, 1 direct callees
 82479198 1 console samples, 16 instructions, 3 direct callees
 826FF710 1 console samples, 22 instructions, 2 direct callees
+8216AE98 75 console samples, 386 instructions, 0 direct callees
+8216CA28 24 console samples, 1304 instructions, 5 direct callees
+8256D6D8 7 console samples, 96 instructions, 7 direct callees
+8217B8C8 2 console samples, 28 instructions, 5 direct callees
+828192D8 2 console samples, 172 instructions, 6 direct callees
+82764ED0 2 console samples, 36 instructions, 1 direct callees
+82360120 2 console samples, 100 instructions, 5 direct callees
+8256DE98 1 console samples, 36 instructions, 2 direct callees
+827241C0 1 console samples, 200 instructions, 2 direct callees
+82544320 1 console samples, 34 instructions, 2 direct callees
+82998FB0 1 console samples, 16 instructions, 2 direct callees
+821715B0 1 console samples, 230 instructions, 34 direct callees
+828A4BC8 1 console samples, 172 instructions, 5 direct callees
+82386100 1 console samples, 170 instructions, 3 direct callees
+828DAD68 1 console samples, 42 instructions, 4 direct callees
+822F3948 1 console samples, 16 instructions, 0 direct callees
+825576C8 1 console samples, 80 instructions, 3 direct callees
+826BFA48 1 console samples, 1674 instructions, 11 direct callees
+822FCDD8 1 console samples, 2 instructions, 0 direct callees
+82818E08 1 console samples, 308 instructions, 11 direct callees
+8217B360 1 console samples, 26 instructions, 1 direct callees
+82A3AC58 1 console samples, 28 instructions, 2 direct callees
+822D64C0 1 console samples, 2 instructions, 0 direct callees
+821F9880 1 console samples, 170 instructions, 5 direct callees
+8232CC80 1 console samples, 22 instructions, 2 direct callees
+821D9118 1 console samples, 44 instructions, 0 direct callees
+82594040 1 console samples, 206 instructions, 6 direct callees
+8245C9E8 1 console samples, 276 instructions, 4 direct callees
+8264EDF8 1 console samples, 92 instructions, 5 direct callees
+8264BD00 1 console samples, 24 instructions, 0 direct callees
+82338A38 1 console samples, 70 instructions, 8 direct callees
+82254788 1 console samples, 2 instructions, 1 direct callees
+827DA828 1 console samples, 26 instructions, 4 direct callees
+822FBE98 1 console samples, 12 instructions, 0 direct callees
+82271ED8 1 console samples, 34 instructions, 1 direct callees
+82292F08 1 console samples, 26 instructions, 2 direct callees
+8236AB00 1 console samples, 48 instructions, 3 direct callees
+82292B50 1 console samples, 24 instructions, 3 direct callees
+8275A930 1 console samples, 4 instructions, 1 direct callees
+82543E70 1 console samples, 46 instructions, 6 direct callees
+8256B1F0 1 console samples, 10 instructions, 1 direct callees
+821D1D90 1 console samples, 2 instructions, 0 direct callees
+828A5118 1 console samples, 108 instructions, 2 direct callees
+82833F28 1 console samples, 56 instructions, 2 direct callees
+8231FF18 1 console samples, 38 instructions, 0 direct callees
+82395D88 1 console samples, 100 instructions, 4 direct callees
+8230D8D8 1 console samples, 52 instructions, 2 direct callees
+82441C80 1 console samples, 38 instructions, 1 direct callees
+82384180 1 console samples, 22 instructions, 2 direct callees
+826496E8 1 console samples, 2 instructions, 0 direct callees
+# out: 8231C000 (2026-11-13, cycle 1's guard run verify_c1: its copy writes back r12 = 0x7010F740 where the original leaves it, a register dead_ctx_defs.py proves dead at the return under the ABI but the copy's LiveOut keeps (a promoted indirect-call target: LiveOut everything since 2026-11-12); 1 console sample)
+82999930 1 console samples, 4 instructions, 0 direct callees
+82266800 1 console samples, 46 instructions, 2 direct callees
+826011E0 1 console samples, 118 instructions, 2 direct callees
+827C8128 1 console samples, 28 instructions, 2 direct callees
+825E2F00 1 console samples, 160 instructions, 6 direct callees
+821F9178 1 console samples, 28 instructions, 2 direct callees
+8296FF20 1 console samples, 110 instructions, 5 direct callees
+822D6328 1 console samples, 4 instructions, 0 direct callees
+824059F8 1 console samples, 216 instructions, 14 direct callees
+8240EAD0 1 console samples, 78 instructions, 1 direct callees
+8240F618 1 console samples, 50 instructions, 1 direct callees
+824B6FF8 1 console samples, 50 instructions, 2 direct callees
