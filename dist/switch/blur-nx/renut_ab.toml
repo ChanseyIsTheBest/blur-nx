@@ -25,7 +25,7 @@ banjo_shader_misses = "sdmc:/switch/blur-nx/shader_misses"
 # Logs go to logs/rex/ next to the NRO. Please send them back after a test.
 log_level = "info"
 # The file log is written by a thread of its own (from futari-nx): the ring thread never waits for the SD card.
-log_file_writer = false
+log_file_writer = true
 
 # Controls (2026-10-21, from sa2-nx; your request). Face buttons by position, as on the Xbox 360 pad the game was made
 # for: the bottom button (B on Switch controllers) acts as A, the right one (A) as B, the left one (Y) as X, the top one
@@ -563,7 +563,7 @@ banjo_renut_dynamic_docked_high = 1080
 banjo_renut_dynamic_steps = 4
 banjo_renut_dynamic_gpu_ms = 34.5
 banjo_renut_dynamic_up_s = 1.0
-banjo_system_core = 1
+banjo_system_core = 2  # blur-nx: the game threads on core 3 too (20.8 -> 22.1 fps on the console, no audio underruns)
 banjo_system_core_compiles = false
 banjo_system_core_uam = true
 banjo_system_core_xma = true  # blur-nx: the XMA Decoder on core 3 in four-core mode (the user's request)
@@ -586,6 +586,8 @@ banjo_cpu_native_sub_8249CB30 = false  # blur-nx: the copy writes r12 back, the 
 blur_renut_wipe_overwritten = true  # blur-nx: Blur needs it (off by default in the base since port 77)
 banjo_renut_replay_inherits = true  # blur-nx: Blur's replays inherit (off by default in the base since port 77)
 blur_renut_edram_inherit = true  # blur-nx: Blur needs it (the base turns it off since port 86; no band on Blur's console)
+banjo_xma_frame_cache_mb = 256  # blur-nx: the most the cvar allows (24 -> 256: 26 -> 65 % of the frames answered)
+pacman_vblank_display_sync = false  # blur-nx: off (17.7 -> 20.8 fps on the console); configs/renut_vblank_sync.toml: on
 banjo_renut_ab_targets = "25,28,22,26,33,42,45,46,48,70,211,212,213,214,215,216,217,218,219,220,221,1"
 banjo_renut_ab_s = 30
 

@@ -56,6 +56,10 @@ endif()
 # 1/4096. ON at the user's word (2026-11-11). AArch64 only: the PC keeps the exact expressions. Global, so the SDK and
 # the copies see the same. An existing build folder keeps a cached OFF: cmake -DSASRT_VMX_FAST_ESTIMATES=ON
 # -DSASRT_VMX_FUSED_MADD=ON on it.
+# blur-nx (2026-11-12, the user's request: "Lets try these two and if they show benefit we send to ultimate base"):
+# value profiling in the PGO cycle, and GCC 16's function reordering for locality at the LTO link. Both OFF: as before.
+option(BANJO_PGO_VALUES "Switch PGO with value profiles (-fprofile-values; the training build's counters atomic)" OFF)
+option(BANJO_SWITCH_REORDER_LOCALITY "Switch LTO link: -fipa-reorder-for-locality instead of -flto-partition=balanced" OFF)
 option(SASRT_VMX_FAST_ESTIMATES "VMX vrsqrtefp / vrefp / vlogefp as AArch64 estimates (not bit-exact)" ON)
 option(SASRT_VMX_FUSED_MADD "VMX vmaddfp / vnmsubfp as one fused multiply-add (not bit-exact)" ON)
 if(SASRT_VMX_FAST_ESTIMATES)
@@ -650,7 +654,16 @@ if(REXGLUE_PLATFORM_SWITCH)
     endif()
     if(BANJO_SWITCH_LTO)
         set(_banjo_lto_compile -flto -fno-fat-lto-objects)
-        set(_banjo_lto_link -flto=${BANJO_SWITCH_LTO_JOBS} -flto-partition=balanced -ffp-contract=off
+        # blur-nx (2026-11-12, the user's request): BANJO_SWITCH_REORDER_LOCALITY puts GCC 16's
+        # -fipa-reorder-for-locality in place of -flto-partition=balanced (GCC refuses the two together: the pass makes
+        # its own partitions, callers next to their callees, cloning a callee where it pays).
+        if(BANJO_SWITCH_REORDER_LOCALITY)
+            set(_banjo_lto_partition -fipa-reorder-for-locality)
+            list(APPEND _banjo_lto_compile -fipa-reorder-for-locality)
+        else()
+            set(_banjo_lto_partition -flto-partition=balanced)
+        endif()
+        set(_banjo_lto_link -flto=${BANJO_SWITCH_LTO_JOBS} ${_banjo_lto_partition} -ffp-contract=off
                             -fno-strict-aliasing)
         if(BANJO_SWITCH_IPA_PTA)
             list(APPEND _banjo_lto_compile -fipa-pta)
@@ -673,14 +686,36 @@ if(REXGLUE_PLATFORM_SWITCH)
             set_property(SOURCE ${_banjo_sdk_no_lto} TARGET_DIRECTORY rexcore rexui APPEND PROPERTY COMPILE_OPTIONS
                          -fno-lto)
         endif()
+        # blur-nx (2026-11-12): with -fipa-reorder-for-locality, GCC 16.1's LTO link lost the shader cache's top-level asm
+        # (the .incbin that defines g_compressedSpirvCache: "undefined reference" from ShaderBoolSpecMaske and
+        # CreateCachedShader), while -flto-partition=balanced puts every top-level asm in its first partition. The two
+        # generated files whose asm defines the embedded data (the SPIR-V cache, the deko3d GLSL package) are compiled as
+        # ordinary objects with that option: data only, nothing for LTO to optimise in them.
+        if(BANJO_SWITCH_REORDER_LOCALITY AND TARGET banjo_renut_gpu)
+            foreach(_banjo_asm_src "${BANJO_RENUT_SHADER_CACHE_CPP}" "${BANJO_DEKO3D_GLSL_CPP}")
+                if(_banjo_asm_src AND EXISTS "${_banjo_asm_src}")
+                    set_property(SOURCE "${_banjo_asm_src}" TARGET_DIRECTORY banjo_renut_gpu APPEND PROPERTY
+                                 COMPILE_OPTIONS -fno-lto)
+                endif()
+            endforeach()
+        endif()
         message(STATUS "banjo: Switch LTO (${BANJO_SWITCH_LTO_JOBS} jobs)")
     endif()
     get_filename_component(_banjo_pgo_dir "${_banjo_pgo_profile}" ABSOLUTE)
     file(TO_NATIVE_PATH "${_banjo_pgo_dir}" _banjo_pgo_dir)
     file(TO_NATIVE_PATH "${CMAKE_BINARY_DIR}" _banjo_pgo_prefix)
     if(BANJO_PGO STREQUAL "generate")
+        # blur-nx (2026-11-12, the user's request): BANJO_PGO_VALUES also profiles values (-fprofile-values: the targets
+        # of indirect calls, common sizes and divisors), with atomic counters: the value counters' lists are not safe to
+        # update from several threads at once (the arc counters lose a few increments, which -fprofile-correction
+        # smooths; a value list can break).
+        if(BANJO_PGO_VALUES)
+            set(_banjo_pgo_value_flags -fprofile-values -fprofile-update=atomic)
+        else()
+            set(_banjo_pgo_value_flags -fno-profile-values -fprofile-update=single)
+        endif()
         set(_banjo_pgo "-fprofile-generate=${_banjo_pgo_dir}" "-fprofile-prefix-path=${_banjo_pgo_prefix}"
-                       -fno-profile-values -fprofile-update=single -fprofile-info-section=gcov_info)
+                       ${_banjo_pgo_value_flags} -fprofile-info-section=gcov_info)
         target_compile_definitions(renut PRIVATE BANJO_PGO_GENERATE=1)
     elseif(BANJO_PGO STREQUAL "use")
         # Port 81: a folder without .gcda files is no profile either (pgo-inplace/ before its first session).
@@ -698,8 +733,15 @@ if(REXGLUE_PLATFORM_SWITCH)
         # -fprofile-correction: the counts were taken without atomic updates (-fprofile-update=single) while several
         # threads ran the same code, so a few increments were lost and some blocks' counts do not add up; GCC
         # smooths them instead of stopping.
+        # blur-nx (2026-11-12): BANJO_PGO_VALUES uses the value profiles (GCC turns a hot indirect call into a guarded
+        # direct one it can inline, and specialises common sizes and divisors; the results are the same).
+        if(BANJO_PGO_VALUES)
+            set(_banjo_pgo_use_values -fprofile-values)
+        else()
+            set(_banjo_pgo_use_values -fno-profile-values)
+        endif()
         set(_banjo_pgo "-fprofile-use=${_banjo_pgo_dir}" "-fprofile-prefix-path=${_banjo_pgo_prefix}"
-                       -fprofile-correction -fno-profile-values -fprofile-partial-training -Wno-missing-profile
+                       -fprofile-correction ${_banjo_pgo_use_values} -fprofile-partial-training -Wno-missing-profile
                        -Wno-coverage-mismatch)
         set(_banjo_inline_options "")
         if(BANJO_SWITCH_INLINE_AUTO)

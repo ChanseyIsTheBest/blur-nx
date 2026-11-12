@@ -25,11 +25,13 @@
 #include <filesystem>
 #include <limits>
 #include <string>
+#include <vector>  // blur-nx (2026-11-12): RoundSingle
 
 #include <fmt/format.h>
 
 #include <rex/filesystem.h>
 #include <rex/logging.h>
+#include <rex/ppc/context.h>  // blur-nx (2026-11-12): CRRegister (KnownSingle below)
 #include <rex/ppc/diet_ops.h>
 #include <rex/ppc/intrinsics.h>
 #include <rex/ppc/vec_lane.h>  // blur-nx (2026-11-11): the lanes by a run-time index (VecLanes below)
@@ -524,6 +526,110 @@ void FmaSingle(Tally& t) {
   (void)checked_exact;
 }
 
+// blur-nx (2026-11-12, CPU batch 3, CG-16): frsp's any-mode form with one range test against the two-test form it
+// replaced, over the boundaries (FLT_MIN and its neighbours, the single denormal range, denormal doubles, the largest
+// single and the doubles that round to it or to infinity) and a spread of exponents, with the flush mode on and off.
+void RoundSingle(Tally& t) {
+  using P = rex::platform::FPSCRPlatform;
+  std::vector<double> in = {0.0, -0.0, 0x1p-126, -0x1p-126, std::nextafter(0x1p-126, 0.0), std::nextafter(0x1p-126, 1.0),
+                            0x1p-149, 0x1.8p-150, 0x1p-150, 0x1p-151, 0x1.fffffcp-127, 0x1.fffffep-127, 0x1.ffffffp-127,
+                            std::numeric_limits<double>::denorm_min(), 0x1p-1022, std::nextafter(0x1p-1022, 0.0),
+                            0x1.fffffep127, 0x1.fffffefp127, 0x1.ffffffp127, 0x1p128, 1e300, -1e300,
+                            std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity(),
+                            std::numeric_limits<double>::quiet_NaN(), std::bit_cast<double>(0x7FF0000000000001ull),
+                            std::bit_cast<double>(0xFFF8000000001234ull), 1.0, -1.0, 1.0 / 3.0};
+  uint32_t seed = 0x2545F491u;
+  for (int i = 0; i < 400; ++i) {
+    const uint64_t hi = Lcg(seed), lo = Lcg(seed);
+    // exponents from 2^-1074 to 2^130 (the biased 0-1153), the first half in the single denormal range's 2^-160..2^-121
+    const uint64_t exp = i < 200 ? 1023 - 160 + (hi % 40) : (hi % 1154);
+    in.push_back(std::bit_cast<double>(((lo & 1) << 63) | (exp << 52) | ((hi << 32 | lo) & 0xFFFFFFFFFFFFFull)));
+  }
+  const auto saved = P::getcsr();
+  for (int mode = 0; mode < 2; ++mode) {
+    P::setcsr(decltype(saved)(mode ? (saved | P::FlushMask) : (saved & ~decltype(saved)(P::FlushMask))));
+    for (double v : in) {
+      const double d = Opaque(v);
+      // Opaque (a volatile object) keeps both computations between the two mode writes.
+      const uint64_t got = Opaque(std::bit_cast<uint64_t>(rex::ppc::RoundToSingleAnyMode(d)));
+      const uint64_t want = Opaque(std::bit_cast<uint64_t>(rex::ppc::RoundToSingleAnyModeRef(d)));
+      P::setcsr(saved);  // the report formats with the thread's own mode
+      t.Expect(mode ? "RoundToSingleAnyMode (flush on)" : "RoundToSingleAnyMode (flush off)",
+               fmt::format("{:016X}", std::bit_cast<uint64_t>(v)), got, want);
+      P::setcsr(decltype(saved)(mode ? (saved | P::FlushMask) : (saved & ~decltype(saved)(P::FlushMask))));
+    }
+  }
+  P::setcsr(saved);
+}
+
+// blur-nx (2026-11-12, CPU batch 3, CG-14): the known-single forms (tools/single_floats.py: both operands proven single)
+// against the any-mode forms, on pairs of singles (zeros, the smallest and largest denormal singles, FLT_MIN, the
+// largest single, infinities, NaNs and a spread of exponents, including pairs whose results land in the single
+// denormal range or overflow), with the flush mode on and off; the compare by its CR field.
+void KnownSingle(Tally& t) {
+  using P = rex::platform::FPSCRPlatform;
+  static const uint32_t kSpecial[] = {0x00000000u, 0x80000000u, 0x00000001u, 0x807FFFFFu, 0x00800000u, 0x80800000u,
+                                      0x7F7FFFFFu, 0xFF7FFFFFu, 0x7F800000u, 0xFF800000u, 0x7FC00000u, 0x3F800000u,
+                                      0xBF800000u, 0x0C000000u, 0x34000001u, 0x00400000u};
+  std::vector<float> in;
+  for (uint32_t b : kSpecial) in.push_back(std::bit_cast<float>(b));
+  uint32_t seed = 0x9E3779B9u;
+  for (int i = 0; i < 48; ++i) {
+    const uint32_t x = Lcg(seed);
+    // biased exponents 0-254: the small ones make products and quotients in the single denormal range
+    const uint32_t exp = i < 24 ? (Lcg(seed) % 40u) : (Lcg(seed) % 255u);
+    in.push_back(std::bit_cast<float>((x & 0x807FFFFFu) | (exp << 23)));
+  }
+  const auto saved = P::getcsr();
+  const auto with = [&](int mode) {
+    P::setcsr(decltype(saved)(mode ? (saved | P::FlushMask) : (saved & ~decltype(saved)(P::FlushMask))));
+  };
+  // The widening once, with the mode off (with it on, a denormal single would widen to zero): the doubles a register
+  // holds after an lfs of these singles.
+  std::vector<uint64_t> wide(in.size());
+  with(0);
+  for (size_t k = 0; k < in.size(); ++k) wide[k] = Opaque(std::bit_cast<uint64_t>(double(Opaque(in[k]))));
+  P::setcsr(saved);
+  for (int mode = 0; mode < 2; ++mode) {
+    for (size_t ia = 0; ia < in.size(); ++ia) {
+      for (size_t ib = 0; ib < in.size(); ++ib) {
+        const float fa = in[ia], fb = in[ib];
+        with(mode);
+        const double a = std::bit_cast<double>(Opaque(wide[ia])), b = std::bit_cast<double>(Opaque(wide[ib]));
+        uint64_t got[5], want[5];
+        got[0] = Opaque(std::bit_cast<uint64_t>(rex::ppc::AddSingleKnown(a, b)));
+        want[0] = Opaque(std::bit_cast<uint64_t>(rex::ppc::AddSingleAnyMode(a, b)));
+        got[1] = Opaque(std::bit_cast<uint64_t>(rex::ppc::SubSingleKnown(a, b)));
+        want[1] = Opaque(std::bit_cast<uint64_t>(rex::ppc::SubSingleAnyMode(a, b)));
+        got[2] = Opaque(std::bit_cast<uint64_t>(rex::ppc::MulSingleKnown(a, b)));
+        want[2] = Opaque(std::bit_cast<uint64_t>(rex::ppc::MulSingleAnyMode(a, b)));
+        got[3] = Opaque(std::bit_cast<uint64_t>(rex::ppc::DivSingleKnown(a, b)));
+        want[3] = Opaque(std::bit_cast<uint64_t>(rex::ppc::DivSingleAnyMode(a, b)));
+        rex::ppc::CRRegister c1{}, c2{};
+        c1.compare(a, b);
+        rex::ppc::CompareAnyMode(c2, a, b);
+        got[4] = Opaque(uint64_t(c1.raw()));
+        want[4] = Opaque(uint64_t(c2.raw()));
+        P::setcsr(saved);
+        static const char* const kName[2][5] = {
+            {"AddSingleKnown (flush off)", "SubSingleKnown (flush off)", "MulSingleKnown (flush off)",
+             "DivSingleKnown (flush off)", "compare of singles (flush off)"},
+            {"AddSingleKnown (flush on)", "SubSingleKnown (flush on)", "MulSingleKnown (flush on)",
+             "DivSingleKnown (flush on)", "compare of singles (flush on)"}};
+        for (int k = 0; k < 5; ++k) {
+          // Bit for bit, NaNs included (the same operation on the same operands); formatted only on a difference.
+          if (got[k] != want[k])
+            t.Expect(kName[mode][k], fmt::format("{:08X} {:08X}", std::bit_cast<uint32_t>(fa),
+                                                 std::bit_cast<uint32_t>(fb)), got[k], want[k]);
+          else
+            ++t.checks;
+        }
+      }
+    }
+  }
+  P::setcsr(saved);
+}
+
 }  // namespace
 
 namespace banjo {
@@ -539,6 +645,8 @@ void FormsSelfCheck() {
   VecBatch2(t);
   VecBatch3(t);
   FmaSingle(t);
+  RoundSingle(t);
+  KnownSingle(t);
   if (t.wrong) {
     for (int i = 0; i < t.wrong; ++i) ::me::native::VerifyDifference();
     REXLOG_ERROR("[enhancements] DIFFERENCE: instruction forms self-check: {} of {} results are NOT as expected (see the lines "

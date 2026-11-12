@@ -104,14 +104,20 @@ inline simde__m128i VecSllv31(simde__m128i a, simde__m128i n) {
 // DC ZVA zeroes a whole block without reading it first (a plain store of zero makes the A57 read the line in). The block
 // is DCZID_EL0's (bits 3:0, log2 of 4-byte words; bit 4 prohibits): 64 bytes on the A57. Any other answer: the memset.
 #if defined(__aarch64__) && !defined(REX_DCBZ_MEMSET)
-inline bool Zva64Ok() {
-  static const bool ok = [] {
-    uint64_t dczid;
-    __asm__ volatile("mrs %0, dczid_el0" : "=r"(dczid));
-    return (dczid & 0x1F) == 4;
-  }();
-  return ok;
+namespace detail {
+inline bool ReadZva64Ok() {
+  uint64_t dczid;
+  __asm__ volatile("mrs %0, dczid_el0" : "=r"(dczid));
+  return (dczid & 0x1F) == 4;
 }
+// blur-nx (2026-11-12, CPU batch 3): read once, by the program's dynamic initialisation (before main, so before any
+// guest code), and a plain load at each use. It was a function-local static: every dcbz paid the load-acquire of its
+// guard (`ldar` + `tbz`) and the flag's load; in the console race 190 of the 227 samples of the audio mixer's zeroing
+// loop (sub_8230AD50: eight dcbz a 1 KB buffer) sat on those two loads, 5 on the `dc zva`s. A dcbz that ran before
+// the initialisation would read false and take the memset: the same bytes.
+inline const bool g_zva64_ok = ReadZva64Ok();
+}  // namespace detail
+inline bool Zva64Ok() { return detail::g_zva64_ok; }
 #endif
 inline void Dcbz128(void* p) {
 #if defined(__aarch64__) && !defined(REX_DCBZ_MEMSET)

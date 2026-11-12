@@ -77,9 +77,32 @@ SHIPPED = {
     # the samples decoded the first time instead of FFmpeg's decode (exact; the XMA Decoder was 46 % of a core in
     # the console race). renut_verify.toml decodes anyway and counts the differences.
     'banjo_xma_frame_cache': 'true  # blur-nx: on (the user\'s word); exact',
+    # blur-nx (2026-11-12, CPU batch 4): the cache's room, the cvar's maximum. The default 24 MB filled in the first
+    # minute of the console race (11,302 frames) and answered 26 % of the frames; 128 MB answered 37 %, 256 MB 65 %
+    # (119,441 frames, full after about 90 s of racing): the XMA Decoder 15.2 -> 10.9 ms a frame, the race 23.84 ->
+    # 24.77 fps (build A of batch 3). The heap had 1,692 MB of its 3,089 free at the end of the race.
+    'banjo_xma_frame_cache_mb': '256  # blur-nx: the most the cvar allows (24 -> 256: 26 -> 65 % of the frames answered)',
     'banjo_shader_misses': '"sdmc:/switch/blur-nx/shader_misses"',
     'log_level': '"info"',
-    'log_file_writer': 'false',
+    # blur-nx (2026-11-12, CPU batch 3): the file log from a thread of its own (the base's writer, from futari-nx). The
+    # base's player defaults set it false because they log nothing (log_level "off"); this toml logs at info, and with
+    # spdlog's synchronous sink the Game Master wrote each line to the SD card itself (fsdev_write: 0.9-1.3 % of its
+    # samples in the console races).
+    'log_file_writer': 'true',
+    # blur-nx (2026-11-12, CPU batch 3; the user: "go after the frame rate"): the display's refresh no longer starts the
+    # game's frames (the base's pacing from pacman-nx, p1, made for 60 fps games' input lag). On Blur's 4-core console
+    # race it held the game to whole refreshes (3 or 4: 20 or 15 fps) and the Game Master waited 13-16 % of its
+    # samples for it: 17.67 -> 20.83 fps without it, input -> present 60.7 -> 60.4 ms. As the frame pacing note below
+    # says (your "it likes 20 if it cannot hold 30"), a frame rate between 20 and 30 shows as it is.
+    # configs/renut_vblank_sync.toml puts the refresh pacing back.
+    'pacman_vblank_display_sync': 'false  # blur-nx: off (17.7 -> 20.8 fps on the console); configs/renut_vblank_sync.toml: on',
+    # blur-nx (2026-11-12, CPU batch 3): the game's threads may use core 3 too (2), where they ran on cores 0-2 only
+    # (1). With the refresh pacing off, Blur's threads on cores 0-2 were ~94 % busy and core 3 (the XMA Decoder, the
+    # audio output and mixer, the system) ~21 % idle: two console races 21.78 and 22.47 fps against 20.83, core 3 then
+    # 2-5 % idle, and 0 audio requests without data in every report of both (the audio threads stay above the game's
+    # priority there). The first four-core run's stutter (2026-10-27) had the XMA Decoder and the compiles on core 3 as
+    # well and at the game's priority.
+    'banjo_system_core': '2  # blur-nx: the game threads on core 3 too (20.8 -> 22.1 fps on the console, no audio underruns)',
     # 2026-11-10: the display's gamma ramp (the device's default, from VdGetCurrentDisplayGamma), which the 360's display and
     # the reference apply. Title screen against the reference: mean difference 2.9 / 7.6 / 9.0 off, 0.3 / 1.3 / 1.5 on.
     # rr6-nx measured its present cost on the console at 0.4-0.6 ms a frame (the base's open item): the user's decision.
@@ -142,6 +165,9 @@ CONFIGS = {
                               'banjo_renut_dynamic_resolution': 'false'},
                              'the in-run A/B of the machine copies and the hand natives (70) against the do-nothing '
                              'control (1), 30 s halves: stand still in one place (a race, a menu) for 10 minutes or more'),
+    'renut_vblank_sync.toml': ({'pacman_vblank_display_sync': 'true'},
+                               "the display's refresh starts each game frame (the base's pacing: whole refreshes, 20 or "
+                               "15 fps in a race; 17.7 against 20.8 fps without it on the 4-core console)"),
     'renut_profile.toml': ({'switch_profile_stacks': 'true'},
                            'the console profile: the sampler on (logs/rex/rex_profile.log, one report every 10 s)'),
 }
