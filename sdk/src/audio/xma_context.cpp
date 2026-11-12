@@ -9,6 +9,7 @@
 * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
 */
 
+#include <unordered_set>  // blur-nx (2026-11-13): banjo_xma_frame_cache_census
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
@@ -77,6 +78,11 @@ REXCVAR_DEFINE_BOOL(banjo_xma_frame_cache_chain_verify, false, "Banjo/Debug",
                     "Diagnostic (M-01): a second FFmpeg codec per context decodes every frame, the ones the frame cache "
                     "answered too (the full chain, as before 2026-11-13), and every frame the context's own codec decodes "
                     "after its one-frame catch-up is compared with it, byte for byte (the 10 s line's 'chain verify')");
+// blur-nx (2026-11-13, cycle 1's census for M-02 and M-09 of docs/cpu-moonshots-50-1113.md and its audit).
+REXCVAR_DEFINE_BOOL(banjo_xma_frame_cache_census, false, "Banjo/Debug",
+                    "Diagnostic (M-02, M-09): at every frame the cache cannot answer, would a cache keyed by (the format, "
+                    "the previous packet, this packet) have answered it (its samples depend on those alone), and was the "
+                    "context out of the cache (dropped when the cache was full); in the 10 s line ('census')");
 // katamari-nx (2026-10-31): the console's constant tone (an XMA context repeating one 128-sample subframe).
 REXCVAR_DEFINE_INT32(audio_xma_loop_trace, 0, "Audio",
                      "Diagnostic: log the loop fields of a context each time it jumps back to its loop start "
@@ -386,6 +392,10 @@ struct FrameCache {
   // The 10 s counts (the XMA decoder's report).
   uint64_t answered = 0, decoded = 0, caught_up = 0, verified = 0, differ = 0, restarts = 0;
   uint64_t chain_verified = 0, chain_differ = 0;  // blur-nx (2026-11-13): banjo_xma_frame_cache_chain_verify
+  // blur-nx (2026-11-13): banjo_xma_frame_cache_census (M-02, M-09): the (format, previous, packet) keys seen (at most
+  // 4 M), and per 10 s the misses, those such a key would have answered, those of contexts out of the cache.
+  std::unordered_set<uint64_t> census_pairs;
+  uint64_t census_misses = 0, census_would_hit = 0, census_out = 0;
 };
 FrameCache& Cache() {
   static FrameCache c;
@@ -484,7 +494,13 @@ static std::string XmaFrameCacheReport() {
       "{:.1f} MB, {} restarts",
       c.answered, c.decoded, 100.0 * double(c.answered) / double(c.answered + c.decoded), c.caught_up, c.verified,
       c.differ, c.chain_verified, c.chain_differ, c.nodes.size(), double(c.bytes) / 1048576.0, c.restarts);
+  if (c.census_misses)
+    out += fmt::format("; census: {} misses, {} would be answered by a (previous, packet) key ({:.1f} %), {} of contexts "
+                       "out of the cache ({:.1f} %); {} pair keys", c.census_misses, c.census_would_hit,
+                       100.0 * double(c.census_would_hit) / double(c.census_misses), c.census_out,
+                       100.0 * double(c.census_out) / double(c.census_misses), c.census_pairs.size());
   c.answered = c.decoded = c.caught_up = c.verified = c.differ = c.chain_verified = c.chain_differ = 0;
+  c.census_misses = c.census_would_hit = c.census_out = 0;
   return out;
 }
 
@@ -494,6 +510,7 @@ bool XmaContext::DecodeFrame(int prepared, int sample_rate, bool stereo) {
   static const bool on = REXCVAR_GET(banjo_xma_frame_cache);
   static const bool verify = REXCVAR_GET(banjo_xma_frame_cache_verify);
   static const bool chain_verify = on && REXCVAR_GET(banjo_xma_frame_cache_chain_verify);
+  static const bool census = on && REXCVAR_GET(banjo_xma_frame_cache_census);
   if (prepared == 1) {
     // A fresh codec: the frame it was not given no longer matters.
     if (cache_behind_) {
@@ -539,8 +556,26 @@ bool XmaContext::DecodeFrame(int prepared, int sample_rate, bool stereo) {
   const uint32_t pcm_bytes = kBytesPerFrameChannel << uint32_t(stereo);
   FrameCache& c = Cache();
   std::lock_guard<std::mutex> lock(c.mutex);
+  // banjo_xma_frame_cache_census: this frame's (format, previous packet, packet) key (the previous packet 0 when the
+  // codec is fresh: frame 0's samples depend on the format and its own packet).
+  uint64_t pair_key = 0;
+  if (census) {
+    if (prepared == 1) census_prev_hash_ = 0;
+    const uint64_t this_hash = PacketKey(RootNode(sample_rate, stereo), av_packet_->data, size_t(av_packet_->size));
+    pair_key = this_hash ^ (census_prev_hash_ * 0xC2B2AE3D27D4EB4Full + 0x165667B19E3779F9ull);
+    census_prev_hash_ = this_hash;
+  }
   uint64_t id = 0;
   FrameNode* hit = cache_node_ ? FindNode(c, cache_node_, av_packet_->data, size_t(av_packet_->size), &id) : nullptr;
+  if (census) {
+    const bool answered = hit && hit->pcm_bytes == pcm_bytes && !verify;
+    if (!answered) {
+      ++c.census_misses;
+      if (!cache_node_) ++c.census_out;
+      if (c.census_pairs.count(pair_key)) ++c.census_would_hit;
+    }
+    if (c.census_pairs.size() < (size_t(4) << 20)) c.census_pairs.insert(pair_key);
+  }
   if (hit && hit->pcm_bytes == pcm_bytes && !verify) {
     std::memcpy(raw_frame_.data(), hit->pcm.data(), pcm_bytes);
     if (!cache_behind_) ++c.pending;

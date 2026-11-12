@@ -350,6 +350,9 @@ class XmaContext {
   bool DecodeFrame(int prepared, int sample_rate, bool stereo);
   // blur-nx (2026-11-13, M-01's proof: banjo_xma_frame_cache_chain_verify): a second codec decoding every frame of
   // the context (the full chain), whose samples every frame the first one decodes is compared with.
+  // blur-nx (2026-11-13, banjo_xma_frame_cache_census, M-02): the hash of the context's previous packet (0: a fresh
+  // codec), for the (previous, packet) key the census tries.
+  uint64_t census_prev_hash_ = 0;
   AVCodecContext* chain_context_ = nullptr;
   AVFrame* chain_frame_ = nullptr;
   std::array<uint8_t, kBytesPerFrameChannel * 2> chain_raw_;
