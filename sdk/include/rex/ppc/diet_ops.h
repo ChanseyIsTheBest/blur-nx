@@ -53,6 +53,13 @@ extern "C" volatile unsigned long long g_rex_nx_census[16];
 //   REX_NX_VMINMAX_FAST  #42 vmaxfp / vminfp as Arm's fmax / fmin (VMaxFp / VMinFp below)
 //   REX_NX_XER_SO_ZERO   #5  integer compares and record forms copy SO = 0 (no overflow-recording form in the code)
 //   REX_NX_RN_ONLY       #3  FPSCR writes leave the rounding mode at round-to-nearest (context.h)
+//   REX_NX_NO_TRAPS      #19 the divide-by-zero traps and twi asserts compiled out (tools/near_exact.py writes their
+//                            test as `REX_NX_TRAPS_ON && (...)`); a hit only logged a warning (the pch's ppc_trap)
+#if defined(REX_NX_NO_TRAPS)
+#define REX_NX_TRAPS_ON 0
+#else
+#define REX_NX_TRAPS_ON 1
+#endif
 // blur-nx (2026-11-12, codegen-ideas-3 CG-13's census): each cold path below also counts the code address it was
 // called from (rex/sys_counters.h CensusDenormalSite): a cold path is exactly a result that one flush mode for all code
 // would change, and the addresses name the game functions (tools/census_sites.py --denormal).

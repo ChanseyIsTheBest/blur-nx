@@ -7,6 +7,10 @@ wrote (so with every switch off the code computes what it did).
                                                  simde_mm_min_ps(A, B) -> rex::ppc::VMinFp(A, B)
        (sdk/include/rex/ppc/diet_ops.h: SSE's max / min by default, Arm's fmax / fmin with REX_NX_VMINMAX_FAST;
        the PC census counts the lanes where the two differ.)
+  #19  `if (C) ppc_trap(ctx, base, 0|22);` -> `if (REX_NX_TRAPS_ON && (C)) ppc_trap(ctx, base, 0|22);`
+       (the divide-by-zero traps before divisions and the twi asserts: on a hit ppc_trap only logs a warning and the
+       game goes on, so with REX_NX_NO_TRAPS (REX_NX_TRAPS_ON 0) the compiler drops the test and nothing but the log
+       line changes; the call's text stays for the steps that read it. The service trap, type 20, stays.)
 
 A post-codegen step before the copies (tools/localize_native.py), so they take the same forms.
 
@@ -28,10 +32,17 @@ FORMS = {
 }
 
 
+TRAP = re.compile(r'^(	if \()(.*)(\) ppc_trap\(ctx, base, (?:0|22)\);.*)$', re.S)
+
+
 def rewrite(text, counts):
     out = []
     current = None
     for line in text.splitlines(keepends=True):
+        t = TRAP.match(line)
+        if t and 'REX_NX_TRAPS_ON' not in line:
+            line = t.group(1) + 'REX_NX_TRAPS_ON && (' + t.group(2) + ')' + t.group(3)
+            counts['REX_NX_TRAPS_ON'] = counts.get('REX_NX_TRAPS_ON', 0) + 1
         m = INSN.match(line)
         if m:
             current = FORMS.get(m.group(1))
