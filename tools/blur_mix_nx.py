@@ -9,6 +9,15 @@ otherwise the constant kernel (sub_822EA500: a multiply-add). Two compares get a
        the target gain instead of a ramp to it: each sample differs by at most eps x |sample|);
   #23  8230AFD0 `fcmpu cr6,f0,f30`: |gain - 1| < audio_nx_unity_eps counts as 1 (the unity kernel: an add without the
        multiply; each sample differs by at most eps x |sample|).
+  #49  the resampling kernels (822D7880 scalar, 822D9040 VMX mono, 822D79A8 VMX stereo; a subagent's reading of
+       2026-11-13) step by count/256 (count: the source samples a 256-sample block consumes) and already copy the block
+       (a memcpy) when the ratio is exactly 1.0. With audio_nx_resample_copy a block that consumes exactly 256 samples
+       takes that copy too: its fraction is 0 at every output, so the interpolation gives the source samples (apart
+       from a -0, a NaN or a denormal the vector unit flushes). Not a ratio window: just below 1.0 a voice consumes
+       255 samples over 256 outputs.
+  (#16, the zero-fills the code then overwrites whole, is not here: at this step those lines are the plain
+  `memset((void*)REX_RAW_ADDR(ea), 0, 32);` / `REX_DCBZ128(ea);` that localize_native.py, store_cards.py and
+  vec_dcbz_zva.py read in that exact form; a wrapper would take 822EA3C0, a hot copy, out of the copies.)
 The PC census (REX_NX_CENSUS, PC game code only) counts at the same two compares: ramps and near ramps, unity /
 constant / zero gains, near-unity and tiny ones (rex/ppc/diet_ops.h slots 16-24, the "[census] near-exact audio" line).
 
@@ -45,6 +54,14 @@ extern "C" float blur_nx_ramp_eps, blur_nx_unity_eps;  // app/src/blur_nx_mix.cp
   REX_NX_CENSUS_IF(g != 0.0 && __builtin_fabs(g) < 1.0 / 65536.0, 21);
   return g != one && __builtin_fabs(g - one) < double(blur_nx_unity_eps);
 }
+// #49: a block consuming exactly 256 source samples takes the kernel's copy (audio_nx_resample_copy).
+extern "C" bool blur_nx_resample_copy;  // app/src/blur_nx_mix.cpp
+[[gnu::always_inline]] static inline bool rex_blur_nx_copy256(bool eq, uint32_t count) {
+  REX_NX_CENSUS(27);
+  REX_NX_CENSUS_IF(!eq && count == 256, 28);
+  return blur_nx_resample_copy && count == 256;
+}
+#define REX_BLUR_NX_COPY256(eq, count) rex_blur_nx_copy256((eq), (count))
 #define REX_BLUR_NX_RAMP_SAME(cur, tgt) rex_blur_nx_ramp_same((cur), (tgt))
 #define REX_BLUR_NX_UNITY(g, one) rex_blur_nx_unity((g), (one))
 #endif
@@ -61,6 +78,12 @@ PATCHES = [
      '\tcr6.compare(REX_BLUR_NX_UNITY(f0.f64, f30.f64) ? f30.f64 : f0.f64, f30.f64);' + TAG),
 ]
 
+# #49: the kernels' `beq cr6,<the copy>` after the ratio compare (the count's register there).
+for func, addr, reg, target in (('sub_822D7880', 0x822D78A4, 'ctx.r4', '822D793C'),
+                                ('sub_822D9040', 0x822D9068, 'r11', '822D9218'),
+                                ('sub_822D79A8', 0x822D79D8, 'ctx.r4', '822D7B20')):
+    PATCHES.append((func, addr, 'beq cr6,0x%s' % target.lower(), '\tif (cr6.eq) goto loc_%s;' % target,
+                    '\tif (cr6.eq || REX_BLUR_NX_COPY256(cr6.eq, %s.u32)) goto loc_%s;%s' % (reg, target, TAG)))
 FUNC = re.compile(r'^DEFINE_REX_FUNC\(sub_([0-9A-F]{8})\) \{$')
 COMMENT = re.compile(r'^\t// (\S.*?)\s*$')
 LABEL = re.compile(r'^loc_[0-9A-F]{8}:\s*$')

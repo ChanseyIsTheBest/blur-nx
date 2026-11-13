@@ -23,7 +23,7 @@ census-effort column).
 | 12 | Hash-only caches | collision census in the XMA cache's report | key banjo_xma_frame_cache_hash_only (off) |
 | 13 | Smaller Begin*Vertices device copies | the narrowed copies' bytes (snapshot report), the NaN poison | **found exact**: banjo_renut_deferred_narrow (on) |
 | 15 | Trust marks over compares | the texture card counts | **mostly done before** (CheckedHash / ExtentClean) |
-| 16 | Skip the zero-fill before a full overwrite | (a subagent reads the kernels) | pending |
+| 16 | Skip the zero-fill before a full overwrite | a subagent's reading (14:50) | **deferred**: the zero-fills fully overwritten are 822EA3C0's eight dcbz (a hot copy) and 8230EDE0's four row-0 re-zeroes, but at the patch step their lines are the plain forms localize_native.py, store_cards.py and vec_dcbz_zva.py read exactly (a wrapper would drop 822EA3C0's copy); needs those taught or a hand native of 822EA3C0 (~0.05-0.1 ms) |
 | 17 | Drop the division checks | PC census slots 2-4 | switch REX_NX_DIV_NO_CHECK |
 | 19 | Remove trap asserts | 0 hits in the PC race | **found exact** (a hit only logs): switch REX_NX_NO_TRAPS |
 | 20 | Unguarded promoted calls | census_indirect1 | **skipped**: ~0.01 ms a frame, and a new target would be a wrong call (a crash), not a rare tiny difference |
@@ -40,7 +40,7 @@ census-effort column).
 | 41 | Float compares fused into branches | PC census slot 5 | switch REX_NX_FCMP_NO_UN |
 | 42 | Vector min/max without fix-ups | PC census slots 6, 13 | switch REX_NX_VMINMAX_FAST (tools/near_exact.py) |
 | 48 | Skip draws that change nothing | Renut's draw kinds | **nothing to skip** (0 such draws in the PC race) |
-| 49 | Skip resampling at ratio ~1 | (a subagent reads the kernels) | pending |
+| 49 | Skip resampling at ratio ~1 | PC census slots 27-28 | key audio_nx_resample_copy (off): the kernels (822D7880, 822D9040, 822D79A8) already copy at ratio == 1.0 exactly; a block consuming exactly 256 samples (fraction 0 everywhere) takes that copy too (about ratio 1 to 1.004 / 0.998 to 1.002) |
 
 Already done before the choice: #11 (store_cards.py has always left stack stores plain: 186,852 in cycle 3's codegen;
 only stores that reach the stack through a pointer the tool cannot trace are marked) and #14 = M-35 (found exact:
