@@ -302,3 +302,37 @@ the session scratchpad's agent_census (census_regs.py, census_cfg.py + cfg_live.
 - **#31 store-to-load forwarding: too small to build.** 951 loads in 327 functions match an earlier store at the same
   base and offset (902 on the stack; 652 integer-to-float moves through the stack), 365 more inside a wider store; the
   C++ compiler forwards most of these itself (not checked in the assembly).
+
+## The second wave (2026-11-13 17:00-18:30, the user: "do all 13 left in the second wave ... avoid compiling a good amount"; then "add all four" (#66-#69) and "do not worth it ones if they are exact so they aren't repeated again")
+
+The check race of the #13 fix and the LZX native (check_nx2, 16:51-16:59): every Begin*Vertices draw narrowed (69,694
+in 10 s; 2,799 bytes a copy against 12,888; 0 drawn with other shaders), the race right under the NaN poison; the LZX
+verify 7,874 buffers compared, 0 differ, 480 fallbacks on the error flag (fixed below); the r1 mirror with #9's
+assumption 353 M calls, 0 differences.
+
+| # | Outcome | How it was settled |
+|---|---|---|
+| 41 | **exact in practice: the switch stays** | a dataflow scan of every function: the 2,148 reads of a CR field's so/un bit (all `mfocrf rN,2` packs of cr6, and 8 `mfcr` of the field at entry) are reached only by vector compares, never by a float compare |
+| 51 | **built** (banjo_renut_deferred_chain, a console key) | the chain existed, off for N&B's two devices; now a draw of another device while a Begin*Vertices delta waits is a whole capture outside the chain (cross-device count in the 10 s line). Blur draws on one device |
+| 56 | **built, on** (kernel_handle_lookup_own_lock) | handle lookups take the table's own short lock instead of the global critical region (11,700 a second, 218 blocked); every writer takes both, global first, no call out under the table lock |
+| 34 | **built** (switch_yield_wake_on_progress, a console key) | the job system read here: sub_8227CF60 runs jobs (sub_8227C5F8 after each, then the +472 / +52 decrements), sub_8227E098 pushes one (+48), sub_822862B0 waits for a group (helps, then yields through sub_829BB640); hooks on sub_8227C5F8 and sub_8227E098 bump a progress word the backoff's sleep waits on (svcWaitForAddress, the same timeout). Both functions out of the copies |
+| 62 | **built, on** (audio_stereo_direct; exact) | a frame with channels 2-5 all zero converted from its front pair (the same samples into the +0 mix) |
+| 66 | **built, on** (BLUR_CARD_VIEWS_ONLY; exact) | the copies already had the views rule, the check-first and the runs (VS-11 / VS-12, 2026-11-11); the 10.35 G "run marks" counted every flush, an empty one too. The generated tree's equivalent is now in every build; the census counts real marks |
+| 67 | **built** (cpu_lzx_cache_kb, 0: the repeats counted) | decoded buffers kept by their compressed bytes (XXH3, compared in full); the verify mode checks a kept buffer against a fresh decode |
+| 69 | **built, on** (banjo_cpu_verify_nan_sign) | the guard takes a register NaN differing only in its sign as the same (counted) |
+| LZX | **fixed** | the guest's only end check is before each main symbol; its block refills check nothing (the 480 fallbacks) |
+| 57 | already done | an event set with nobody waiting skips the wake (thread_signal_skip_idle); the multi-wait notify is one load when none is parked: one uncontended lock is left |
+| 63 | already done | Renut's per-draw counters are single-writer adds (Bump) |
+| 25 | already done by the game | the voice node sub_822E17C8 compares its start and end gains with a threshold and takes its own silent path |
+| 52 | not worth it | the Begin*Vertices scratch is one block per device reused by the next Begin: leaving the data in place needs a ring the render thread frees after its draw, for ~1.1 MB/s (~0.005 ms a frame) |
+| 58 | not worth it | sub_8227CC58 is 36 instructions; its cost is the yield (#34) |
+| 68 | not worth it | only 3 of the 662 CAS sites have a guest fence on both sides (Blur has no isync); the rest rely on the CAS's own ordering |
+| 16 | not worth it (slower) | the zero-fill before sub_822EA3C0's 1 KB copy is DC ZVA on the Switch (vec_dcbz_zva): the lines are claimed without a read, which the copy's stores would otherwise make; with overlapping buffers it would not be exact either |
+| 64 | not worth it | a bus zeroes its rows with dcbzl (DC ZVA) and its children (buses, voices, effects) add into them; the first child would have to know it is first, to save one cached load a sample |
+| 46 | not worth it | Blur's allocator is a small-block pool (sub_8228A3C0 / sub_8228A470, in front of the CRT heap, sub_8217C5F0 / sub_8217C870): ~50 of the copy list's 49,744 console samples, all already copies; another allocator would change the pointers |
+| 47 | not precise enough | an indexing shader's reachable registers depend on its index register (the GPU's); the upload already compares the dirty groups and reuses |
+| 32 | not precise enough | no per-word proof that a CAS word stays one thread's (a second thread later would lose an update); 7.7 % of the CAS operations, ~0.01 ms a frame |
+
+The near-exact set (BLUR_NEAR_EXACT) is now #1, #17, #41, #5, #19 (#2 and #42 out by the census). One codegen and
+one PC build for the whole wave (main at the second wave's commits), then check_nx3 / guard_nx2 (tools: the
+scratchpad's nx_pc_wave2.sh), then the Switch near-exact pipeline.
