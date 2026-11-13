@@ -329,6 +329,8 @@ std::unordered_map<u32, DeferredDraw> g_deferred;
 // (FlushDeferredVertices: every hook calls it first). A Begin*Vertices draw is flushed by the next hook of its device,
 // on the thread that made it, which sees the count in program order.
 std::atomic<size_t> g_deferred_count{0};
+// blur-nx (2026-11-13, #52's census): FlushDeferredVertices' copies, for the snapshot report.
+std::atomic<uint64_t> g_deferred_vertex_bytes{0}, g_deferred_vertex_draws{0};
 
 // banjo-nx (2026-10-20, from sa2-nx, banjo_renut_snapshot_deltas): the delta chain's layout. Of the device's first kDeviceSnapshotSize
 // bytes, the float constants (VertexShaderF, PixelShaderF: 8 KB, two thirds) go by the groups m_Pending marks dirty
@@ -997,11 +999,14 @@ std::string SnapshotDeltaReport() {
       "device snapshots (banjo_renut_snapshot_deltas): {} draws, {:.0f} bytes kept a draw on average (the whole device "
       "is {}); {:.1f} chunks and {:.1f} constant groups a delta; {} whole copies (the frames' first draws); {} "
       "Begin*Vertices draws as whole copies ({} of them narrowed to their shaders' float constants, {:.0f} bytes a "
-      "copy, {:.0f} with the prefixes alone; banjo_renut_deferred_narrow)",
+      "copy, {:.0f} with the prefixes alone; banjo_renut_deferred_narrow); their vertex data {} draws, {:.0f} KB "
+      "(#52's census)",
       draws, double(bytes) / double(draws), d3d::kDeviceSnapshotSize, double(chunks) / per_delta,
       double(groups) / per_delta, rebases, whole, narrowed,
       narrowed ? double(narrowed_bytes) / double(narrowed) : 0.0,
-      narrowed ? double(narrowed_prefix) / double(narrowed) : 0.0);
+      narrowed ? double(narrowed_prefix) / double(narrowed) : 0.0,
+      g_deferred_vertex_draws.exchange(0, std::memory_order_relaxed),
+      double(g_deferred_vertex_bytes.exchange(0, std::memory_order_relaxed)) / 1024.0);
   line += DrawerCensus();  // blur-nx (2026-11-13, M-31)
   if (DeltasVerifyOn()) {
     line += fmt::format("; verify: {} draws checked, {} differ", g_delta_verified.exchange(0, std::memory_order_relaxed),
@@ -1128,6 +1133,9 @@ void FlushDeferredVertices(u32 device_va) {
     g_deferred_count.store(g_deferred.size(), std::memory_order_release);
   }
   deferred.capture->vertices.assign(deferred.scratch, deferred.scratch + deferred.bytes);
+  // blur-nx (2026-11-13, #52's census): the vertex bytes the flush copies (a scratch ring could leave them in place).
+  g_deferred_vertex_bytes.fetch_add(deferred.bytes, std::memory_order_relaxed);
+  g_deferred_vertex_draws.fetch_add(1, std::memory_order_relaxed);
   QueueCapture(deferred.capture);
 }
 
