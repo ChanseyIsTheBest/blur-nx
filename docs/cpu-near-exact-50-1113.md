@@ -438,3 +438,20 @@ is the game's own event waits, most likely on JQ0-2's jobs. sub_8250A7E8 (2.6 ms
 sampled addresses in its 120 KB copy, none over 1.7 %: guest loads and the denormal check of each float result (these
 four JQ0-2 functions make denormals, CG-13's census). Hand natives gain less there than estimated; codegen-wide ideas
 (#72, a cheaper denormal check) reach it all.
+
+### The console hang of 23:20 (abX race 7, nx2) and SASRT's
+
+The hang: race 7's launch at 23:20:03 (the previous race's close at 23:19, its log still writing until 23:19:04);
+12 s into the boot loading the renut log stops mid-write (garbage at its end); sys-botbase and FTP dead, ping half
+answering; no Atmosphère report; the user held power. deko3d.log: 32 blocks live (173 MB), the GPU region 174 MB;
+the system resource 0 of 0 (Blur's process has none: not the cause). No "fence has not signalled" line.
+
+SASRT's hang (2026-11-10, sasrt-nx docs/handoff/gpu_hang_1110/README.md): an out-of-bounds GPU write in a race (a
+depth-word copy into a texture kept at the old height across a dynamic-resolution step, plume's copyTextureRegion
+unclamped); fixed by base port 64. Blur has it (plume's clamp, sasrt_texture_scale_size_check on),
+sasrt_texture_long_idle_frames is off, and Blur ships with dynamic resolution off: not this hang.
+
+Both of tonight's incidents (the 21:16 dkMemBlockCreate failure, the 23:20 hang) came during loading, late in long
+runs of launches without a reboot (about 19 and 30), with SaltyNX attaching at every launch and an overlay running:
+the reading for now (SASRT's too) is something system-wide wearing out across launches. one_race.sh now waits 10 s
+before a launch. The NewOp A/B goes on after the reboot (abX2).
