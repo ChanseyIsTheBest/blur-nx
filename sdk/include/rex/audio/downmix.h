@@ -10,6 +10,9 @@
  */
 #pragma once
 
+#include <cstddef>  // blur-nx (2026-11-13): StereoFrameGain
+
+
 namespace rex::audio {
 
 /**

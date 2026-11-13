@@ -14,7 +14,9 @@
 #include <rex/cvar.h>
 #include <rex/logging.h>
 
+#include <atomic>
 #include <bit>
+#include <chrono>
 #include <cstdint>
 
 REXCVAR_DEFINE_BOOL(audio_stereo_mix, false, "Audio",
@@ -36,8 +38,32 @@ float g_surround = 0.70710678f;
 
 // Output 'out' (0 left, 1 right) of a gain row of 'width' speakers: 6 FL FR C LFE RL RR, 5 FL FR C RL RR, 4 FL FR RL
 // RR, 3 FL FR C. The result as the float's bits (the generated code's register form).
+// Diagnostic (audio_stereo_census): the folds by row width, per 10 s.
+REXCVAR_DEFINE_BOOL(audio_stereo_census, false, "Audio",
+                    "Diagnostic (audio_stereo_mix): per 10 s, how many gain folds the node loop made by row width (the "
+                    "log's '[audio] stereo folds' line)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+namespace {
+std::atomic<uint64_t> g_folds[8];
+std::atomic<int64_t> g_census_last{0};
+void CensusFold(uint32_t width) {
+  g_folds[width & 7].fetch_add(1, std::memory_order_relaxed);
+  const int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
+                          std::chrono::steady_clock::now().time_since_epoch()).count();
+  int64_t last = g_census_last.load(std::memory_order_relaxed);
+  if (now - last >= 10 && g_census_last.compare_exchange_strong(last, now)) {
+    uint64_t n[8];
+    for (int i = 0; i < 8; ++i) n[i] = g_folds[i].exchange(0, std::memory_order_relaxed);
+    REXLOG_INFO("[audio] stereo folds in 10 s by row width: 3 {} 4 {} 5 {} 6 {} (others {})", n[3], n[4], n[5], n[6],
+                n[0] + n[1] + n[2] + n[7]);
+  }
+}
+}  // namespace
+
 extern "C" uint32_t BlurStereoFoldBits(float g0, float g1, float g2, float g3, float g4, float g5, uint32_t out,
                                        uint32_t width) {
+  static const bool census = REXCVAR_GET(audio_stereo_census);
+  if (census) CensusFold(width);
   float v;
   switch (width) {
     case 6:
