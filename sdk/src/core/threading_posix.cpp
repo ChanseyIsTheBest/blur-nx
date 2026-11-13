@@ -14,6 +14,7 @@ static_assert(REX_PLATFORM_LINUX || REX_PLATFORM_MAC, "This file is POSIX-only")
 #include <signal.h>
 
 #include <atomic>
+#include <cstdint>  // blur-nx (2026-11-13, #34): INT32_MAX
 #include <chrono>
 #include <algorithm>
 #include <array>
@@ -142,7 +143,29 @@ REXCVAR_DEFINE_INT32(switch_yield_spin_first, 4, "Kernel",
 // blur-nx (2026-11-13, #60): set by RexSwitchApplyNamedPriority (threading_switch.cpp) for a thread named in
 // switch_yield_backoff_exempt.
 extern "C" thread_local bool g_rex_yield_backoff_exempt;
+// blur-nx (2026-11-13, #34 of Blur's docs/cpu-near-exact-50-1113.md; timing only, the guest sees the same results):
+// the backoff's sleep as a wait on the progress word (RexProgressBump), the same timeout. The title bumps it where
+// waiting threads can go on (Blur: a job finished, a job pushed: app/src/blur_job_wake.cpp), so a polling thread
+// sleeps until then instead of ~1 ms. A bump between a thread's last yield and its next one skips that sleep.
+REXCVAR_DEFINE_BOOL(switch_yield_wake_on_progress, false, "Kernel",
+                    "Switch (#34, timing only): switch_yield_backoff's sleep ends early when the title reports progress "
+                    "(RexProgressBump: Blur's jobs finishing or being pushed). false: a plain sleep");
 #endif
+
+// blur-nx (2026-11-13, #34): the progress word and the threads asleep on it (every platform has the bump; only the
+// Switch's backoff sleeps on it).
+namespace {
+std::atomic<uint32_t> g_rex_progress{0};
+std::atomic<uint32_t> g_rex_progress_sleepers{0};
+}  // namespace
+extern "C" void RexProgressBump() {
+  g_rex_progress.fetch_add(1, std::memory_order_release);
+#if defined(__SWITCH__)
+  if (g_rex_progress_sleepers.load(std::memory_order_seq_cst) != 0) {
+    RexSwitchWakeAddress(reinterpret_cast<volatile uint32_t*>(&g_rex_progress), INT32_MAX);
+  }
+#endif
+}
 
 namespace rex::thread {
 
@@ -305,8 +328,23 @@ void MaybeYield() {
     }
     // blur-nx (2026-11-13, #34): the run length and the sleep as keys (16 and 100 us as before).
     if (in_a_row > uint32_t(std::clamp(REXCVAR_GET(switch_yield_backoff_after), 1, 1000))) {
-      const timespec rest = {0, long(std::clamp(REXCVAR_GET(switch_yield_backoff_us), 1, 2000)) * 1000L};
-      nanosleep(&rest, nullptr);
+      const long rest_us = std::clamp(REXCVAR_GET(switch_yield_backoff_us), 1, 2000);
+      if (REXCVAR_GET(switch_yield_wake_on_progress)) {
+        // blur-nx (2026-11-13, #34): asleep on the progress word unless it moved since this thread's last yield.
+        thread_local uint32_t seen = 0;
+        const uint32_t now_progress = g_rex_progress.load(std::memory_order_acquire);
+        if (now_progress == seen) {
+          g_rex_progress_sleepers.fetch_add(1, std::memory_order_seq_cst);
+          RexSwitchWaitIfEqual(reinterpret_cast<volatile uint32_t*>(&g_rex_progress), seen, int64_t(rest_us) * 1000);
+          g_rex_progress_sleepers.fetch_sub(1, std::memory_order_relaxed);
+        } else {
+          sched_yield();
+        }
+        seen = g_rex_progress.load(std::memory_order_acquire);
+      } else {
+        const timespec rest = {0, rest_us * 1000L};
+        nanosleep(&rest, nullptr);
+      }
       previous = std::chrono::steady_clock::now() - std::chrono::microseconds(1);  // still polling at the next call
     } else {
       sched_yield();

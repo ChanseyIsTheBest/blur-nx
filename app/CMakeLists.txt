@@ -164,6 +164,7 @@ set(RENUT_SOURCES
     src/blur_stereo.cpp
     src/blur_nx_mix.cpp
     src/blur_lzx_native.cpp
+    src/blur_job_wake.cpp  # blur-nx (2026-11-13, #34)
     # katamari-nx (2026-10-31): DLC packages in the "dlc" folder next to the NRO installed at start (reNut upstream's).
     src/renut_engine/dlc_install.cpp
 	src/renut_engine/FPS.cpp

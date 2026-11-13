@@ -134,7 +134,7 @@
 822CBA00 55 console samples, 52 instructions, 2 direct callees
 822E6E98 55 console samples, 180 instructions, 3 direct callees
 8295A640 54 console samples, 22 instructions, 0 direct callees
-8227C5F8 52 console samples, 32 instructions, 1 direct callees
+# out: 8227C5F8 (2026-11-13, #34: sub_8227CF60 calls it after each job: hooked by app/src/blur_job_wake.cpp to report the job's end to the yield backoff; was: 52 console samples, 32 instructions, 1 direct callees)
 82244170 52 console samples, 54 instructions, 0 direct callees
 8248BD18 52 console samples, 122 instructions, 0 direct callees
 826A7BF0 52 console samples, 194 instructions, 0 direct callees
@@ -144,7 +144,7 @@
 826EA378 51 console samples, 36 instructions, 0 direct callees
 82669E58 50 console samples, 206 instructions, 0 direct callees
 82462D40 50 console samples, 22 instructions, 0 direct callees
-8227E098 49 console samples, 174 instructions, 3 direct callees
+# out: 8227E098 (2026-11-13, #34: it pushes a job: hooked by app/src/blur_job_wake.cpp to report it to the yield backoff; was: 49 console samples, 174 instructions, 3 direct callees)
 82525CE8 49 console samples, 60 instructions, 0 direct callees
 82505EF8 48 console samples, 566 instructions, 1 direct callees
 8252E168 48 console samples, 336 instructions, 9 direct callees
