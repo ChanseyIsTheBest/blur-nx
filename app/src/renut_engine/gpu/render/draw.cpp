@@ -12994,6 +12994,21 @@ bool DrawStateLocked(const u8 *device_state, const DrawCall &call, const ReplayC
       partial |= m != 0 && m != 0xF;
     }
     const bool exports = (vs->entry && vs->entry->memExportConstants[0]) || (ps && ps->entry && ps->entry->memExportConstants[0]);
+    {  // blur-nx (2026-11-13, #47's census): shaders indexing their float constants (all bits set), else the reads
+      const auto all_set = [](const uint32_t *m) {
+        for (int w = 0; w < 8; ++w)
+          if (m[w] != ~0u) return false;
+        return true;
+      };
+      const bool vs_all = vs->entry && all_set(vs->entry->floatConstants);
+      const bool ps_all = ps && ps->entry && all_set(ps->entry->floatConstants);
+      uint32_t regs = 0;
+      if (vs->entry && !vs_all)
+        for (int w = 0; w < 8; ++w) regs += uint32_t(__builtin_popcount(vs->entry->floatConstants[w]));
+      if (ps && ps->entry && !ps_all)
+        for (int w = 0; w < 8; ++w) regs += uint32_t(__builtin_popcount(ps->entry->floatConstants[w]));
+      banjo::renut_gpu::CountConstantUse(vs_all, ps_all, regs);
+    }
     banjo::renut_gpu::CountDrawKind(no_colour && depth, no_colour && depth && sc.alpha_test_func == 7 &&
                                     !key.alpha_to_coverage && ps != nullptr,
                                     no_colour && !depth_writes && !stencil_writes && !exports, partial);
