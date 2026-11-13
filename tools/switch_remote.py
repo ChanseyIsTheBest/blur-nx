@@ -25,6 +25,8 @@ card or write memory. The Album is read-only; /atmosphere is not read. Every con
   raw "CMD ..."              a sys-botbase command as it is, the reply printed
   album-ls [PATH]            the Album, read only: /Nintendo/Album... or /emuMMC/<folder>/Nintendo/Album...
   album-get REMOTE [LOCAL]   one Album file downloaded (read only; nothing in the Album is written or deleted)
+  crash-ls                   Atmosphere's crash reports, read only: /atmosphere/crash_reports (the user, 2026-11-13)
+  crash-get NAME [LOCAL]     one crash report downloaded (read only; nothing there is written or deleted)
 
 The host comes from --host, else the BLUR_SWITCH_HOST environment variable, else out/switch_host.txt's first line.
 In Git Bash set MSYS_NO_PATHCONV=1 for commands that pass card paths such as /switch/..., or it rewrites them.
@@ -71,6 +73,20 @@ def album_path(path, listing=False):
     if not ok:
         sys.exit('refused: %s is not the Album (read only)' % path)
     return full
+
+
+# blur-nx (2026-11-13, the user: "You can open the folder the crash report in"): Atmosphere's crash reports, read only,
+# for crash-ls and crash-get: one folder, listed, and its files downloaded by name. Nothing here writes, renames or
+# deletes, and no other part of /atmosphere is reached.
+CRASH_ROOT = '/atmosphere/crash_reports'
+
+
+def crash_path(name=None):
+    if name is None:
+        return CRASH_ROOT
+    if ':' in name or '/' in name or chr(92) in name or name in ('', '.', '..'):
+        sys.exit('refused: %s is not a file name in %s' % (name, CRASH_ROOT))
+    return CRASH_ROOT + '/' + name
 
 
 def host_of(args):
@@ -330,6 +346,17 @@ def main():
         else:
             remote = album_path(rest[0])
             local = rest[1] if len(rest) > 1 else os.path.basename(remote)
+            print(local, ftp_get_file(host, remote, local), 'bytes')
+    elif cmd in ('crash-ls', 'crash-get'):
+        # blur-nx (2026-11-13): Atmosphere's crash reports, read only (crash_path above).
+        if cmd == 'crash-ls':
+            lines = []
+            ftp_retry(host, lambda f: (f.cwd(crash_path()), f.retrlines('LIST', lines.append)))
+            for line in lines:
+                print(line)
+        else:
+            remote = crash_path(rest[0] if rest else '')
+            local = rest[1] if len(rest) > 1 else rest[0]
             print(local, ftp_get_file(host, remote, local), 'bytes')
     elif cmd in ('ls', 'get', 'put', 'rm'):
         # Refused before any connection is made: the card path is rest[1] for put, rest[0] for the others.
