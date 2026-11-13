@@ -237,6 +237,8 @@ void RuntimeCensusReport(int seconds) {
                   "zero {}, other constant {} (within 1e-7 of 1: {}, within 1e-5: {}; under 2^-16: {}) | ramps {} "
                   "(under 1e-6: {}, under 2^-16: {})",
                   nx[18], nx[22], nx[16], nx[17], nx[23], nx[21], nx[19], nx[20], nx[24]);
+      REXLOG_INFO("[census] near-exact #38 (cumulative): card marks of the generated tree {}, the copies' run marks {}",
+                  nx[25], nx[26]);
     }
     // blur-nx (2026-11-12, codegen-ideas-3 CG-13's census): what one flush mode for all code would change. The
     // any-mode cold paths above are scalar results in VMX code that met a denormal; the FPU-mode regions are the plain

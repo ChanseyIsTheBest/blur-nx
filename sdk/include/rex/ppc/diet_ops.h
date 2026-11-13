@@ -39,6 +39,7 @@ extern "C" volatile unsigned long long g_rex_diet_census[6];
 //   16-24 Blur's audio node loop (tools/blur_mix_nx.py): 16 constant gains other than 0 and 1, 17 of them within 1e-7
 //   of 1 (#23), 18 unity gains, 19 ramps, 20 ramps under 1e-6 (#24), 21 constant gains under 2^-16, 22 zero gains,
 //   23 constant gains within 1e-5 of 1, 24 ramps under 2^-16
+//   25 #38 card marks of the generated tree (store_cards.py's REX_CARD), 26 the copies' run marks (banjo_hot_prelude.h)
 #if defined(REX_DIET_CENSUS_ON) && !defined(__SWITCH__)
 extern "C" volatile unsigned long long g_rex_nx_census[32];
 #define REX_NX_CENSUS(k) (g_rex_nx_census[k] = g_rex_nx_census[k] + 1)

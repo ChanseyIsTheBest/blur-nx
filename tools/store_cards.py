@@ -55,6 +55,9 @@ MACROS = MARKER + '''
 #if defined(REX_STORE_CARDS_OFF)
 #define REX_CARD(ea) ((void)0)
 #else
+#elif defined(REX_NX_CENSUS_ON)  // blur-nx (2026-11-13, near-exact #38's census: card marks of the generated tree)
+#define REX_CARD(ea) ((void)(REX_NX_CENSUS(25), *(u8*)(base + ((u32)(ea) >> 12)) = 0))
+#else
 #define REX_CARD(ea) ((void)(*(u8*)(base + ((u32)(ea) >> 12)) = 0))
 #endif
 #define REX_STORE_D_U8_C(r, d, y) (REX_STORE_D_U8(r, d, y), REX_CARD((u32)(r) + (u32)(d)))

@@ -36,6 +36,7 @@
 //   whose run was then never marked.
 // BLUR_CARD_RUN_ALL_PAGES (compile time): port 74's macros as they were.
 [[gnu::always_inline]] static inline void rex_card_mark_(uint8_t* base, u32 page) {
+  REX_NX_CENSUS(26);  // blur-nx (2026-11-13, near-exact #38's census: the copies' run marks; PC only)
   if (page - 0x9FFFFu <= 0x60000u || page - 0x7EFFFu <= 0x1000u) {
     u8* const card = (u8*)(base + page);
     if (*card) *card = 0;
