@@ -304,6 +304,10 @@ void RuntimeCensusReport(int seconds) {
                   nx[27], nx[28]);
 #if !defined(__SWITCH__)
       CasCensusReport();  // blur-nx (2026-11-13, #32)
+      REXLOG_INFO("[census] near-exact #57 / #34 (cumulative): single-object waits that succeeded {}, polls (a zero "
+                  "timeout) {}, of them timed out (then a yield) {}",
+                  CensusRead(rex::syscount::kCensusWaitSignalled), CensusRead(rex::syscount::kCensusWaitPoll),
+                  CensusRead(rex::syscount::kCensusWaitPollTimeout));
 #endif
     }
     // blur-nx (2026-11-12, codegen-ideas-3 CG-13's census): what one flush mode for all code would change. The
