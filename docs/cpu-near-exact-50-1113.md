@@ -186,3 +186,24 @@ The 15 new ones:
 | 63 | Renut's per-draw counters as single-writer adds (M-39's kind) | ~0.05 | never (exact) | none |
 | 64 | The mixer's row zero-fill folded into its first kernel (a store, not an add) | 0.1-0.3 | +0 against -0 (output the same) | audio dumps |
 | 65 | XMA kick coalescing (M-41) | 0-0.8 | never (timing: decodes up to 0.2 ms later) | M-44's counts, "requests without data" |
+
+## Work on the whole table (2026-11-13 14:53 onward, the user: "Work on the entire table for 24 hours please try and do all at once or as many as possible for the most efficient census possible")
+
+Status by row of the refilled 50 (15:15):
+
+- Built as switches or keys (off by default), with their census: #1, #2, #5, #17, #41, #42 (BLUR_NEAR_EXACT); #9
+  (the near-exact codegen); #12; #21 (audio_nx_silent_eps), #23, #24, #49 (audio_nx_resample_copy); #26, #34's
+  backoff numbers, #60 (switch_yield_backoff_exempt); #37 (rr6_frames_ahead may be 2; census of the game thread's
+  waits by source); #65's exact part (audio_xma_kick_wake_idle_only); #8 and #10 (SASRT_HOT_LR_ELIDE,
+  BANJO_GEN_LR_MOVES_ELIDE, BANJO_GEN_NV_SAVES_ELIDE in the near-exact builds, the guard run).
+- Found exact and built: #53 (the narrowed captures by register groups), #54 (without the never-read ranges), #55
+  (a queued clear keeps 48 bytes).
+- Census only (the implementation after it): #32 (CAS words by thread), #47 (draws with indexed constants), #57 / #34
+  (polls and their timeouts).
+- Already the case: #33 (RtlEnter / LeaveCriticalSection are host code).
+- Too small to matter: #62 (~0.01 ms), #63 (~0.01 ms).
+- Second wave (after the census): #51, #52 (a scratch ring with fences), #56, #58; #6 / #7 / #31 / #39 (codegen
+  analyses); #16 / #64 (the tools that read the zero-fills); the guest functions a subagent is identifying for #18,
+  #22, #25, #28, #43, #44, #45, #50, #61.
+- Settings A/Bs on the console, no build: #26, #34 (switch_yield_backoff_us / _after), #35, #37 (rr6_frames_ahead 2),
+  #59 (switch_thread_cores), #60.
