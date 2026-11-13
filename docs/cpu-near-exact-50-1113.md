@@ -395,3 +395,17 @@ built alone), the 207 copies of the audio A/B races, round 1, round 2, the LZX n
 training profile. The races' menu presses: where seven confirms end varies a boot to a boot (race 2 needed two by
 hand, race 3 stopped at the car select): one_race.sh now presses ten (the extra ones land on the loading screen).
 Next: the keys on nx (abK: nx, ahead2, wake, wake, ahead2, nx).
+
+### The keys on nx (abK, 2026-11-13 19:58-20:39)
+
+| Key | Races (fps) | Mean |
+|---|---|---|
+| none (nx) | 27.39, 27.68 | 27.54 |
+| #37 rr6_frames_ahead 2 | 27.41, 27.62 | 27.52 (no change: the PC's Swap waits do not happen on the console) |
+| #34 switch_yield_wake_on_progress | 28.80, 27.29 | 28.05 (+1.8 %, the two races far apart: repeated in abK2) |
+
+The nx race profile (abN5_1, cpu_table2): cores 0-2 81 % busy, core 3 84 %; 117 ms of CPU a frame (machine copies
+84, host 30); the Game Master 21.2 ms a frame (38 % waiting), JQ0-2 13.8 / 11.4 / 8.8, the render thread 16.7,
+**audio (JQ Workers 3 and 4) 36 ms** (the node loop sub_8230AD50 5.0 ms, sub_822BEDD0 2.3, sub_822E17C8 2.2,
+sub_8230EDE0 2.1, memset 1.3); Renut's NewOp 3.75 ms on JQ0 / JQ1; the LZX native (DecodeBuffer) 1.2 ms. #59's
+'cores' variant (both audio workers on core 3 alone) cannot hold ~40 ms a frame: 'cores2' gives them cores 2-3.
