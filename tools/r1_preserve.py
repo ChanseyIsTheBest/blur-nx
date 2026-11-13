@@ -18,7 +18,8 @@ induction on the call depth of any finished call).
   python r1_preserve.py --gen <tree> --out <dir> [--indirect-preserve] [--near-exact]
 --indirect-preserve: an indirect call, an import or a hooked call counts as preserving (the assumption the PC check
 REX_R1_CHECK verifies); without it they make d unknown.
---near-exact (blur-nx, 2026-11-13, #9 of Blur's docs/cpu-near-exact-50-1113.md; also env BLUR_NX_R1_ASSUME=1): a
+--near-exact (blur-nx, 2026-11-13, #9 of Blur's docs/cpu-near-exact-50-1113.md; post_codegen.py passes it to the
+assumed proof only, when the environment has BLUR_NX_R1_ASSUME=1, so REX_R1_CHECK tests every call it assumes): a
 function counts as preserving unless its own body fails the proof with every callee taken as preserving (an r1 write
 the flow cannot follow, exits that disagree, setjmp / longjmp): the functions left unproven only through what they
 call (1,440 of Blur's 1,486) are assumed. NOT a proof; REX_R1_CHECK (PC) tests every assumed call.
@@ -165,7 +166,6 @@ def main():
     ap.add_argument('--indirect-preserve', action='store_true')
     ap.add_argument('--near-exact', action='store_true')
     a = ap.parse_args()
-    a.near_exact = a.near_exact or os.environ.get('BLUR_NX_R1_ASSUME') == '1'
     os.makedirs(a.out, exist_ok=True)
     lds.load_mid_asm_hooks(a.gen)
     named = dcd.named_functions(a.gen)

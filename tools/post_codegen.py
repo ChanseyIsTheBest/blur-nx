@@ -215,7 +215,11 @@ def main():
     # on the whole-program proof that callees return with r1 unchanged. REX_R1_CHECK (PC verify) tests the assumed
     # calls, REX_R1_STRICT reloads after them, REX_R1_LOCAL_OFF is the original code.
     run(tool('r1_preserve.py'), '--gen', gen, '--out', os.path.join(proofs, 'strict'))
-    run(tool('r1_preserve.py'), '--gen', gen, '--out', os.path.join(proofs, 'assumed'), '--indirect-preserve')
+    # blur-nx (2026-11-13, near-exact #9): with BLUR_NX_R1_ASSUME=1 in the environment, the assumed proof also takes a
+    # function as preserving unless its own body fails (r1_preserve.py --near-exact); the strict one stays a proof, so
+    # REX_R1_CHECK (PC) tests every call the assumption covers.
+    run(tool('r1_preserve.py'), '--gen', gen, '--out', os.path.join(proofs, 'assumed'), '--indirect-preserve',
+        *(['--near-exact'] if os.environ.get('BLUR_NX_R1_ASSUME') == '1' else []))
     run(tool('r1_local.py'), '--gen', gen, '--proof-strict', os.path.join(proofs, 'strict', 'r1_preserve.json'),
         '--proof-assumed', os.path.join(proofs, 'assumed', 'r1_preserve.json'),
         '--only-file', os.path.join(APP, 'config', 'r1_local_choice.json'))
