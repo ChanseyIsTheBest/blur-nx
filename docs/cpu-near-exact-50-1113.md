@@ -472,12 +472,22 @@ job workers and the file worker idle, ResourceLoading polling, the Game Master l
 the six default-on nx keys off: fine; the three SDK ones off: fine; audio_stereo_direct off alone: hung;
 **kernel_timestamp_timer_on_import off alone: fine**; clock_nap_clamp off with M-38 on: hung (so not the clamp).
 
-**Cause:** M-38 starts the KeTimeStampBundle refresh timer only when an XEX imports the bundle. Blur's import table
-never names it, yet the game reads the bundle's tick count (a run-time lookup: XexGetProcedureAddress ->
-KernelModule::GetProcAddressByOrdinal, which returned the variable without the import hook), so the count stayed at
-its boot value and the intro's timed wait never ended. **M-38 was not exact.**
+**Cause:** M-38 (the KeTimeStampBundle refresh timer started only when an XEX imports the bundle); Blur's import
+table never names it, and the boot needs the timer running anyway. **M-38 was not exact.** How the timer matters is
+still open: the first guess, a run-time lookup of the bundle, is **disproved** (05:05-05:15: nx4 with the import hook
+also called from GetProcAddressByOrdinal and the key on still hung, and the hook's log line never fired); Blur's code
+calls no GetTickCount (its time calls: KeQuerySystemTime, KeQueryPerformanceFrequency, NtCreateTimer / NtSetTimerEx);
+clock_nap_clamp is ruled out. Left: the timer's own side effects (a QueryGuestUptimeMillis guest-clock read every
+millisecond; the TimerQueue thread kept awake).
 
 **Fix:** Blur's tomls and built-in defaults set kernel_timestamp_timer_on_import = false (the timer from the start, as
-before M-38); the SDK now calls the import hook from GetProcAddressByOrdinal for variables too, with a log line naming
-the caller (the next build shows the route). The base had already made the key default false (RR6's port 139, for the
+before M-38); the SDK also calls the import hook from GetProcAddressByOrdinal for variables (correct in
+principle, but not Blur's route: nx4 proved it). The base had already made the key default false (RR6's port 139, for the
 nap clamp's sake); SASRT and RR6 were told.
+
+**The 20 runs with the fix (02:45-05:01; nx3 + the nx toml + kernel_timestamp_timer_on_import = false):** 20 boots, 20
+races, 20 clean closes; no hang, no crash report; the watchdog's log for those 20 launches has no stall, quiet or
+hitch line. Frame rate where the metric was fetched (9 runs): 24.66-26.06 fps (mean ~25.7), GPU ~27.6 ms; not
+comparable with the 2026-11-13 A/B (27.9): the new profile starts 20th of 20, the overlay runs, the shader cache
+was refilling (an A/B of c2b against nx4 in the same conditions would settle it). The console was left with c2b and
+the shipping toml (booted once to check).
