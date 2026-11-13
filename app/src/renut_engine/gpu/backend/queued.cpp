@@ -86,6 +86,10 @@ REXCVAR_DEFINE_BOOL(banjo_renut_deferred_narrow, true, "Banjo/Enhancements",
                     "shader has none). Exact: the render thread reads no other register of that capture. Off: the "
                     "whole device, as before")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(banjo_renut_deferred_narrow_groups, true, "Banjo/Enhancements",
+                    "banjo_renut_deferred_narrow (blur-nx #53): the float constants copied by the 64-byte groups "
+                    "(four registers) the shaders read, not up to their highest register. Exact either way")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(banjo_renut_deferred_narrow_poison, false, "Banjo/Debug",
                     "banjo_renut_deferred_narrow's check: the float constant registers a narrowed capture leaves out "
                     "are filled with NaNs (a render path that read them would draw visibly wrong)")
@@ -486,6 +490,7 @@ struct DeltaChain {
   uint64_t deltas = 0, rebases = 0, bytes = 0, chunks = 0, groups = 0;  // the 10 s report's
   uint64_t whole = 0;  // banjo-nx (from sa2-nx): whole captures outside the chain (Begin*Vertices draws), under the lock too
   uint64_t narrowed = 0, narrowed_bytes = 0;  // blur-nx (2026-11-13, #13): of those, narrowed, and the bytes they copied
+  uint64_t narrowed_prefix_bytes = 0;         // ... what #13's prefixes alone would have copied (#53 / #54's census)
   alignas(64) u8 shadow[d3d::kDeviceSnapshotSize];  // the device at its last draw (the chunks)
   // bangaio-nx (2026-10-29, banjo_renut_small_captures): each delta is written here, then copied into its capture at its
   // size. The same lines every draw: they stay in the game thread's cache.
@@ -737,9 +742,10 @@ DrawCapture *Capture(u32 device_va, const DrawCall &call) {
 // blur-nx (2026-11-13, #13, banjo_renut_deferred_narrow): the float constant registers the bound shader at 'offset' reads,
 // as a count from register 0 (its highest one + 1); false when it is not a renderer record of 'kind' with a cache entry.
 // 'none_ok': a null shader reads none (the pixel shader: the render thread then uses kNoRegisters).
-bool ShaderRegisters(const u8 *device, u32 offset, RecordKind kind, bool none_ok, u32 &count) {
+bool ShaderRegisters(const u8 *device, u32 offset, RecordKind kind, bool none_ok, u32 &count, uint64_t &groups) {
   const u32 va = (u32(device[offset]) << 24) | (u32(device[offset + 1]) << 16) | (u32(device[offset + 2]) << 8) |
                  u32(device[offset + 3]);
+  groups = 0;
   if (!va) {
     count = 0;
     return none_ok;
@@ -757,7 +763,27 @@ bool ShaderRegisters(const u8 *device, u32 offset, RecordKind kind, bool none_ok
       break;
     }
   }
+  // blur-nx (2026-11-13, #53): the 64-byte groups (four registers) holding a register it reads.
+  for (u32 w = 0; w < 8; ++w) {
+    const u32 bits = record->entry->floatConstants[w];
+    for (u32 g = 0; g < 8; ++g)
+      if ((bits >> (4 * g)) & 0xFu) groups |= uint64_t(1) << (w * 8 + g);
+  }
   return true;
+}
+
+// blur-nx (2026-11-13, #53): the groups of 'groups' (bit g = registers 4g..4g+3, 64 bytes) copied in runs; the bytes.
+size_t CopyGroups(u8 *out, const u8 *bytes, u32 base, uint64_t groups) {
+  size_t copied = 0;
+  while (groups) {
+    const u32 first = u32(__builtin_ctzll(groups));
+    const uint64_t rest = groups >> first;
+    const u32 run = rest == ~uint64_t(0) >> first ? 64 - first : u32(__builtin_ctzll(~rest));
+    std::memcpy(out + base + first * 64, bytes + base + first * 64, size_t(run) * 64);
+    copied += size_t(run) * 64;
+    groups = first + run >= 64 ? 0 : groups & ~((uint64_t(1) << (first + run)) - 1);
+  }
+  return copied;
 }
 
 // The capture of a Begin*Vertices draw: Capture()'s, with only the float constant registers its shaders read (the
@@ -771,23 +797,37 @@ DrawCapture *CaptureDeferred(u32 device_va, const DrawCall &call) {
     return nullptr;
   const auto *bytes = reinterpret_cast<const u8 *>(device);
   u32 vs_regs = 0, ps_regs = 0;
-  if (!ShaderRegisters(bytes, d3d::kDeviceOffsetVertexShader, RecordKind::VertexShader, false, vs_regs) ||
-      !ShaderRegisters(bytes, d3d::kDeviceOffsetPixelShader, RecordKind::PixelShader, true, ps_regs))
+  uint64_t vs_groups = 0, ps_groups = 0;
+  if (!ShaderRegisters(bytes, d3d::kDeviceOffsetVertexShader, RecordKind::VertexShader, false, vs_regs, vs_groups) ||
+      !ShaderRegisters(bytes, d3d::kDeviceOffsetPixelShader, RecordKind::PixelShader, true, ps_regs, ps_groups))
     return Capture(device_va, call);
   ClearPending(device);
   DrawCapture *capture = g_capture_pool.Take();
   if (!capture->narrow)
     capture->narrow.reset(new u8[d3d::kDeviceSnapshotSize]);
   u8 *out = capture->narrow.get();
-  std::memcpy(out, bytes, kDeltaVertexF);
-  std::memcpy(out + kDeltaVertexF, bytes + kDeltaVertexF, size_t(vs_regs) * 16);
-  std::memcpy(out + kDeltaPixelF, bytes + kDeltaPixelF, size_t(ps_regs) * 16);
-  std::memcpy(out + kDeltaTailBegin, bytes + kDeltaTailBegin, d3d::kDeviceSnapshotSize - kDeltaTailBegin);
   static const bool poison = REXCVAR_GET(banjo_renut_deferred_narrow_poison);
-  if (poison) {  // NaNs (0xFF bytes) in every register left out
-    std::memset(out + kDeltaVertexF + size_t(vs_regs) * 16, 0xFF, size_t(256 - vs_regs) * 16);
-    std::memset(out + kDeltaPixelF + size_t(ps_regs) * 16, 0xFF, size_t(256 - ps_regs) * 16);
+  if (poison)  // NaNs (0xFF bytes) in every byte left out
+    std::memset(out, 0xFF, d3d::kDeviceSnapshotSize);
+  // blur-nx (2026-11-13, #54): the device's never-read ranges left out too (the delta chain's narrow map, which
+  // banjo_renut_snapshot_deltas_verify checks: the dirty masks, ring pointers and call tables before the fetch
+  // constants, the private words 10880-11775); banjo_renut_deferred_narrow_groups: #53's groups, else the prefixes.
+  static const bool groups_on = REXCVAR_GET(banjo_renut_deferred_narrow_groups);
+  size_t copied = 0;
+  std::memcpy(out + kDeltaUnreadEnd, bytes + kDeltaUnreadEnd, kDeltaVertexF - kDeltaUnreadEnd);
+  copied += kDeltaVertexF - kDeltaUnreadEnd;
+  if (groups_on) {
+    copied += CopyGroups(out, bytes, kDeltaVertexF, vs_groups);
+    copied += CopyGroups(out, bytes, kDeltaPixelF, ps_groups);
+  } else {
+    std::memcpy(out + kDeltaVertexF, bytes + kDeltaVertexF, size_t(vs_regs) * 16);
+    std::memcpy(out + kDeltaPixelF, bytes + kDeltaPixelF, size_t(ps_regs) * 16);
+    copied += size_t(vs_regs + ps_regs) * 16;
   }
+  std::memcpy(out + kDeltaTailBegin, bytes + kDeltaTailBegin, kDeltaPrivateUnreadBegin - kDeltaTailBegin);
+  std::memcpy(out + kDeltaPrivateUnreadEnd, bytes + kDeltaPrivateUnreadEnd,
+              d3d::kDeviceSnapshotSize - kDeltaPrivateUnreadEnd);
+  copied += (kDeltaPrivateUnreadBegin - kDeltaTailBegin) + (d3d::kDeviceSnapshotSize - kDeltaPrivateUnreadEnd);
   capture->narrowed = true;
   capture->snapshot = SnapshotKind::Whole;
   CaptureStackHeaders(bytes, capture->stack_headers);  // blur-nx (2026-11-10, port 76; its key 215)
@@ -797,7 +837,8 @@ DrawCapture *CaptureDeferred(u32 device_va, const DrawCall &call) {
   capture->call.up_indices = nullptr;
   if (DeltasOn()) {  // (the caller holds g_delta.mutex then)
     ++g_delta.narrowed;
-    g_delta.narrowed_bytes += d3d::kDeviceSnapshotSize - size_t(512 - vs_regs - ps_regs) * 16;
+    g_delta.narrowed_bytes += copied;
+    g_delta.narrowed_prefix_bytes += d3d::kDeviceSnapshotSize - size_t(512 - vs_regs - ps_regs) * 16;  // #13's alone
   }
   return capture;
 }
@@ -931,14 +972,15 @@ void ForgetSnapshotDeltas(const void *device) {
 std::string SnapshotDeltaReport() {
   if (!DeltasOn())
     return {};
-  uint64_t deltas, rebases, bytes, chunks, groups, whole, narrowed, narrowed_bytes;
+  uint64_t deltas, rebases, bytes, chunks, groups, whole, narrowed, narrowed_bytes, narrowed_prefix;
   {
     std::lock_guard lock(g_delta.mutex);
     whole = g_delta.whole;
     g_delta.whole = 0;
     narrowed = g_delta.narrowed;  // blur-nx (2026-11-13, #13)
     narrowed_bytes = g_delta.narrowed_bytes;
-    g_delta.narrowed = g_delta.narrowed_bytes = 0;
+    narrowed_prefix = g_delta.narrowed_prefix_bytes;
+    g_delta.narrowed = g_delta.narrowed_bytes = g_delta.narrowed_prefix_bytes = 0;
     deltas = g_delta.deltas;
     rebases = g_delta.rebases;
     bytes = g_delta.bytes;
@@ -954,10 +996,11 @@ std::string SnapshotDeltaReport() {
       "device snapshots (banjo_renut_snapshot_deltas): {} draws, {:.0f} bytes kept a draw on average (the whole device "
       "is {}); {:.1f} chunks and {:.1f} constant groups a delta; {} whole copies (the frames' first draws); {} "
       "Begin*Vertices draws as whole copies ({} of them narrowed to their shaders' float constants, {:.0f} bytes a "
-      "copy; banjo_renut_deferred_narrow)",
+      "copy, {:.0f} with the prefixes alone; banjo_renut_deferred_narrow)",
       draws, double(bytes) / double(draws), d3d::kDeviceSnapshotSize, double(chunks) / per_delta,
       double(groups) / per_delta, rebases, whole, narrowed,
-      narrowed ? double(narrowed_bytes) / double(narrowed) : 0.0);
+      narrowed ? double(narrowed_bytes) / double(narrowed) : 0.0,
+      narrowed ? double(narrowed_prefix) / double(narrowed) : 0.0);
   line += DrawerCensus();  // blur-nx (2026-11-13, M-31)
   if (DeltasVerifyOn()) {
     line += fmt::format("; verify: {} draws checked, {} differ", g_delta_verified.exchange(0, std::memory_order_relaxed),
