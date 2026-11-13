@@ -118,7 +118,9 @@ REXCVAR_DEFINE_BOOL(banjo_renut_deferred_chain, false, "Banjo/Enhancements",
                     "FlushDeferredVertices, before any other draw of the device). OFF by default since package 36q: the "
                     "chain is one for every device, and N&B draws on two (from two threads): a draw of the other device "
                     "made and queued between a Begin*Vertices delta and its queueing puts that delta on the wrong device "
-                    "(emulator hangs in 4 of 8 runs with it on, 0 before). Off: a whole copy, as sa2-nx has it")
+                    "(emulator hangs in 4 of 8 runs with it on, 0 before). Off: a whole copy, as sa2-nx has it. blur-nx (2026-11-13, "
+                    "#51): while a Begin*Vertices delta waits for its vertices, a draw of any other device is a whole "
+                    "capture outside the chain, so two devices keep the chain's order (Blur draws on one)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 namespace renut::gpu {
@@ -498,6 +500,13 @@ struct DeltaChain {
   uint64_t whole = 0;  // banjo-nx (from sa2-nx): whole captures outside the chain (Begin*Vertices draws), under the lock too
   uint64_t narrowed = 0, narrowed_bytes = 0;  // blur-nx (2026-11-13, #13): of those, narrowed, and the bytes they copied
   uint64_t narrowed_prefix_bytes = 0;         // ... what #13's prefixes alone would have copied (#53 / #54's census)
+  // blur-nx (2026-11-13, #51, banjo_renut_deferred_chain): the device whose Begin*Vertices delta of the chain waits for
+  // its vertices (0: none). While one waits, a draw of any other device is a whole capture outside the chain: queued
+  // before that delta, it would have been applied ahead of it on the render thread (N&B's hangs with the chain on and
+  // two devices drawing from two threads), so the chain's order stays its queue order however many devices draw.
+  // 'cross': the draws made whole that way (the 10 s report's).
+  u32 deferred_device = 0;
+  uint64_t cross = 0;
   alignas(64) u8 shadow[d3d::kDeviceSnapshotSize];  // the device at its last draw (the chunks)
   // bangaio-nx (2026-10-29, banjo_renut_small_captures): each delta is written here, then copied into its capture at its
   // size. The same lines every draw: they stay in the game thread's cache.
@@ -1017,11 +1026,13 @@ void ForgetSnapshotDeltas(const void *device) {
 std::string SnapshotDeltaReport() {
   if (!DeltasOn())
     return {};
-  uint64_t deltas, rebases, bytes, chunks, groups, whole, narrowed, narrowed_bytes, narrowed_prefix;
+  uint64_t deltas, rebases, bytes, chunks, groups, whole, narrowed, narrowed_bytes, narrowed_prefix, cross;
   {
     std::lock_guard lock(g_delta.mutex);
     whole = g_delta.whole;
     g_delta.whole = 0;
+    cross = g_delta.cross;  // blur-nx (2026-11-13, #51)
+    g_delta.cross = 0;
     narrowed = g_delta.narrowed;  // blur-nx (2026-11-13, #13)
     narrowed_bytes = g_delta.narrowed_bytes;
     narrowed_prefix = g_delta.narrowed_prefix_bytes;
@@ -1051,6 +1062,9 @@ std::string SnapshotDeltaReport() {
       g_narrow_differ.load(std::memory_order_relaxed),
       g_deferred_vertex_draws.exchange(0, std::memory_order_relaxed),
       double(g_deferred_vertex_bytes.exchange(0, std::memory_order_relaxed)) / 1024.0);
+  if (DeferredChainOn())  // blur-nx (2026-11-13, #51)
+    line += fmt::format("; Begin*Vertices deltas in the chain (banjo_renut_deferred_chain), {} draws of another device "
+                        "made whole while one waited", cross);
   line += DrawerCensus();  // blur-nx (2026-11-13, M-31)
   if (DeltasVerifyOn()) {
     line += fmt::format("; verify: {} draws checked, {} differ", g_delta_verified.exchange(0, std::memory_order_relaxed),
@@ -1087,7 +1101,11 @@ void QueueDraw(u32 device_va, const DrawCall &call, u32 up_vertex_bytes, u32 up_
   std::unique_lock<std::mutex> chain;
   if (deltas)
     chain = std::unique_lock<std::mutex>(g_delta.mutex);
-  DrawCapture *capture = deltas ? CaptureDelta(device_va, call) : Capture(device_va, call);
+  // blur-nx (2026-11-13, #51): another device's Begin*Vertices delta waiting: this draw whole, outside the chain.
+  const bool cross = deltas && g_delta.deferred_device && g_delta.deferred_device != device_va;
+  if (cross)
+    ++g_delta.cross;
+  DrawCapture *capture = deltas && !cross ? CaptureDelta(device_va, call) : Capture(device_va, call);
   if (!capture)
     return;
   if (call.up_vertices)
@@ -1111,27 +1129,33 @@ void QueueDeferredDraw(u32 device_va, const DrawCall &call, const u8 *scratch, u
   // (every hook flushes its device's deferred draw first), so the render thread still applies the chain in order. A
   // recorded op made meanwhile (NewOp: ForgetSnapshotDeltas) only makes the next capture a whole one, queued after this
   // draw. A draw that will not be queued (no scratch) stays a whole capture outside the chain.
+  // blur-nx (2026-11-13, #51): not while another device's delta waits (then a whole capture below, outside the chain).
   if (DeltasOn() && DeferredChainOn() && scratch) {
     std::unique_lock<std::mutex> chain(g_delta.mutex);
-    {
-      std::lock_guard lock(g_deferred_mutex);
-      auto it = g_deferred.find(device_va);
-      if (it != g_deferred.end()) {
-        // One not flushed (FlushDeferredVertices above queued it, so none is expected): dropped as the original
-        // replaced it; its delta never reaches the render thread, so the chain rebases.
-        g_capture_pool.Give(it->second.capture);
-        g_deferred.erase(it);
-        g_deferred_count.store(g_deferred.size(), std::memory_order_release);
-        g_delta.device.store(nullptr, std::memory_order_relaxed);
+    if (g_delta.deferred_device && g_delta.deferred_device != device_va) {
+      ++g_delta.cross;  // blur-nx (2026-11-13, #51): the whole capture below
+    } else {
+      {
+        std::lock_guard lock(g_deferred_mutex);
+        auto it = g_deferred.find(device_va);
+        if (it != g_deferred.end()) {
+          // One not flushed (FlushDeferredVertices above queued it, so none is expected): dropped as the original
+          // replaced it; its delta never reaches the render thread, so the chain rebases.
+          g_capture_pool.Give(it->second.capture);
+          g_deferred.erase(it);
+          g_deferred_count.store(g_deferred.size(), std::memory_order_release);
+          g_delta.device.store(nullptr, std::memory_order_relaxed);
+        }
       }
-    }
-    DrawCapture *capture = CaptureDelta(device_va, call);
-    if (!capture)
+      DrawCapture *capture = CaptureDelta(device_va, call);
+      if (!capture)
+        return;
+      std::lock_guard lock(g_deferred_mutex);
+      g_deferred[device_va] = {capture, scratch, bytes};
+      g_deferred_count.store(g_deferred.size(), std::memory_order_release);
+      g_delta.deferred_device = device_va;  // blur-nx (2026-11-13, #51): cleared when FlushDeferredVertices queues it
       return;
-    std::lock_guard lock(g_deferred_mutex);
-    g_deferred[device_va] = {capture, scratch, bytes};
-    g_deferred_count.store(g_deferred.size(), std::memory_order_release);
-    return;
+    }
   }
   DrawCapture *capture = nullptr;
   {
@@ -1181,6 +1205,8 @@ void FlushDeferredVertices(u32 device_va) {
   g_deferred_vertex_bytes.fetch_add(deferred.bytes, std::memory_order_relaxed);
   g_deferred_vertex_draws.fetch_add(1, std::memory_order_relaxed);
   QueueCapture(deferred.capture);
+  if (chain.owns_lock() && g_delta.deferred_device == device_va)
+    g_delta.deferred_device = 0;  // blur-nx (2026-11-13, #51): its delta queued; the chain is free for any device
 }
 
 void QueueClear(u32 device_va, u32 flags, const ClearRect *rect, const float color[4], float depth,

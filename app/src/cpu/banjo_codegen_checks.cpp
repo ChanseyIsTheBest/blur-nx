@@ -297,8 +297,9 @@ void RuntimeCensusReport(int seconds) {
                   "zero {}, other constant {} (within 1e-7 of 1: {}, within 1e-5: {}; under 2^-16: {}) | ramps {} "
                   "(under 1e-6: {}, under 2^-16: {}; both ends under 2^-16: {})",
                   nx[18], nx[22], nx[16], nx[17], nx[23], nx[21], nx[19], nx[20], nx[24], nx[30]);
-      REXLOG_INFO("[census] near-exact #38 (cumulative): card marks of the generated tree {}, the copies' run marks {}",
-                  nx[25], nx[26]);
+      REXLOG_INFO("[census] near-exact #38 (cumulative): card marks of the generated tree {}, the copies' run marks {} "
+                  "(#66: with a run pending; {} of them on a page Renut reads, {} writing the card)",
+                  nx[25], nx[26], nx[33], nx[34]);
       REXLOG_INFO("[census] near-exact #49 (cumulative): resampling blocks {}, of them 256 samples at a ratio other "
                   "than 1 (the copy would newly take them) {}",
                   nx[27], nx[28]);

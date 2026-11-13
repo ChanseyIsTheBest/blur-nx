@@ -37,16 +37,29 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <list>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <fmt/format.h>
+#include <rex/hash.h>  // blur-nx (2026-11-13, #67): XXH3
 
 #include "cpu/banjo_hot_common.h"
 
 REXCVAR_DEFINE_INT32(cpu_lzx_native, 0, "CPU",
                      "Blur's LZX buffer decompression (XMemDecompress, sub_829CC028) as a host native: 0 off, 1 on, "
                      "2 verify (both run, compared; the guest's output stays)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// blur-nx (2026-11-13, #67 of docs/cpu-near-exact-50-1113.md's second wave; exact): the decoded buffers kept, keyed by
+// their compressed bytes (an XXH3 of them, a hit checked byte for byte against a kept copy, with the window size and
+// slot count: a buffer context is reset every call, so nothing else decides the output). The 10 s line counts the
+// repeats either way (a buffer whose bytes were decoded before among the last 1,024).
+REXCVAR_DEFINE_INT32(cpu_lzx_cache_kb, 0, "CPU",
+                     "cpu_lzx_native: kilobytes of decoded LZX buffers kept for a buffer decoded again (its compressed "
+                     "bytes compared in full; exact). 0: none (the repeats are still counted)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REX_EXTERN(__imp__sub_829CC028);
@@ -58,6 +71,7 @@ using u32 = uint32_t;
 
 // The census (the 10 s line).
 std::atomic<uint64_t> g_calls{0}, g_native{0}, g_bytes_in{0}, g_bytes_out{0}, g_stream{0}, g_verified{0}, g_differ{0};
+std::atomic<uint64_t> g_repeats{0}, g_repeat_bytes{0}, g_cache_hits{0};  // blur-nx (2026-11-13, #67)
 std::atomic<uint64_t> g_fallback[8];  // by Fail reason
 std::atomic<int64_t> g_last_report{0};
 const char* const kFailNames[8] = {"stream context", "window size", "error flag", "tree", "match past its block",
@@ -143,6 +157,10 @@ struct Decoder {
   u32 bitbuf = 0;
   int bitcount = 0;
   bool error = false;
+  // blur-nx (2026-11-13, the verify race's 6 % fallbacks): the block decoders (sub_829D2E80 / sub_829D2720) refill
+  // inline with no end check at all; their one check is the input pointer against the end before each main symbol is
+  // taken. Off inside Compressed(), where that check is made instead (the refill then reads what the guest's reads).
+  bool check_end = true;
   u32 extra_bits[kMaxSlots], pbase[kMaxSlots];
 
   void Reset(u32 w, int s) {
@@ -181,7 +199,7 @@ struct Decoder {
     bitcount -= n;
     bitbuf <<= n;
     if (bitcount > 0) return;
-    if (in >= in_end) {
+    if (check_end && in >= in_end) {
       error = true;
       return;
     }
@@ -189,7 +207,7 @@ struct Decoder {
     in += 2;
     bitcount += 16;
     if (bitcount > 0) return;
-    if (in >= in_end) {
+    if (check_end && in >= in_end) {
       error = true;
       return;
     }
@@ -306,12 +324,19 @@ struct Decoder {
   }
   // n bytes of the current block from window[pos] (verbatim / aligned); a match may not run past them.
   Fail Compressed(u32 n) {
+    struct Unchecked {  // blur-nx (2026-11-13): the block's refills without the end check (check_end)
+      Decoder& d;
+      explicit Unchecked(Decoder& x) : d(x) { d.check_end = false; }
+      ~Unchecked() { d.check_end = true; }
+    } unchecked(*this);
     const u32 end = pos + n;
     const bool aligned = block_type == 2;
     while (pos < end) {
+      // The guest's one check: the input pointer against the end, before the main symbol is taken (its table
+      // look-up reads only the bit buffer); past it, a failure (the native falls back and the guest fails the same).
+      if (in >= in_end || error) return kErrorFlag;
       const int sym = Symbol(main_tree);
       if (sym < 0) return kTree;
-      if (in >= in_end || error) return kErrorFlag;  // (the guest's check after each main symbol)
       if (sym < 256) {
         window[pos++ & wmask] = u8(sym);
         continue;
@@ -446,6 +471,67 @@ struct Decoder {
 thread_local Decoder t_decoder;
 thread_local std::vector<u8> t_out;
 
+// blur-nx (2026-11-13, #67): the repeat census (the last 1,024 buffers' keys) and the cache (least recently used out).
+struct CacheEntry {
+  uint64_t key;
+  std::vector<u8> in;   // the compressed bytes, compared on a hit
+  std::vector<u8> out;  // the decoded buffer
+};
+std::mutex g_cache_mutex;
+uint64_t g_recent[1024];
+u32 g_recent_at = 0;
+std::list<std::shared_ptr<const CacheEntry>> g_lru;
+std::unordered_map<uint64_t, std::list<std::shared_ptr<const CacheEntry>>::iterator> g_cache;
+size_t g_cache_bytes = 0;
+
+uint64_t BufferKey(const u8* src, u32 size, u32 w, int slots) {
+  return XXH3_64bits_withSeed(src, size, (uint64_t(w) << 8) ^ uint64_t(slots) ^ (uint64_t(size) << 32));
+}
+
+// Notes the key (the census); the kept buffer for these exact bytes, if any (moved to the front).
+std::shared_ptr<const CacheEntry> CacheLook(uint64_t key, const u8* src, u32 size, size_t budget) {
+  std::lock_guard<std::mutex> lock(g_cache_mutex);
+  bool seen = false;
+  for (const uint64_t k : g_recent)
+    if (k == key) {
+      seen = true;
+      break;
+    }
+  if (seen) {
+    g_repeats.fetch_add(1, std::memory_order_relaxed);
+    g_repeat_bytes.fetch_add(size, std::memory_order_relaxed);
+  } else {
+    g_recent[g_recent_at++ & 1023] = key;
+  }
+  if (!budget) return nullptr;
+  const auto it = g_cache.find(key);
+  if (it == g_cache.end()) return nullptr;
+  const std::shared_ptr<const CacheEntry> e = *it->second;
+  if (e->in.size() != size || std::memcmp(e->in.data(), src, size) != 0) return nullptr;
+  g_lru.splice(g_lru.begin(), g_lru, it->second);
+  return e;
+}
+
+void CacheKeep(uint64_t key, const u8* src, u32 size, const std::vector<u8>& out, size_t budget) {
+  const size_t bytes = size_t(size) + out.size();
+  if (!budget || bytes > budget / 4) return;
+  auto e = std::make_shared<CacheEntry>();
+  e->key = key;
+  e->in.assign(src, src + size);
+  e->out = out;
+  std::lock_guard<std::mutex> lock(g_cache_mutex);
+  if (g_cache.count(key)) return;
+  while (g_cache_bytes + bytes > budget && !g_lru.empty()) {
+    const auto& last = g_lru.back();
+    g_cache_bytes -= last->in.size() + last->out.size();
+    g_cache.erase(last->key);
+    g_lru.pop_back();
+  }
+  g_lru.push_front(std::move(e));
+  g_cache[key] = g_lru.begin();
+  g_cache_bytes += bytes;
+}
+
 // The whole buffer (sub_829CD598's framing); the output in t_out. kOk, or why the guest must decode it.
 Fail DecodeBuffer(uint8_t* base, u32 ctx, u32 src, u32 src_size) {
   const u8* c = ::banjo::hot::Raw(base, ctx);
@@ -514,10 +600,12 @@ void Report() {
     if (n) fails += fmt::format(", {} {}", kFailNames[i], n);
   }
   REXLOG_INFO("[lzx] {} s: {} buffer calls ({} native), {:.1f} KB in, {:.1f} KB out, {} stream calls (guest); "
-              "verify {} compared, {} differ; fallbacks{}",
+              "verify {} compared, {} differ; fallbacks{}; #67: {} buffers decoded before ({:.1f} KB in), {} from the "
+              "cache",
               now - last, g_calls.exchange(0), g_native.exchange(0), double(g_bytes_in.exchange(0)) / 1024.0,
               double(g_bytes_out.exchange(0)) / 1024.0, g_stream.exchange(0), g_verified.exchange(0),
-              g_differ.load(), fails.empty() ? std::string(": none") : fails);
+              g_differ.load(), fails.empty() ? std::string(": none") : fails, g_repeats.exchange(0),
+              double(g_repeat_bytes.exchange(0)) / 1024.0, g_cache_hits.exchange(0));
 }
 
 }  // namespace
@@ -531,14 +619,34 @@ REX_HOOK_RAW(sub_829CC028) {
     return;
   }
   Report();
-  const Fail f = DecodeBuffer(base, ctx_va, src, src_size);
+  // blur-nx (2026-11-13, #67): the cache (and the repeat census) by the compressed bytes, the window and the slots.
+  static const size_t budget = size_t(std::clamp(REXCVAR_GET(cpu_lzx_cache_kb), 0, 262144)) * 1024;
+  std::shared_ptr<const CacheEntry> hit;
+  uint64_t key = 0;
+  const u8* const src_bytes = ::banjo::hot::Raw(base, src);
+  {
+    const u8* c = ::banjo::hot::Raw(base, ctx_va);
+    if (!(Be32(c + 8) & 1)) {  // a buffer context (a stream one goes to the guest below)
+      key = BufferKey(src_bytes, src_size, Be32(c + 24), c[20 + 11957]);
+      hit = CacheLook(key, src_bytes, src_size, budget);
+    }
+  }
+  if (hit && mode == 1) {
+    g_calls.fetch_add(1, std::memory_order_relaxed);
+    g_bytes_in.fetch_add(src_size, std::memory_order_relaxed);
+    g_cache_hits.fetch_add(1, std::memory_order_relaxed);
+    t_out = hit->out;
+  }
+  const Fail f = hit && mode == 1 ? kOk : DecodeBuffer(base, ctx_va, src, src_size);
   if (f == kStream) {
     g_stream.fetch_add(1, std::memory_order_relaxed);
     __imp__sub_829CC028(ctx, base);
     return;
   }
-  g_calls.fetch_add(1, std::memory_order_relaxed);
-  g_bytes_in.fetch_add(src_size, std::memory_order_relaxed);
+  if (!(hit && mode == 1)) {
+    g_calls.fetch_add(1, std::memory_order_relaxed);
+    g_bytes_in.fetch_add(src_size, std::memory_order_relaxed);
+  }
   if (f != kOk) {
     g_fallback[f].fetch_add(1, std::memory_order_relaxed);
     __imp__sub_829CC028(ctx, base);
@@ -546,6 +654,11 @@ REX_HOOK_RAW(sub_829CC028) {
   }
   const u32 total = u32(t_out.size());
   g_bytes_out.fetch_add(total, std::memory_order_relaxed);
+  if (!hit && key) CacheKeep(key, src_bytes, src_size, t_out, budget);  // blur-nx (2026-11-13, #67)
+  if (hit && mode == 2 && hit->out != t_out) {  // the verify: a kept buffer against a fresh decode of the same bytes
+    g_differ.fetch_add(1, std::memory_order_relaxed);
+    REXLOG_WARN("[lzx] verify: the cache's buffer for {} bytes in differs from the decode", src_size);
+  }
   if (mode == 2) {  // verify: the guest's result stays
     __imp__sub_829CC028(ctx, base);
     const u32 guest_total = Be32(::banjo::hot::Raw(base, p_size));

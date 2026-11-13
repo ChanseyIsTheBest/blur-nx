@@ -99,8 +99,19 @@ endif()
 option(BLUR_NEAR_EXACT "Blur's near-exact compile-time switches (docs/cpu-near-exact-50-1113.md; not bit-exact in rare cases)" OFF)
 set(BLUR_NX_ONLY "" CACHE STRING "With BLUR_NEAR_EXACT: only these switches (a ;-list, for a bisect; empty: all)")
 set(BLUR_NX_SKIP "" CACHE STRING "With BLUR_NEAR_EXACT: every switch but these (a ;-list)")
-set(_blur_nx_switches REX_NX_SNAN_PASS REX_NX_FCTI_NO_NAN REX_NX_DIV_NO_CHECK REX_NX_FCMP_NO_UN REX_NX_VMINMAX_FAST
-    REX_NX_XER_SO_ZERO REX_NX_NO_TRAPS REX_CARD_VIEWS_ONLY)
+# The PC census (2026-11-13 16:05, the doc) took two out: #2 (39,972 NaN conversions in a race: not rare) and #42 (4.1 %
+# of the vector max/min lanes differ). #41 stays: no read of a float compare's unordered bit exists (2,148 reads, all
+# reached only by vector compares: the doc). Either of the two can still be named in BLUR_NX_ONLY for a test.
+set(_blur_nx_switches REX_NX_SNAN_PASS REX_NX_DIV_NO_CHECK REX_NX_FCMP_NO_UN REX_NX_XER_SO_ZERO REX_NX_NO_TRAPS)
+if(BLUR_NEAR_EXACT AND NOT BLUR_NX_ONLY STREQUAL "")
+    list(APPEND _blur_nx_switches REX_NX_FCTI_NO_NAN REX_NX_VMINMAX_FAST)
+endif()
+# blur-nx (2026-11-13, #66 of the doc's second wave; exact): the generated tree's card marks by the copies' rule in
+# every build (only the pages whose cards Renut reads, a card written only when not zero yet; tools/store_cards.py).
+option(BLUR_CARD_VIEWS_ONLY "The generated tree's store cards only for Renut's views, written only when set (exact)" ON)
+if(BLUR_CARD_VIEWS_ONLY)
+    add_compile_definitions(REX_CARD_VIEWS_ONLY)
+endif()
 if(BLUR_NEAR_EXACT)
     foreach(_s ${_blur_nx_switches})
         if((BLUR_NX_ONLY STREQUAL "" OR _s IN_LIST BLUR_NX_ONLY) AND NOT _s IN_LIST BLUR_NX_SKIP)

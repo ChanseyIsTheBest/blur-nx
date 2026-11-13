@@ -43,6 +43,7 @@ extern "C" volatile unsigned long long g_rex_diet_census[6];
 //   27 #49 resampling kernel calls (tools/blur_mix_nx.py), 28 of them consuming 256 samples at a ratio other than 1
 //   30 #21 ramps with both ends under 2^-16
 //   31 #43 exp memo hits, 32 its misses (cpu/hot/blur_hand_natives_batch2.h)
+//   33 #66 the copies' run marks on a page Renut reads, 34 of them writing the card (26: the run marks with a run)
 #if defined(REX_DIET_CENSUS_ON) && !defined(__SWITCH__)
 extern "C" volatile unsigned long long g_rex_nx_census[48];
 #define REX_NX_CENSUS(k) (g_rex_nx_census[k] = g_rex_nx_census[k] + 1)
