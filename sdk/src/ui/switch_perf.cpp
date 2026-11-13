@@ -194,11 +194,25 @@ struct Calls {
   std::atomic<u64> ticks{0};
   std::atomic<u64> bytes{0};
 };
-Calls g_calls[kCallsCount];
+// blur-nx (2026-11-13, cycle 3, M-39's kind: Blur's docs/cpu-moonshots-50-1113.md): the counters in kCallShards sets, a
+// thread's set picked by its TLS slot (tpidrro_el0, one register read; libnx's slots are 0x200 bytes apart), each set on
+// lines of its own. They were one array every thread added to: svcSleepThread alone ~4,500 times a second from the job
+// workers' yields (each add an exclusive load/store loop on a line the other cores had just written). Two threads that
+// share a set still count right (the adds are atomic); the report sums the sets.
+constexpr unsigned kCallShards = 8;
+struct alignas(64) CallShard {
+  Calls calls[kCallsCount];
+};
+CallShard g_call_shards[kCallShards];
+
+inline Calls& CallsOf(unsigned id) {
+  const uintptr_t tls = reinterpret_cast<uintptr_t>(armGetTls());
+  return g_call_shards[(tls >> 9) % kCallShards].calls[id];
+}
 
 inline void Note(unsigned id, u64 from, u64 bytes = 0) {
   const u64 ticks = armGetSystemTick() - from;
-  Calls& l = g_calls[id];
+  Calls& l = CallsOf(id);
   l.n.fetch_add(1, std::memory_order_relaxed);
   l.ticks.fetch_add(ticks, std::memory_order_relaxed);
   if (bytes) {
@@ -612,9 +626,12 @@ void Report(u64 elapsed_ticks, u64 tick_freq, u64 counters_last[kCounterCount],
     static u64 last[kCallsCount][3];
     double n[kCallsCount], ms[kCallsCount], mb[kCallsCount];
     for (unsigned i = 0; i < kCallsCount; ++i) {
-      const u64 vn = g_calls[i].n.load(std::memory_order_relaxed);
-      const u64 vt = g_calls[i].ticks.load(std::memory_order_relaxed);
-      const u64 vb = g_calls[i].bytes.load(std::memory_order_relaxed);
+      u64 vn = 0, vt = 0, vb = 0;  // blur-nx (2026-11-13): the sets summed (CallShard)
+      for (const CallShard& shard : g_call_shards) {
+        vn += shard.calls[i].n.load(std::memory_order_relaxed);
+        vt += shard.calls[i].ticks.load(std::memory_order_relaxed);
+        vb += shard.calls[i].bytes.load(std::memory_order_relaxed);
+      }
       n[i] = double(vn - last[i][0]) / seconds;
       ms[i] = double(vt - last[i][1]) * 1000.0 / double(tick_freq) / seconds;
       mb[i] = double(vb - last[i][2]) / 1048576.0 / seconds;
@@ -1204,7 +1221,7 @@ Result __wrap_threadClose(Thread* t) {
   return __real_threadClose(t);
 }
 
-/* libnx calls that cost IPC or walk memory. See g_calls. */
+/* libnx calls that cost IPC or walk memory. See CallShard. */
 Result __wrap_nvFenceWait(NvFence* f, s32 timeout_us) {
   const u64 from = armGetSystemTick();
   const Result rc = __real_nvFenceWait(f, timeout_us);
