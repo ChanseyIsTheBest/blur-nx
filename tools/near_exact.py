@@ -32,7 +32,7 @@ FORMS = {
 }
 
 
-TRAP = re.compile(r'^(	if \()(.*)(\) ppc_trap\(ctx, base, (?:0|22)\);.*)$', re.S)
+TRAP = re.compile(r'^(\tif \()(.*)(\) ppc_trap\(ctx, base, (?:0|22)\);.*)$', re.S)
 
 
 def rewrite(text, counts):
