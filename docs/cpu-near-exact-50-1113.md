@@ -207,3 +207,27 @@ Status by row of the refilled 50 (15:15):
   #22, #25, #28, #43, #44, #45, #50, #61.
 - Settings A/Bs on the console, no build: #26, #34 (switch_yield_backoff_us / _after), #35, #37 (rr6_frames_ahead 2),
   #59 (switch_thread_cores), #60.
+
+### A subagent's reading of the guest code (2026-11-13 ~15:40) and what it settles
+
+(console samples: app/src/cpu/hot/localized_bulk.txt, 49,845 in all)
+
+- #43 memoize: **exp (82954F28, 446 samples)** is called mostly by the audio parameter fetch 822EB500 (533) with the
+  same dB offsets each frame: cpu_nx_exp_memo (exact: a pure function; built). sin (82954478, 898; physics 8250A7E8)
+  has continuously changing arguments: no memo.
+- #44 host 2-input math: atan2 (82954DC8, 26 samples), pow (829552D8, 36, helper 829550E0 224), fmod (82954E38, 2):
+  every CRT routine is double precision, and host libm differs from them in the last bits often (not a rare case):
+  **dropped**.
+- #45 sprintf: the narrow and wide printf cores together ~70 samples (0.15 %): **too small**.
+- #18 shift guards: the hot variable-shift readers are the LZX decoder (829D2E80 1,062 samples, 1.72 ms a frame on
+  JQ1 / JQ2) and a Bink video decoder (82B043D0 436, 82AFD370 375, ~130 more): the guard is a small part of them;
+  **park** (the decoders themselves are the bigger questions below).
+- #28 performance markers: none run per frame (the perf-capture system has 0 samples): **nothing**.
+- #50 3D panning: 822EB970 runs only when a parameter changes (~7 samples): **nothing**.
+- #61 open filters: the one-pole low-pass is never fully open (b0 0.558 at its top cutoff); the high-pass at 20 Hz is
+  near identity but not within a 16-bit step (it removes DC): **dropped**.
+- #22 reverb tails: 822E98B0 is an FFT-partitioned convolution that runs on silence too, but the whole path is ~73
+  samples (0.15 %): **too small**.
+- New questions (not in the table): the Bink decoder runs during races (~940 samples, ~2 % of all; a second subagent
+  is finding which movie and whether it is shown); the LZX decoder of streamed resources (M-29, an exact native) at
+  1.72 ms a frame on the frame chain's job workers.
