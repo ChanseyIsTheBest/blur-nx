@@ -364,3 +364,17 @@ scratchpad's nx_pc_wave2.sh), then the Switch near-exact pipeline.
   short (the race select) and its 240 s drive held ZR on the menu: that stream set aside (menu_only/); the second try
   (one more confirm, the race loading checked) in the race at 20 s; one stream of 10.2 MB, merged into 537 files, 0
   mismatch. The final build (switch-pgouse) building.
+
+### The driven guard race (guard_nx3, 2026-11-13 19:00-19:10, RT held)
+
+2,832 of 2,857 copies reached (the most yet: driving reaches the race code), 757 M calls compared; 51,246 register
+results that differed only in a NaN's sign taken as the same (#69); **28 differences**:
+- 25 are r12 (a few r11) at the return: the copy leaves the address its vector save computed (r1 + the offset) where
+  the original leaves the offset (sub_82729178: `li r12,-160 ; stvx128 v127,r1,r12`), the class of sub_8231C000
+  (2026-11-13 morning): a volatile register dead at the return under the ABI. 18 functions (sub_822279B8,
+  sub_8275EB78, sub_825634B8, sub_82729178, sub_82725498, sub_8268EC30, sub_8271C4E8, sub_826ED530, sub_82394708,
+  sub_822E8968, sub_826B2008, sub_826BFA48, sub_8266DCB8 and more); reached only in a driven race.
+- 3 took another path: sub_8227CA08 (the job pop: the copy reached its call out, the original not), sub_8230C2D0
+  (the audio graph: the other way round), sub_826C9900; the first two read state other threads change (job counters,
+  the mixer's buffers), so a race between the guard's two runs is likely but not shown. To look at: candidates for
+  `# out:` lines at the next copy refresh.
