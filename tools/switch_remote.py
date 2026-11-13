@@ -27,6 +27,8 @@ card or write memory. The Album is read-only; /atmosphere is not read. Every con
   album-get REMOTE [LOCAL]   one Album file downloaded (read only; nothing in the Album is written or deleted)
   crash-ls                   Atmosphere's crash reports, read only: /atmosphere/crash_reports (the user, 2026-11-13)
   crash-get NAME [LOCAL]     one crash report downloaded (read only; nothing there is written or deleted)
+  stall-dump                 an empty logs/rex/stall_dump: the running game's stall watchdog dumps every thread and
+                             the guest waits to logs/rex/banjo_profiler.log, then deletes it (2026-11-14)
 
 The host comes from --host, else the BLUR_SWITCH_HOST environment variable, else out/switch_host.txt's first line.
 In Git Bash set MSYS_NO_PATHCONV=1 for commands that pass card paths such as /switch/..., or it rewrites them.
@@ -358,6 +360,13 @@ def main():
             remote = crash_path(rest[0] if rest else '')
             local = rest[1] if len(rest) > 1 else rest[0]
             print(local, ftp_get_file(host, remote, local), 'bytes')
+    elif cmd == 'stall-dump':
+        # blur-nx (2026-11-14, app/src/profiler/stall_watch_switch.cpp): the watchdog looks for the file once a second and
+        # deletes it before it dumps, so only the upload is checked (a size check afterwards could race the delete).
+        import io
+        remote = sd_path('logs/rex/stall_dump')
+        ftp_retry(host, lambda f: f.storbinary('STOR ' + remote, io.BytesIO(b'')))
+        print('requested a stall dump:', remote, time.strftime('%H:%M:%S'))
     elif cmd in ('ls', 'get', 'put', 'rm'):
         # Refused before any connection is made: the card path is rest[1] for put, rest[0] for the others.
         sd_path(rest[1] if cmd == 'put' else (rest[0] if rest else ''))
