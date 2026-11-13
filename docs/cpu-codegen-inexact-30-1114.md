@@ -50,8 +50,8 @@ unmeasured. "Check" is how to find out how often the assumption is wrong before 
 
 ## Where to start
 
-- **Cheap and likely worth it:** #144 (estimates instead of double divide / sqrt), #153 (mfcr), #130 (lwsync as
-  release / acquire forms: the exact half first), #156, #131. Each is a builder change plus one codegen.
+- **Cheap and likely worth it:** #144 (estimates instead of double divide / sqrt), #153 (mfcr), #130 (corrected 02:05:
+  not exact even in part; see docs/cpu-codegen-recheck-360-precision-1114.md, #165 is the exact cheaper mapping), #156, #131. Each is a builder change plus one codegen.
 - **Biggest:** #134 + #159 (stack and globals the compiler can keep in registers), #138 (if the copies redo the 32-bit
   add per access), #149 (profile-pruned copies), #137 (auto-vectorized loops).
 - **Flags only (one build, an A/B):** #135, #136.
