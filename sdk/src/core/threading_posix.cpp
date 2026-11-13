@@ -125,6 +125,20 @@ REXCVAR_DEFINE_BOOL(switch_yield_backoff, true, "Kernel",
                     "Switch: a thread that yields more than 16 times in a row within 20 us each (a polling loop) sleeps "
                     "100 us per yield from then on, instead of spinning a core (ds3-nx). false: every yield is "
                     "svcSleepThread(0)");
+// blur-nx (2026-11-13, #34 and #26 of Blur's docs/cpu-near-exact-50-1113.md; timing only, the guest sees the same
+// results): the backoff's numbers as keys (Blur's console: a "100 us" sleep lasts ~1 ms there, 1,694 a second), and a
+// spin for the first yields of a quick run.
+REXCVAR_DEFINE_INT32(switch_yield_backoff_us, 100, "Kernel",
+                     "Switch: the sleep of switch_yield_backoff's polling loops, in microseconds (1-2000)");
+REXCVAR_DEFINE_INT32(switch_yield_backoff_after, 16, "Kernel",
+                     "Switch: the quick yields in a row (each within 20 us of the last) after which "
+                     "switch_yield_backoff sleeps (1-1000)");
+REXCVAR_DEFINE_INT32(switch_yield_spin, 0, "Kernel",
+                     "Switch (near-exact #26, timing only): the first switch_yield_spin_first yields of a quick run "
+                     "spin this many `yield` instructions instead of svcSleepThread(0) (no kernel call; the core is "
+                     "not given up). 0: off");
+REXCVAR_DEFINE_INT32(switch_yield_spin_first, 4, "Kernel",
+                     "Switch: how many yields of a quick run switch_yield_spin replaces (1-16)");
 #endif
 
 namespace rex::thread {
@@ -276,8 +290,18 @@ void MaybeYield() {
     thread_local uint32_t in_a_row = 0;
     const auto now = std::chrono::steady_clock::now();
     in_a_row = now - previous < std::chrono::microseconds(20) ? in_a_row + 1 : 0;
-    if (in_a_row > 16) {
-      const timespec rest = {0, 100000};
+    // blur-nx (2026-11-13, #26): the first yields of a quick run as a spin (no kernel call). The keys read at every
+    // call, as switch_yield_backoff (a yield before the toml is loaded must not decide them).
+    const int32_t spin = std::clamp(REXCVAR_GET(switch_yield_spin), 0, 100000);
+    if (spin && in_a_row >= 1 && in_a_row <= uint32_t(std::clamp(REXCVAR_GET(switch_yield_spin_first), 1, 16))) {
+      for (int32_t i = 0; i < spin; ++i) __asm__ __volatile__("yield");
+      previous = std::chrono::steady_clock::now();
+      __sync_synchronize();
+      return;
+    }
+    // blur-nx (2026-11-13, #34): the run length and the sleep as keys (16 and 100 us as before).
+    if (in_a_row > uint32_t(std::clamp(REXCVAR_GET(switch_yield_backoff_after), 1, 1000))) {
+      const timespec rest = {0, long(std::clamp(REXCVAR_GET(switch_yield_backoff_us), 1, 2000)) * 1000L};
       nanosleep(&rest, nullptr);
       previous = std::chrono::steady_clock::now() - std::chrono::microseconds(1);  // still polling at the next call
     } else {
