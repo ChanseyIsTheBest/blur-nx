@@ -132,7 +132,7 @@ bool SwitchAudioDriver::MixFrameInto(float* stereo_out, const StereoFold& fold, 
   }
   std::array<float, kChannelSamples * 2> folded;
   conversion::sequential_6_BE_to_interleaved_2_LE(folded.data(), frame, kChannelSamples, fold,
-                                                  gain);
+                                                  gain * StereoFrameGain(frame, kChannelSamples));
   for (size_t i = 0; i < folded.size(); ++i) {
     stereo_out[i] += folded[i];
   }
