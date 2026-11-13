@@ -378,3 +378,20 @@ results that differed only in a NaN's sign taken as the same (#69); **28 differe
   (the audio graph: the other way round), sub_826C9900; the first two read state other threads change (job counters,
   the mixer's buffers), so a race between the guard's two runs is likely but not shown. To look at: candidates for
   `# out:` lines at the next copy refresh.
+
+### The console comparison (2026-11-13 19:12-19:57; first-12-racing-lines fps, 240 s driven races)
+
+| Order | Build | toml | fps | GPU ms |
+|---|---|---|---|---|
+| 1 | c2b (shipping) | shipping | 26.07 | 27.66 |
+| 2 | nx (both rounds) | nx | 27.93 | 27.70 |
+| 3 | nx | nx | (stopped at the car select: no racing lines) | |
+| 4 | c2b | shipping | 26.81 | 27.57 |
+| 5 | nx | nx | 27.83 | 27.75 |
+| 6 | c2b | shipping | 26.29 | 27.66 |
+
+**nx 27.88 against c2b 26.39: +5.6 %.** The nx build is more than the two rounds: cycle 3's exact pieces (never
+built alone), the 207 copies of the audio A/B races, round 1, round 2, the LZX native (on: the user), its own
+training profile. The races' menu presses: where seven confirms end varies a boot to a boot (race 2 needed two by
+hand, race 3 stopped at the car select): one_race.sh now presses ten (the extra ones land on the loading screen).
+Next: the keys on nx (abK: nx, ahead2, wake, wake, ahead2, nx).
