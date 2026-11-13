@@ -194,7 +194,16 @@ X_STATUS XmaDecoder::Setup(system::KernelState* kernel_state) {
  */
 namespace {
 
-struct MeasurementXma {
+// blur-nx (2026-11-13, M-39 of Blur's docs/cpu-moonshots-50-1113.md): the counters by writer, each set on its own cache
+// line. They were one struct written by the XMA Decoder thread (per decoded context) and by the guest threads that write
+// the kick and lock registers (1,555 kicks a second): each add an exclusive load/store loop (the A57 has no LSE atomics)
+// on a line the other core had just written. Now:
+//   MeasurementXma:       the kick and lock side (any guest thread: atomic adds as before) and the report's clock;
+//   MeasurementXmaWorker: the worker's, written by the XMA Decoder thread alone (a load and a store, no exclusive loop),
+//                         never reset: the report takes the difference since its last; its maxima restart when the
+//                         report moves to the next period (report_epoch).
+// The log lines are the same.
+struct alignas(64) MeasurementXma {
   std::atomic<uint64_t> kicks{0};
   std::atomic<uint64_t> kick_contexts{0};
   std::atomic<uint64_t> kick_ns{0};
@@ -203,18 +212,51 @@ struct MeasurementXma {
   std::atomic<uint64_t> lock_contexts{0};
   std::atomic<uint64_t> lock_ns{0};
   std::atomic<uint64_t> lock_max_ns{0};
+  std::atomic<uint64_t> contexts_backup{0};  // the ones the kick thread had to finish (audio_xma_in_worker)
+};
+
+struct alignas(64) MeasurementXmaReport {
   std::atomic<int64_t> last_ms{0};
-  // Work split (audio_xma_in_worker).
+  std::atomic<uint32_t> report_epoch{0};  // the report's periods (the worker's maxima restart at a new one)
+  // The worker's totals at the last report (the reporter of a period alone writes them).
+  std::atomic<uint64_t> seen_contexts{0}, seen_work_ns{0}, seen_latency_ns{0}, seen_latency_n{0};
+};
+
+struct alignas(64) MeasurementXmaWorker {  // written by the XMA Decoder thread alone
   std::atomic<uint64_t> contexts_worker{0};  // decoded by the XMA Decoder thread
-  std::atomic<uint64_t> contexts_backup{0};    // the ones the kick thread had to finish
-  std::atomic<uint64_t> work_ns{0};            // time the worker spends decoding
+  std::atomic<uint64_t> work_ns{0};          // time the worker spends decoding
   std::atomic<uint64_t> work_max_ns{0};
-  std::atomic<uint64_t> latency_ns{0};   // from the kick until the context is decoded
+  std::atomic<uint64_t> latency_ns{0};  // from the kick until the context is decoded
   std::atomic<uint64_t> latency_max_ns{0};
   std::atomic<uint64_t> latency_n{0};
+  uint32_t epoch = 0;  // the report period its maxima are of (the worker's own)
 };
 
 MeasurementXma g_measurement_xma;
+MeasurementXmaReport g_measurement_xma_report;
+MeasurementXmaWorker g_measurement_xma_worker;
+
+// blur-nx (2026-11-13, M-39): the worker's updates (its thread alone): a plain load and store.
+void AddOwn(std::atomic<uint64_t>& counter, uint64_t value) {
+  counter.store(counter.load(std::memory_order_relaxed) + value, std::memory_order_relaxed);
+}
+
+void MaxOwn(std::atomic<uint64_t>& max, uint64_t value) {
+  if (value > max.load(std::memory_order_relaxed)) {
+    max.store(value, std::memory_order_relaxed);
+  }
+}
+
+// The worker's maxima restart when the report has moved to a new period.
+void WorkerPeriod() {
+  MeasurementXmaWorker& w = g_measurement_xma_worker;
+  const uint32_t epoch = g_measurement_xma_report.report_epoch.load(std::memory_order_relaxed);
+  if (epoch != w.epoch) {
+    w.epoch = epoch;
+    w.work_max_ns.store(0, std::memory_order_relaxed);
+    w.latency_max_ns.store(0, std::memory_order_relaxed);
+  }
+}
 
 /*
  * Contexts a kick has just enabled that the worker has not served yet: 320 bits in 10 words.
@@ -248,9 +290,8 @@ bool TakePending(uint32_t context_id) {
   return (g_pending[context_id / 32].fetch_and(~bit, std::memory_order_acquire) & bit) != 0;
 }
 
-int64_t NowMsXma() {
-  using namespace std::chrono;
-  return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+int64_t NowMsXma() {  // blur-nx (2026-11-13, M-39): from NowNs (the system tick on the Switch; read at every kick and lock)
+  return NowNs() / 1000000;
 }
 
 uint64_t FromNs(int64_t before) {  // blur-nx (2026-11-13, M-37): from NowNs()
@@ -265,13 +306,13 @@ void MaxXma(std::atomic<uint64_t>& max, uint64_t value) {
 
 void ReportXma() {
   const int64_t now = NowMsXma();
-  int64_t last = g_measurement_xma.last_ms.load(std::memory_order_relaxed);
+  int64_t last = g_measurement_xma_report.last_ms.load(std::memory_order_relaxed);
   if (last == 0) {
-    g_measurement_xma.last_ms.compare_exchange_strong(last, now, std::memory_order_relaxed);
+    g_measurement_xma_report.last_ms.compare_exchange_strong(last, now, std::memory_order_relaxed);
     return;
   }
   if (now - last < 10000 ||
-      !g_measurement_xma.last_ms.compare_exchange_strong(last, now, std::memory_order_relaxed)) {
+      !g_measurement_xma_report.last_ms.compare_exchange_strong(last, now, std::memory_order_acq_rel)) {
     return;
   }
   const uint64_t kicks = g_measurement_xma.kicks.exchange(0, std::memory_order_relaxed);
@@ -282,13 +323,21 @@ void ReportXma() {
   const uint64_t lock_contexts = g_measurement_xma.lock_contexts.exchange(0, std::memory_order_relaxed);
   const uint64_t lock_ns = g_measurement_xma.lock_ns.exchange(0, std::memory_order_relaxed);
   const uint64_t lock_max = g_measurement_xma.lock_max_ns.exchange(0, std::memory_order_relaxed);
-  const uint64_t of_the_worker = g_measurement_xma.contexts_worker.exchange(0, std::memory_order_relaxed);
   const uint64_t of_the_backup = g_measurement_xma.contexts_backup.exchange(0, std::memory_order_relaxed);
-  const uint64_t work_ns = g_measurement_xma.work_ns.exchange(0, std::memory_order_relaxed);
-  const uint64_t work_max = g_measurement_xma.work_max_ns.exchange(0, std::memory_order_relaxed);
-  const uint64_t latency_ns = g_measurement_xma.latency_ns.exchange(0, std::memory_order_relaxed);
-  const uint64_t latency_max = g_measurement_xma.latency_max_ns.exchange(0, std::memory_order_relaxed);
-  const uint64_t latency_n = g_measurement_xma.latency_n.exchange(0, std::memory_order_relaxed);
+  // blur-nx (2026-11-13, M-39): the worker's since the last report (its totals are never reset), then a new period.
+  MeasurementXmaWorker& w = g_measurement_xma_worker;
+  MeasurementXmaReport& r = g_measurement_xma_report;
+  const auto since = [](const std::atomic<uint64_t>& total, std::atomic<uint64_t>& seen) {
+    const uint64_t now_total = total.load(std::memory_order_relaxed);
+    return now_total - seen.exchange(now_total, std::memory_order_relaxed);
+  };
+  const uint64_t of_the_worker = since(w.contexts_worker, r.seen_contexts);
+  const uint64_t work_ns = since(w.work_ns, r.seen_work_ns);
+  const uint64_t latency_ns = since(w.latency_ns, r.seen_latency_ns);
+  const uint64_t latency_n = since(w.latency_n, r.seen_latency_n);
+  const uint64_t work_max = w.work_max_ns.load(std::memory_order_relaxed);
+  const uint64_t latency_max = w.latency_max_ns.load(std::memory_order_relaxed);
+  r.report_epoch.fetch_add(1, std::memory_order_relaxed);
   REXLOG_INFO("[xma] on the calling thread, {:.1f} s: kicks {} with {} contexts decoded, {:.1f} ms (max "
               "{:.2f} ms); locks {} with {} contexts, {:.1f} ms waiting (max {:.2f} ms)",
               double(now - last) / 1000.0, kicks, kick_contexts, double(kick_ns) / 1e6, double(kick_max) / 1e6,
@@ -327,9 +376,10 @@ void XmaDecoder::WorkerThreadMain() {
         if (worked) {
           context.SignalWorkDone();
           PROFILE_XMA_FRAME_DECODED();
-          g_measurement_xma.contexts_worker.fetch_add(1, std::memory_order_relaxed);
-          g_measurement_xma.work_ns.fetch_add(ns, std::memory_order_relaxed);
-          MaxXma(g_measurement_xma.work_max_ns, ns);
+          WorkerPeriod();  // blur-nx (2026-11-13, M-39): the worker's own counters
+          AddOwn(g_measurement_xma_worker.contexts_worker, 1);
+          AddOwn(g_measurement_xma_worker.work_ns, ns);
+          MaxOwn(g_measurement_xma_worker.work_max_ns, ns);
         }
         did_work = did_work || worked;
       }
@@ -339,9 +389,10 @@ void XmaDecoder::WorkerThreadMain() {
       const int64_t from = g_pending_from_ns.load(std::memory_order_acquire);
       if (from) {
         const uint64_t latency = uint64_t(NowNs() - from);
-        g_measurement_xma.latency_ns.fetch_add(latency, std::memory_order_relaxed);
-        g_measurement_xma.latency_n.fetch_add(1, std::memory_order_relaxed);
-        MaxXma(g_measurement_xma.latency_max_ns, latency);
+        WorkerPeriod();  // blur-nx (2026-11-13, M-39)
+        AddOwn(g_measurement_xma_worker.latency_ns, latency);
+        AddOwn(g_measurement_xma_worker.latency_n, 1);
+        MaxOwn(g_measurement_xma_worker.latency_max_ns, latency);
       }
     }
     // Full sweep as a safety net: it is how it used to work, and it serves any context left enabled
