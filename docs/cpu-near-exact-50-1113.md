@@ -113,7 +113,38 @@ cycle 3).
 
 ## Census results
 
-(filled in as they come)
+From the static scans of cycle 3's generated code and cycle 3's PC check race (check_c3, 14:00, census on):
+
+- **#3 dropped:** the guest writes round-toward-zero: FPSCR rounding writes 23,629 to nearest and 11,776 toward zero
+  (cumulative, boot to a race). Forcing nearest would change real results. Kept the exact part: a write that leaves
+  the host word as it is skips the `msr fpcr` (compared with the live register, `mrs`, not the cached copy: a
+  thread-context restore sets that without writing the host's).
+- **#4 nothing to do:** the port never models the FPSCR's status flags; `mffs` (19 sites) returns the rounding mode
+  only.
+- **#5:** no overflow-recording form (addo, subfo, mullwo, divwo, nego...) anywhere in the code, one `mtxer` (a
+  context restore that also restores CR). The census counts compares that copy SO = 1.
+- **#9:** with the assumption, 49,594 of 49,746 functions count as preserving r1 (48,260 proven), 54 fail in their own
+  body (13 setjmp / longjmp, ~25 exits that disagree, the rest untracked r1 writes).
+- **#11 already done:** store_cards.py has always left stack stores plain (186,852 in cycle 3).
+- **#15 mostly done:** Renut already skips texture and physical-range hashes when the cards are clean
+  (`CheckedHash`, `ExtentClean`; banjo_renut_store_cards_verify checks it). The census run's card counts show what
+  is still hashed.
+- **#19:** 563 `twllei rX,0` (divide-by-zero traps before divisions: `if (r == 0) ppc_trap(...)`, one compare and
+  branch each), 18 `twi`, 9 `tdlgei`.
+- **#27 probably nothing:** DbgPrint is not among the 16 most called exports (NtYieldExecution, NtSetEvent, waits, TLS,
+  KeQueryPerformanceFrequency lead).
+- **#29 nothing measurable:** the console counts 0 guest clock reads a second in races (UpdateGuestClock); 17 `mftb`
+  sites; KeQueryPerformanceFrequency (13,000 a second on the PC) returns a global.
+- **#34:** NtYieldExecution 127,000 a second on the PC in the race (4,309 on the console, plus 1,694 short sleeps a
+  second that last 1.02 ms each: switch_yield_backoff's "100 us" sleeps). The job workers' loop (sub_8227CCE8) waits
+  on its event when its queue counter says empty; the yields come from scans that find work pending but none it can
+  pop (sub_8227CC58 scans up to 10 queues, then SwitchToThread). The console census (M-44's per-thread yields and
+  sleeps, the Switch profiler) decides between a shorter backoff and a wake on the queue.
+- **#40 probably nothing:** no stack-cookie check among the most called functions (the top ones are memcpy, the
+  register save / restore helpers and small getters): Blur seems built without /GS.
+- **#42:** 1,924 vmaxfp / vminfp sites (all rewritten to the helpers); the vector compares need no fix-ups (Arm's
+  fcmgt and SSE's cmpgt agree for every input).
+- **#48:** Renut already counts "draws that write nothing at all" (DiagCountsOn); the census run reads it.
 
 ## Log
 
