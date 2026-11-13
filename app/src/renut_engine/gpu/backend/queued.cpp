@@ -133,6 +133,7 @@ struct DrawCapture {
   u32 dest_texture_va = 0, dest_level = 0, dest_slice = 0;
   i32 dest_x = 0, dest_y = 0;
   d3d::TextureFetchConstant dest_format{};
+  u32 resolve_targets[kResolveTargetWords] = {};  // blur-nx (2026-11-13, M-35): a resolve's device words (draw.h)
   u32 held = 0;  // bangaio-nx (2026-10-29): the bytes it holds, set when it goes back to the pool (CapturePool::Give)
   // blur-nx (2026-11-10, port 76; its key 215: blur_renut_stack_surface_headers): the headers of the stack surfaces bound
   // as targets when this draw, clear or resolve was captured (render/surfaces.h); count 0 nearly always.
@@ -1022,7 +1023,9 @@ void QueueResolve(u32 device_va, u32 flags, const ClearRect *source_rect, u32 de
   // The destination header as it is now: the game often builds it on the
   // stack (as for recorded resolves).
   DrawCapture *args = g_capture_pool.Take();  // banjo-nx (2026-10-19): pooled, see DrawCapture
-  args->state.assign(device, device + d3d::kDeviceSnapshotSize);
+  // blur-nx (2026-11-13, M-35): the eight target words the resolve reads, not the whole device (12.9 KB a resolve on the
+  // Game Master); args->state is left as the pool had it (not read).
+  ReadResolveTargets(device, args->resolve_targets);
   args->has_rect = source_rect != nullptr;
   args->rect = source_rect ? *source_rect : ClearRect{};
   args->has_color = clear_color != nullptr;
@@ -1043,10 +1046,10 @@ void QueueResolve(u32 device_va, u32 flags, const ClearRect *source_rect, u32 de
   CaptureStackHeaders(device, args->stack_headers);  // blur-nx (2026-11-10, port 76; its key 215)
   render_thread::Queue([args] {
     SetReplayStackHeaders(args->stack_headers.count ? &args->stack_headers : nullptr);
-    ResolveStateLocked(args->state.data(), args->flags, args->has_rect ? &args->rect : nullptr,
-                       args->dest_texture_va, args->has_dest_format ? &args->dest_format : nullptr,
-                       args->dest_x, args->dest_y, args->dest_level, args->dest_slice,
-                       args->has_color ? args->color : nullptr, args->depth, args->stencil);
+    ResolveTargetsLocked(args->resolve_targets, args->flags, args->has_rect ? &args->rect : nullptr,
+                         args->dest_texture_va, args->has_dest_format ? &args->dest_format : nullptr,
+                         args->dest_x, args->dest_y, args->dest_level, args->dest_slice,
+                         args->has_color ? args->color : nullptr, args->depth, args->stencil);
     SetReplayStackHeaders(nullptr);
     g_capture_pool.Give(args, true);
   });

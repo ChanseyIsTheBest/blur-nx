@@ -15277,10 +15277,31 @@ bool TileResolveStagedLocked(HostSurface *surface, HostTexture *dest, const plum
   return true;
 }
 
+// blur-nx (2026-11-13, M-35): draw.h kResolveTargetWords.
+static_assert(d3d::kDeviceOffsetDepthStencil == d3d::kDeviceOffsetRenderTargets + 16);
+static_assert(d3d::kDeviceOffsetRenderTargets + kResolveTargetWords * 4 <= d3d::kDeviceSnapshotSize);
+
+void ReadResolveTargets(const u8 *device_state, u32 targets[kResolveTargetWords]) {
+  const GuestDevice device(device_state);
+  for (u32 i = 0; i < kResolveTargetWords; ++i)
+    targets[i] = device.U32(d3d::kDeviceOffsetRenderTargets + i * 4);
+}
+
 void ResolveStateLocked(const u8 *device_state, u32 flags, const ClearRect *source_rect,
                         u32 dest_texture_va, const d3d::TextureFetchConstant *dest_format,
                         i32 dest_x, i32 dest_y, u32 dest_level, u32 dest_slice,
                         const float clear_color[4], float clear_depth, u32 clear_stencil) {
+  u32 targets[kResolveTargetWords];
+  if (device_state)
+    ReadResolveTargets(device_state, targets);
+  ResolveTargetsLocked(device_state ? targets : nullptr, flags, source_rect, dest_texture_va, dest_format, dest_x,
+                       dest_y, dest_level, dest_slice, clear_color, clear_depth, clear_stencil);
+}
+
+void ResolveTargetsLocked(const u32 *targets, u32 flags, const ClearRect *source_rect,
+                          u32 dest_texture_va, const d3d::TextureFetchConstant *dest_format,
+                          i32 dest_x, i32 dest_y, u32 dest_level, u32 dest_slice,
+                          const float clear_color[4], float clear_depth, u32 clear_stencil) {
   auto &s = State();
   static const uint32_t kProfileLabel = gpu_profile::Label("resolves");
   gpu_profile::Mark(s, kProfileLabel);
@@ -15289,13 +15310,12 @@ void ResolveStateLocked(const u8 *device_state, u32 flags, const ClearRect *sour
   if (!Video::EnsureCommandListLocked())
     return;
   SyncBound(s);
-  const GuestDevice device(device_state);
-  if (!device.valid())
+  if (!targets)  // blur-nx (2026-11-13, M-35): was a null device state
     return;
 
   const u32 source = flags & 7;
-  const u32 source_va = source == 4 ? device.U32(d3d::kDeviceOffsetDepthStencil)
-                                    : device.U32(d3d::kDeviceOffsetRenderTargets + source * 4);
+  // blur-nx (2026-11-13, M-35): word 4 is the depth-stencil surface (kDeviceOffsetDepthStencil), as before.
+  const u32 source_va = targets[source];
   HostSurface *surface = GetHostSurfaceLocked(source_va);
   // sasrt-nx (2026-11-09, sasrt_gpu_diag_profile_vs; the fourth round): with the shaders' breakdown, each resolve's own
   // label: its source's size and format, colour or depth, and whether it clears after.
@@ -15726,8 +15746,7 @@ void ResolveStateLocked(const u8 *device_state, u32 flags, const ClearRect *sour
     // RePowered (MaxDeadBear, BiRabittoh; MIT).
     const u32 other_flags = surface->depth ? clear_flags & 1u : clear_flags & 0x30u;
     if (banjo::renut_gpu::ResolveClearsBothOn() && other_flags) {
-      HostSurface *other = GetHostSurfaceLocked(
-          device.U32(surface->depth ? d3d::kDeviceOffsetRenderTargets : d3d::kDeviceOffsetDepthStencil));
+      HostSurface *other = GetHostSurfaceLocked(targets[surface->depth ? 0 : 4]);  // M-35: render target 0 or depth
       if (other && other != surface) {
         Targets o;
         if (other->depth)
