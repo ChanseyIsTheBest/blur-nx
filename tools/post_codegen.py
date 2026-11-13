@@ -180,6 +180,10 @@ def main():
     # plain ones: 10,239 sites were left in the integer form). After ro_constants_cfg.py and dead_ctx_defs.py, before
     # the copies (so they take the same forms) and store_cards.py (which marks the new stores' cards).
     run(tool('float_loads.py'), '--gen', gen, '--any-mode')
+    # blur-nx (2026-11-13, docs/cpu-near-exact-50-1113.md, the user's choice of near-exact ideas): the forms a near-exact
+    # switch changes as helpers whose default is the generator's expression (#42: vmaxfp / vminfp as rex::ppc::VMaxFp /
+    # VMinFp, sdk/include/rex/ppc/diet_ops.h). Before the copies, so they take the same forms.
+    run(tool('near_exact.py'), '--gen', gen)
     # blur-nx (2026-11-13, the user: "force the game to stereo"): Blur's audio graph mixes two channels with the key
     # audio_stereo_mix (app/src/blur_stereo.cpp; off: the original statements' paths). Before the copies, so they take
     # the same statements (the guard compares them).
