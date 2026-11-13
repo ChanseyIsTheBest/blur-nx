@@ -22,6 +22,9 @@
 
 #include <uam_api.h>
 
+// blur-nx (2026-11-13): libnx's nvservices transfer memory size (weak, 8 MB by default), logged at device creation.
+extern "C" u32 __nx_nv_transfermem_size;
+
 namespace plume {
     // ---- helpers
 
@@ -56,6 +59,66 @@ namespace plume {
     }
 
     static constexpr uint32_t alignUp(uint32_t v, uint32_t a) { return (v + a - 1) / a * a; }
+
+    // blur-nx (2026-11-13, the console crash of 21:16: deko3d aborted the process when dkMemBlockCreate failed to map a
+    // GPU-region block during a race load, with 1.8 GB of the heap free): the blocks live and their bytes, and before
+    // every dkMemBlockCreate a breadcrumb in this thread's TLS (bytes 0x140-0x1A3: libnx leaves 0x100-0x1DF unused; the
+    // IPC buffer below is what deko3d's own calls overwrite), which Atmosphère's crash report dumps with the thread: the
+    // request that failed, the blocks live then, the GPU region's size and the process's system resource (the kernel
+    // memory its mappings use).
+    static std::atomic<uint32_t> g_blocksLive{0}, g_blocksMade{0}, g_blockCrumbSeq{0};
+    static std::atomic<uint64_t> g_blocksLiveBytes{0};
+    static std::atomic<uint64_t> g_regionBytesNow{0};  // set where the region changes (makeBlock)
+    struct BlockCrumb {
+        char magic[8];  // "DKBLOCK1"
+        uint32_t size, flags, path;  // path: 0 the heap, 1 the GPU region, 2 the guarded storage
+        uint32_t live, liveMb, regionMb;
+        uint32_t sysUsedKb, sysTotalKb, seq;
+        char what[24];
+    };
+    static_assert(sizeof(BlockCrumb) <= 0x1E0 - 0x140, "the crumb fits libnx's unused TLS bytes");
+    static void systemResource(uint64_t &used, uint64_t &total) {
+        used = total = 0;
+        svcGetInfo(&total, InfoType_SystemResourceSizeTotal, CUR_PROCESS_HANDLE, 0);
+        svcGetInfo(&used, InfoType_SystemResourceSizeUsed, CUR_PROCESS_HANDLE, 0);
+    }
+    static void leaveBlockCrumb(uint32_t size, uint32_t flags, uint32_t path, const char *what) {
+        BlockCrumb c{};
+        std::memcpy(c.magic, "DKBLOCK1", 8);
+        c.size = size;
+        c.flags = flags;
+        c.path = path;
+        c.live = g_blocksLive.load(std::memory_order_relaxed);
+        c.liveMb = uint32_t(g_blocksLiveBytes.load(std::memory_order_relaxed) >> 20);
+        c.regionMb = uint32_t(g_regionBytesNow.load(std::memory_order_relaxed) >> 20);
+        uint64_t used = 0, total = 0;
+        systemResource(used, total);
+        c.sysUsedKb = uint32_t(used >> 10);
+        c.sysTotalKb = uint32_t(total >> 10);
+        c.seq = g_blockCrumbSeq.fetch_add(1, std::memory_order_relaxed);
+        std::strncpy(c.what, what ? what : "", sizeof(c.what) - 1);
+        auto *tls = static_cast<volatile uint8_t *>(armGetTls()) + 0x140;
+        const auto *from = reinterpret_cast<const uint8_t *>(&c);
+        for (size_t i = 0; i < sizeof(c); ++i)
+            tls[i] = from[i];
+    }
+    // A block made: counted, and every 32nd (and the first 8) logged with the live figures.
+    static void blockMade(DkMemBlock block, const char *what) {
+        if (!block)
+            return;
+        const uint64_t bytes = dkMemBlockGetSize(block);
+        const uint32_t live = g_blocksLive.fetch_add(1, std::memory_order_relaxed) + 1;
+        const uint64_t liveBytes = g_blocksLiveBytes.fetch_add(bytes, std::memory_order_relaxed) + bytes;
+        const uint32_t made = g_blocksMade.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (made <= 8 || (made & 31) == 0) {
+            uint64_t used = 0, total = 0;
+            systemResource(used, total);
+            logf("blocks: %u made, %u live (%" PRIu64 " MB; this one a %s of %" PRIu64 " KiB); GPU region %" PRIu64
+                 " MB; system resource %" PRIu64 " of %" PRIu64 " KiB used",
+                 made, live, liveBytes >> 20, what ? what : "?", bytes >> 10,
+                 g_regionBytesNow.load(std::memory_order_relaxed) >> 20, used >> 10, total >> 10);
+        }
+    }
 
     // sasrt-nx (2026-11-09; port 58): the device for Deko3DReleaseEmptyImageChunks (one device), and
     // Deko3DSetDedicatedTargets.
@@ -1062,6 +1125,12 @@ namespace plume {
             uint64_t heapFree = 0, processFree = 0;
             memoryFigures(heapFree, processFree);
             logf("device: creating (heap %" PRIu64 " MB free, process %" PRIu64 " MB unused)", heapFree >> 20, processFree >> 20);
+            {   // blur-nx (2026-11-13): nvservices' transfer memory (libnx __nx_nv_transfermem_size) and the system resource
+                uint64_t used = 0, total = 0;
+                systemResource(used, total);
+                logf("device: nvservices transfer memory %u KiB; system resource %" PRIu64 " of %" PRIu64 " KiB used",
+                     __nx_nv_transfermem_size >> 10, used >> 10, total >> 10);
+            }
         }
         DkDeviceMaker dm;
         dkDeviceMakerDefaults(&dm);
@@ -1209,7 +1278,9 @@ namespace plume {
             memset(storage + m.size, GuardByte, GuardBytes);
             m.storage = storage;
         }
+        leaveBlockCrumb(m.size, m.flags, 2, what);  // blur-nx (2026-11-13)
         DkMemBlock block = dkMemBlockCreate(&m);
+        blockMade(block, what);
         if (storage) {
             std::lock_guard<std::mutex> lock(guardMutex);
             guarded.push_back({block, storage, m.size, what});
@@ -1259,7 +1330,10 @@ namespace plume {
                 memset(storage, 0, m.size);
                 armDCacheFlush(storage, m.size);
                 m.storage = storage;
+                g_regionBytesNow.store(regionSize, std::memory_order_relaxed);  // blur-nx (2026-11-13)
+                leaveBlockCrumb(m.size, m.flags, 1, what);
                 DkMemBlock block = dkMemBlockCreate(&m);
+                blockMade(block, what);
                 std::lock_guard<std::mutex> lock(g_regionMutex);
                 if (block)
                     g_regionBlocks.emplace(block, std::make_pair(at, span));
@@ -1317,7 +1391,10 @@ namespace plume {
             failedTick.store(0, std::memory_order_relaxed);
         }
         free(probe);
-        return dkMemBlockCreate(&m);
+        leaveBlockCrumb(m.size, m.flags, 0, what);  // blur-nx (2026-11-13)
+        DkMemBlock block = dkMemBlockCreate(&m);
+        blockMade(block, what);
+        return block;
 #endif
     }
 
@@ -1334,7 +1411,10 @@ namespace plume {
                 g_regionBlocks.erase(it);
             }
         }
+        const uint64_t bytes = dkMemBlockGetSize(block);  // blur-nx (2026-11-13): the live figures
         dkMemBlockDestroy(block);
+        g_blocksLive.fetch_sub(1, std::memory_order_relaxed);
+        g_blocksLiveBytes.fetch_sub(bytes, std::memory_order_relaxed);
         if (range.second) {
             std::lock_guard<std::mutex> lock(g_regionMutex);
             g_region.release(range.first, range.second, kRegionGiveBackAt, kRegionKeep, kRegionStep,

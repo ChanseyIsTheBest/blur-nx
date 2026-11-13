@@ -51,6 +51,20 @@ extern "C" char *fake_heap_end;  // libnx: the end of the malloc heap
 #include <rex/cvar.h>
 
 // banjo-nx (2026-10-26): recording from the setters' marks (d3d_native.h).
+// blur-nx (2026-11-13, NewOp's scan: the nx race profile had NoteSetWords at about a third of NewOp, ~1.2 ms a frame on
+// JQ Workers 0 / 1, the frame chain): an op scans for words set since Begin only the 128-byte blocks holding a chunk
+// that changed since the device's previous op (the op's 'changed', which the replay relies on as well). Exact:
+// set_words only accumulates, and a chunk that did not change still differs from the Begin image where it did at the
+// previous op, already noted; a buffer's first op scans everything.
+REXCVAR_DEFINE_BOOL(banjo_renut_set_words_changed, true, "Banjo/Enhancements",
+                    "Renut's command buffer recording: an op notes the words set since Begin (halo3-nx's inherit) from "
+                    "the chunks that changed since its device's previous op only (exact). false: every op scans the "
+                    "fetch constants and the tail")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(banjo_renut_set_words_verify, false, "Banjo/Debug",
+                    "banjo_renut_set_words_changed's check: every op also scans everything and counts the words the "
+                    "changed chunks missed (logged; the full scan's result kept)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(banjo_renut_tags, true, "Banjo/Enhancements",
                     "Renut's renderer (2026-10-26): a recorded op compares only the device chunks the native D3D "
                     "setters marked as written since the device's previous op, not all 53 (the same op, the same "
@@ -1169,6 +1183,29 @@ bool SetWordsSelfTest() {
 }
 #endif
 
+// blur-nx (2026-11-13): one 128-byte block's words that differ from the Begin image (NoteSetWords' scan, any platform).
+inline void NoteSetBlock(HostCommandBuffer &buffer, const DeviceRecording &set, const u8 *device, u32 at) {
+  if (at + 128 > d3d::kDeviceSnapshotSize) {  // the snapshot's short last block, word by word
+    for (; at < d3d::kDeviceSnapshotSize; at += 4) {
+      if (std::memcmp(device + at, set.begin_image + at, 4) != 0)
+        buffer.set_words[at / 128] |= 1u << ((at / 4) & 31);
+    }
+    return;
+  }
+#if defined(__aarch64__) && !defined(BLUR_SET_WORDS_SCALAR)
+  static const bool neon_ok = SetWordsSelfTest();
+  if (neon_ok) {
+    if (!Equal128(device + at, set.begin_image + at))
+      buffer.set_words[at / 128] |= DifferingWordsOf128(device + at, set.begin_image + at);
+    return;
+  }
+#endif
+  for (u32 w = 0; w < 128; w += 4) {
+    if (std::memcmp(device + at + w, set.begin_image + at + w, 4) != 0)
+      buffer.set_words[at / 128] |= 1u << (((at + w) / 4) & 31);
+  }
+}
+
 inline void NoteSetWords(HostCommandBuffer &buffer, const DeviceRecording &set, const u8 *device) {
   const auto scan_words = [&](u32 from, u32 to) {
     for (u32 at = from; at < to; at += 4) {
@@ -1197,6 +1234,49 @@ inline void NoteSetWords(HostCommandBuffer &buffer, const DeviceRecording &set, 
 #endif
   scan(kFetchBegin, kVertexShaderF);
   scan(kInheritTailBegin, d3d::kDeviceSnapshotSize);
+}
+
+// blur-nx (2026-11-13, banjo_renut_set_words_changed): NoteSetWords for the 128-byte blocks holding a chunk of 'chunks'
+// (the op's changed chunks; every chunk: the whole scan). The two ranges NoteSetWords scans are the plain chunks'.
+static_assert(kInheritTailBegin == kTailBegin && kFetchBegin % 128 == 0 && kTailBegin % 128 == 0,
+              "NoteSetWordsOf: NoteSetWords' ranges are the plain chunks, in 128-byte blocks");
+std::atomic<uint64_t> g_set_words_checked{0}, g_set_words_missed{0};
+void NoteSetWordsOf(HostCommandBuffer &buffer, const DeviceRecording &set, const u8 *device, uint64_t chunks) {
+  static const bool on = REXCVAR_GET(banjo_renut_set_words_changed);
+  static const bool verify = REXCVAR_GET(banjo_renut_set_words_verify);
+  chunks &= kAllChunks;
+  if (!on || chunks == kAllChunks) {
+    NoteSetWords(buffer, set, device);
+    return;
+  }
+  constexpr size_t kWords = sizeof(buffer.set_words) / sizeof(buffer.set_words[0]);
+  u32 before[kWords];
+  if (verify)
+    std::memcpy(before, buffer.set_words, sizeof(before));
+  uint64_t blocks[2] = {};
+  for (uint64_t c = chunks; c; c &= c - 1) {
+    const u32 b = ChunkOffset(u32(std::countr_zero(c))) / 128;
+    blocks[b >> 6] |= uint64_t(1) << (b & 63);
+  }
+  for (u32 h = 0; h < 2; ++h) {
+    for (uint64_t m = blocks[h]; m; m &= m - 1)
+      NoteSetBlock(buffer, set, device, (h * 64 + u32(std::countr_zero(m))) * 128);
+  }
+  if (verify) {
+    u32 mine[kWords];
+    std::memcpy(mine, buffer.set_words, sizeof(mine));
+    std::memcpy(buffer.set_words, before, sizeof(before));
+    NoteSetWords(buffer, set, device);  // the whole scan's result is kept
+    uint64_t missed = 0;
+    for (size_t i = 0; i < kWords; ++i)
+      missed += uint64_t(std::popcount(buffer.set_words[i] & ~mine[i]));
+    g_set_words_checked.fetch_add(1, std::memory_order_relaxed);
+    if (missed) {
+      const uint64_t n = g_set_words_missed.fetch_add(missed, std::memory_order_relaxed);
+      if (n < 8)
+        RGPU_ERROR("banjo_renut_set_words_changed: {} words set since Begin outside the op's changed chunks", missed);
+    }
+  }
 }
 
 void BuildInheritRuns(HostCommandBuffer &buffer) {
@@ -2046,7 +2126,7 @@ Op *NewOp(u32 device_va, OpKind kind, HostCommandBuffer **out_buffer) {
   // The first op of a buffer follows ops of other buffers: nothing known.
   const bool first = buffer.ops.size() == 1;
   const auto *bytes = reinterpret_cast<const u8 *>(device);
-  NoteSetWords(buffer, set, bytes);  // halo3-nx (2026-11-03)
+  // halo3-nx (2026-11-03): NoteSetWords. blur-nx (2026-11-13): after 'changed' below (NoteSetWordsOf).
   {
     StackHeaderSet headers;  // blur-nx (2026-11-10, port 76; its key 215: blur_renut_stack_surface_headers)
     CaptureStackHeaders(bytes, headers);
@@ -2100,6 +2180,7 @@ Op *NewOp(u32 device_va, OpKind kind, HostCommandBuffer **out_buffer) {
   } else {
     changed = fast_chunks ? ChangedChunks(bytes, set.shadow) : (ChangedChunksReference(bytes, set.shadow), kAllChunks);
   }
+  NoteSetWordsOf(buffer, set, bytes, first ? kAllChunks : changed);  // blur-nx (2026-11-13): the changed chunks' blocks
   TagCounts &counts = set.counts;
   static const bool census = REXCVAR_GET(banjo_renut_diag_fast_census);
   if (census && from_marks) {
