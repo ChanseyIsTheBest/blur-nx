@@ -89,6 +89,26 @@ option(BLUR_FPCR_ONE_MODE "All guest float code in the flush mode (no FPCR switc
 if(BLUR_FPCR_ONE_MODE)
     add_compile_definitions(REX_FPCR_ONE_MODE)
 endif()
+# blur-nx (2026-11-13, docs/cpu-near-exact-50-1113.md; the user chose the near-exact ideas to do): the compile-time
+# near-exact switches (rex/ppc/diet_ops.h, context.h, tools/near_exact.py, tools/store_cards.py), each the code before
+# when off. NOT bit-exact in rare cases (the doc's census counts each one): #1 REX_NX_SNAN_PASS, #2 REX_NX_FCTI_NO_NAN,
+# #17 REX_NX_DIV_NO_CHECK, #41 REX_NX_FCMP_NO_UN, #42 REX_NX_VMINMAX_FAST, #5 REX_NX_XER_SO_ZERO, #19 REX_NX_NO_TRAPS
+# (a trap only logs), and the generated tree's card marks by the copies' rule (REX_CARD_VIEWS_ONLY, exact). Like
+# CG-13 every generated file, the copies and the SDK change with them (retrain the PGO profile). #8 is
+# SASRT_HOT_LR_ELIDE (below), the run-time ones are keys (switch_yield_*, audio_nx_*, banjo_xma_frame_cache_hash_only).
+option(BLUR_NEAR_EXACT "Blur's near-exact compile-time switches (docs/cpu-near-exact-50-1113.md; not bit-exact in rare cases)" OFF)
+set(BLUR_NX_ONLY "" CACHE STRING "With BLUR_NEAR_EXACT: only these switches (a ;-list, for a bisect; empty: all)")
+set(BLUR_NX_SKIP "" CACHE STRING "With BLUR_NEAR_EXACT: every switch but these (a ;-list)")
+set(_blur_nx_switches REX_NX_SNAN_PASS REX_NX_FCTI_NO_NAN REX_NX_DIV_NO_CHECK REX_NX_FCMP_NO_UN REX_NX_VMINMAX_FAST
+    REX_NX_XER_SO_ZERO REX_NX_NO_TRAPS REX_CARD_VIEWS_ONLY)
+if(BLUR_NEAR_EXACT)
+    foreach(_s ${_blur_nx_switches})
+        if((BLUR_NX_ONLY STREQUAL "" OR _s IN_LIST BLUR_NX_ONLY) AND NOT _s IN_LIST BLUR_NX_SKIP)
+            add_compile_definitions(${_s})
+            message(STATUS "blur-nx near-exact: ${_s}")
+        endif()
+    endforeach()
+endif()
 include(generated/rexglue.cmake)
 
 # banjo-nx (from sa2-nx): the optimised codegen. The build re-runs the generator by itself whenever an input in
