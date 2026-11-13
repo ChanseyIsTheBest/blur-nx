@@ -9,6 +9,9 @@ otherwise the constant kernel (sub_822EA500: a multiply-add). Two compares get a
        the target gain instead of a ramp to it: each sample differs by at most eps x |sample|);
   #23  8230AFD0 `fcmpu cr6,f0,f30`: |gain - 1| < audio_nx_unity_eps counts as 1 (the unity kernel: an add without the
        multiply; each sample differs by at most eps x |sample|).
+  #21  8230AFEC `fcmpu cr6,f0,f31`: |gain| < audio_nx_silent_eps counts as 0 (the entry is not mixed, as a zero gain
+       already is), and a ramp whose current and target gains are both under it counts as constant (then 0): each
+       skipped entry adds at most eps x |sample| to an output row.
   #49  the resampling kernels (822D7880 scalar, 822D9040 VMX mono, 822D79A8 VMX stereo; a subagent's reading of
        2026-11-13) step by count/256 (count: the source samples a 256-sample block consumes) and already copy the block
        (a memcpy) when the ratio is exactly 1.0. With audio_nx_resample_copy a block that consumes exactly 256 samples
@@ -36,14 +39,21 @@ import sys
 MARKER = '// rexglue ports: blur-nx near-exact mixer tolerances (tools/blur_mix_nx.py)'
 MACROS = MARKER + '''
 #ifndef REX_BLUR_NX_RAMP_SAME
-extern "C" float blur_nx_ramp_eps, blur_nx_unity_eps;  // app/src/blur_nx_mix.cpp: 0 = off (exactly as before)
+extern "C" float blur_nx_ramp_eps, blur_nx_unity_eps, blur_nx_silent_eps;  // app/src/blur_nx_mix.cpp: 0 = off
 // #24: a gain whose target differs from its current one by less than the tolerance mixes as the constant target.
 [[gnu::always_inline]] static inline bool rex_blur_nx_ramp_same(double cur, double tgt) {
   REX_NX_CENSUS_IF(cur != tgt, 19);
   REX_NX_CENSUS_IF(cur != tgt && __builtin_fabs(tgt - cur) < 1e-6, 20);
   REX_NX_CENSUS_IF(cur != tgt && __builtin_fabs(tgt - cur) < 1.0 / 65536.0, 24);
-  return cur != tgt && __builtin_fabs(tgt - cur) < double(blur_nx_ramp_eps);
+  REX_NX_CENSUS_IF(cur != tgt && __builtin_fabs(cur) < 1.0 / 65536.0 && __builtin_fabs(tgt) < 1.0 / 65536.0, 30);
+  return cur != tgt && (__builtin_fabs(tgt - cur) < double(blur_nx_ramp_eps) ||
+                        (__builtin_fabs(cur) < double(blur_nx_silent_eps) && __builtin_fabs(tgt) < double(blur_nx_silent_eps)));
 }
+// #21: a constant gain under the tolerance mixes as 0 (not at all).
+[[gnu::always_inline]] static inline bool rex_blur_nx_silent(double g) {
+  return g != 0.0 && __builtin_fabs(g) < double(blur_nx_silent_eps);
+}
+#define REX_BLUR_NX_SILENT(g) rex_blur_nx_silent((g))
 // #23: a constant gain within the tolerance of 1.0 mixes as 1.0 (the unity kernel).
 [[gnu::always_inline]] static inline bool rex_blur_nx_unity(double g, double one) {
   REX_NX_CENSUS_IF(g == one, 18);
@@ -73,6 +83,9 @@ PATCHES = [
     ('sub_8230AD50', 0x8230AFC8, 'fcmpu cr6,f13,f0',
      '\tcr6.compare(ctx.f13.f64, f0.f64);',
      '\tcr6.compare(REX_BLUR_NX_RAMP_SAME(ctx.f13.f64, f0.f64) ? f0.f64 : ctx.f13.f64, f0.f64);' + TAG),
+    ('sub_8230AD50', 0x8230AFEC, 'fcmpu cr6,f0,f31',
+     '\tcr6.compare(f0.f64, f31.f64);',
+     '\tcr6.compare(REX_BLUR_NX_SILENT(f0.f64) ? f31.f64 : f0.f64, f31.f64);' + TAG),
     ('sub_8230AD50', 0x8230AFD0, 'fcmpu cr6,f0,f30',
      '\tcr6.compare(f0.f64, f30.f64);',
      '\tcr6.compare(REX_BLUR_NX_UNITY(f0.f64, f30.f64) ? f30.f64 : f0.f64, f30.f64);' + TAG),

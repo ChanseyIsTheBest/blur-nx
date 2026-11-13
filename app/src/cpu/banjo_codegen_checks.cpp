@@ -235,8 +235,8 @@ void RuntimeCensusReport(int seconds) {
                   nx[0], nx[1], nx[2], nx[3], nx[4], nx[5], nx[6], nx[13], nx[7], nx[8], nx[9], nx[10], nx[11]);
       REXLOG_INFO("[census] near-exact audio (cumulative; Blur's node loop, tools/blur_mix_nx.py): gains unity {}, "
                   "zero {}, other constant {} (within 1e-7 of 1: {}, within 1e-5: {}; under 2^-16: {}) | ramps {} "
-                  "(under 1e-6: {}, under 2^-16: {})",
-                  nx[18], nx[22], nx[16], nx[17], nx[23], nx[21], nx[19], nx[20], nx[24]);
+                  "(under 1e-6: {}, under 2^-16: {}; both ends under 2^-16: {})",
+                  nx[18], nx[22], nx[16], nx[17], nx[23], nx[21], nx[19], nx[20], nx[24], nx[30]);
       REXLOG_INFO("[census] near-exact #38 (cumulative): card marks of the generated tree {}, the copies' run marks {}",
                   nx[25], nx[26]);
       REXLOG_INFO("[census] near-exact #49 (cumulative): resampling blocks {}, of them 256 samples at a ratio other "

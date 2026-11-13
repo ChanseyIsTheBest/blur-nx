@@ -139,6 +139,9 @@ REXCVAR_DEFINE_INT32(switch_yield_spin, 0, "Kernel",
                      "not given up). 0: off");
 REXCVAR_DEFINE_INT32(switch_yield_spin_first, 4, "Kernel",
                      "Switch: how many yields of a quick run switch_yield_spin replaces (1-16)");
+// blur-nx (2026-11-13, #60): set by RexSwitchApplyNamedPriority (threading_switch.cpp) for a thread named in
+// switch_yield_backoff_exempt.
+extern "C" thread_local bool g_rex_yield_backoff_exempt;
 #endif
 
 namespace rex::thread {
@@ -285,7 +288,8 @@ void MaybeYield() {
    * call. A lone yield, or the first few of a short wait, is unchanged.
    */
   // Read at every call (a load): a yield before the toml is loaded must not decide it.
-  if (REXCVAR_GET(switch_yield_backoff)) {
+  // blur-nx (2026-11-13, #60): a thread named in switch_yield_backoff_exempt (threading_switch.cpp) always yields.
+  if (REXCVAR_GET(switch_yield_backoff) && !g_rex_yield_backoff_exempt) {
     thread_local std::chrono::steady_clock::time_point previous{};
     thread_local uint32_t in_a_row = 0;
     const auto now = std::chrono::steady_clock::now();
