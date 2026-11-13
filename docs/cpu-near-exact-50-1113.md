@@ -242,3 +242,43 @@ so they rank functions, they do not measure today's races. Checked against cycle
 reports): the exp native is inlined into the parameter fetch 822EB500, which takes 0.5-3.4 % of each audio worker
 (#43's memo: ~0.1-0.3 ms a frame, not ~1 ms); the LZX decoder (829D2E80 and its siblings) takes 4-10 % of JQ Worker 1
 and of JQ Worker 2 in every race report (~1.5-2 ms a frame on the frame chain's workers: M-29, an exact native).
+
+### The PC census race (census_nx1, 2026-11-13 15:55-16:04: 480 s from boot into a race) and the guard (guard_nx1, 600 s)
+
+Cumulative counts, boot to the race's end. Build: the PC census build (BLUR_NEAR_EXACT OFF, the LR and save elisions
+of #8 / #10 ON). 0 crashes in either run; the race renders right (screenshots every 60 s).
+
+| # | Census | What it says |
+|---|---|---|
+| 1 | 8 signalling NaNs at float copy stores | rare: the switch stands |
+| 2 | 39,972 NaNs into float-to-integer conversions (~80 a second) | **not rare**: the switch would change real results (0 for 0x80000000); off unless the sites' consumers are shown not to care |
+| 5 | 0 compares copying XER[SO] = 1 | never: the switch stands |
+| 17 | 0 divisions by zero, 0 INT_MIN / -1 | never: the switch stands |
+| 41 | 20,164 float compares with a NaN | not rare: the switch is right only if nothing reads cr.un after them (the static check of bun / cror readers next) |
+| 42 | 63.3 M of 1,526 M vector max/min lanes differ (4.1 %) | **not rare** (mostly +0 against -0, presumably): the fast form dropped; the exact helpers stay |
+| 3 | 35,405 FPSCR writes, 23,552 change the mode | the exact skip saves the other 11,853 `msr fpcr` |
+| 4 | 35,405 FPSCR reads | nothing to model |
+| 9 | the r1 mirror: 321 M calls checked, 0 differences | the near-exact codegen's own check comes with the next build (BLUR_NX_R1_ASSUME=1) |
+| 12 | 0 key collisions | the hash-only key stands |
+| 13 / 53 / 54 | **0 captures narrowed**: a bug | every shader of Blur's is an in-place (XGRegister) one, which only the render thread's map held; fixed (3c7a300b: the game threads' own map, checked on the render thread) |
+| 21 | 202,828 constant gains under 2^-16 (13.97 M exactly zero) | the silent threshold catches 1.4 % more than the exact zeros |
+| 23 | 21,402 gains within 1e-5 of 1 (the same within 1e-7), 1.71 M exactly 1 | small: +1.3 % unity kernels |
+| 24 | 6.28 M ramps; 289 k under 1e-6, 619 k under 2^-16; 8,184 with both ends under 2^-16 | 4.6-9.9 % of ramps become constant gains |
+| 32 | 2,214 of 4,029 CAS words written by one thread only; 12.0 M of 155 M CAS on them (7.7 %) | worth building only where the word is provably one thread's |
+| 37 | the game thread waits at Swap's frames-ahead limit 31-54 times a second, 89-354 ms a second; fences 27-80 ms | rr6_frames_ahead 2 is the console A/B |
+| 38 | 684 M card marks by the generated tree, 10.35 G run marks by the copies | the copies' marks are the target (15x) |
+| 43 | exp memo: 28.3 M hits, 8.0 M misses (78 %) | built (cpu_nx_exp_memo, exact); the console A/B |
+| 47 | 163 k of 727 k draws' vertex shaders index all constants; the rest read 12.5 registers | the indexed ones need the range check |
+| 49 | 0 resampling blocks (the PC never resamples) | the console's census |
+| 52 | ~49,500 Begin*Vertices draws and ~11 MB of vertex data every 10 s in the race | the second copy is ~1.1 MB a second |
+| 57 / 34 | 5.44 M waits that succeeded, 225,876 polls, 201,974 of them timed out and yielded | the polls are the yield source; the console's M-44 counts next |
+| 65 | 0 kicks skipped (the PC decodes on the calling thread, mode 0) | the console |
+
+The guard (600 s, 116 M copy calls compared): 4 differences, all the sign of a NaN in a register (v0 or f3: 0x7FC00000
+against 0xFFC00000), after a zero-length vector is normalised (frsqrte of 0, then inf x 0): sub_8233FCA8,
+sub_824E90D0, sub_823262D8, sub_82309438. Both forms use the same FmaddsSingle; an arithmetic NaN's sign is the
+compiler's choice (a negation folded into the multiply-add or not), so the copy and the generated code can differ there
+on the PC. The copies switched themselves off for the rest of the run, as the guard does. None in any earlier run today.
+
+- 2026-11-13 16:20: #13's fix committed; main to cycle1; the near-exact codegen (LZX hook routing, #9) and the PC build
+  started, then the LZX verify race (cpu_lzx_native=2) and a census race for the narrowing (with the poison).
