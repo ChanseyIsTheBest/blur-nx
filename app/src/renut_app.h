@@ -33,6 +33,9 @@
 namespace blur::stereo {
 void Latch();  // blur-nx (2026-11-13): audio_stereo_mix (src/blur_stereo.cpp), before the game starts
 }
+namespace blur::nx_mix {
+void Latch();  // blur-nx (2026-11-13): the near-exact mixer tolerances (src/blur_nx_mix.cpp), before the game starts
+}
 #if defined(BLUR_BUILTIN_CONFIG)
 #include "blur_builtin_config.h"  // generated from app/blur_switch_defaults.toml and blur_switch.toml (CMake)
 #endif
@@ -214,6 +217,7 @@ public:
         // blur-nx (2026-11-13, the user: "force the game to stereo"): the generated statements' stereo flag, before the
         // game builds its audio graph (src/blur_stereo.cpp).
         blur::stereo::Latch();
+        blur::nx_mix::Latch();  // blur-nx (2026-11-13, near-exact #23 / #24)
         // katamari-nx (2026-10-31): DLC packages in the "dlc" folder next to the NRO / exe installed before the game
         // starts (reNut upstream's installer, renut_engine/dlc_install.cpp, as banjo-nx does).
         renut::dlc::InstallPackages(runtime());

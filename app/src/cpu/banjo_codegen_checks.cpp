@@ -65,7 +65,7 @@ volatile unsigned long long g_rex_lr_write_checked = 0;
 // compares, arithmetic, cold paths, float copy loads and stores).
 volatile unsigned long long g_rex_diet_census[6] = {};
 // blur-nx (2026-11-13, docs/cpu-near-exact-50-1113.md): the near-exact ideas' census (rex/ppc/diet_ops.h REX_NX_CENSUS).
-volatile unsigned long long g_rex_nx_census[16] = {};
+volatile unsigned long long g_rex_nx_census[32] = {};
 }
 
 #if defined(_WIN32)
@@ -225,14 +225,18 @@ void RuntimeCensusReport(int seconds) {
     // blur-nx (2026-11-13, docs/cpu-near-exact-50-1113.md): each rare case a near-exact switch would change, cumulative
     // (rex/ppc/diet_ops.h REX_NX_CENSUS: the numbers there are the doc's idea numbers).
     {
-      unsigned long long nx[16];
-      for (int i = 0; i < 16; ++i) nx[i] = g_rex_nx_census[i];
+      unsigned long long nx[32];
+      for (int i = 0; i < 32; ++i) nx[i] = g_rex_nx_census[i];
       REXLOG_INFO("[census] near-exact (cumulative): #1 signalling NaNs at float copy stores {} | #2 NaNs into "
                   "float-to-integer conversions {} | #17 signed divisions by zero {}, INT_MIN / -1 {}, unsigned "
                   "divisions by zero {} | #41 float compares with a NaN {} | #42 vector max/min with a differing lane "
                   "{} of {} | #3 FPSCR writes {}, changing the mode {}, to a mode other than nearest {} | #4 FPSCR "
                   "reads {} | #5 integer compares copying XER[SO] = 1 {}",
                   nx[0], nx[1], nx[2], nx[3], nx[4], nx[5], nx[6], nx[13], nx[7], nx[8], nx[9], nx[10], nx[11]);
+      REXLOG_INFO("[census] near-exact audio (cumulative; Blur's node loop, tools/blur_mix_nx.py): gains unity {}, "
+                  "zero {}, other constant {} (within 1e-7 of 1: {}, within 1e-5: {}; under 2^-16: {}) | ramps {} "
+                  "(under 1e-6: {}, under 2^-16: {})",
+                  nx[18], nx[22], nx[16], nx[17], nx[23], nx[21], nx[19], nx[20], nx[24]);
     }
     // blur-nx (2026-11-12, codegen-ideas-3 CG-13's census): what one flush mode for all code would change. The
     // any-mode cold paths above are scalar results in VMX code that met a denormal; the FPU-mode regions are the plain

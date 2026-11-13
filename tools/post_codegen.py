@@ -188,6 +188,10 @@ def main():
     # audio_stereo_mix (app/src/blur_stereo.cpp; off: the original statements' paths). Before the copies, so they take
     # the same statements (the guard compares them).
     run(tool('stereo_mix.py'), '--gen', gen)
+    # blur-nx (2026-11-13, docs/cpu-near-exact-50-1113.md #23 / #24): the node loop's two kernel choices with Blur's
+    # tolerances (audio_nx_ramp_eps, audio_nx_unity_eps; 0 = as before) and the PC census. After stereo_mix.py (the same
+    # loop), before the copies.
+    run(tool('blur_mix_nx.py'), '--gen', gen)
     if not scratch:
         # The localized native copies (app/generated/hot, from sa2-nx): made from the text as it stands after every
         # step above, so each copy matches the function the build compiles. The list is app/src/cpu/hot/localized.txt;

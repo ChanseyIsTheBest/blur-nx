@@ -36,8 +36,11 @@ extern "C" volatile unsigned long long g_rex_diet_census[6];
 //   7 #3 FPSCR writes (mtfsf)   8 #3 ... that change the rounding mode   9 #3 ... that select a mode other than nearest
 //   10 #4 FPSCR reads (mffs)    11 #5 an integer compare that copies XER[SO] = 1    12 #5 an mtxer that sets SO
 //   13 #42 vector max/min executions
+//   16-24 Blur's audio node loop (tools/blur_mix_nx.py): 16 constant gains other than 0 and 1, 17 of them within 1e-7
+//   of 1 (#23), 18 unity gains, 19 ramps, 20 ramps under 1e-6 (#24), 21 constant gains under 2^-16, 22 zero gains,
+//   23 constant gains within 1e-5 of 1, 24 ramps under 2^-16
 #if defined(REX_DIET_CENSUS_ON) && !defined(__SWITCH__)
-extern "C" volatile unsigned long long g_rex_nx_census[16];
+extern "C" volatile unsigned long long g_rex_nx_census[32];
 #define REX_NX_CENSUS(k) (g_rex_nx_census[k] = g_rex_nx_census[k] + 1)
 #define REX_NX_CENSUS_IF(c, k) ((c) ? (void)REX_NX_CENSUS(k) : (void)0)
 #define REX_NX_CENSUS_ON 1
