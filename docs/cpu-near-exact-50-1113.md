@@ -282,3 +282,23 @@ on the PC. The copies switched themselves off for the rest of the run, as the gu
 
 - 2026-11-13 16:20: #13's fix committed; main to cycle1; the near-exact codegen (LZX hook routing, #9) and the PC build
   started, then the LZX verify race (cpu_lzx_native=2) and a census race for the narrowing (with the poison).
+
+### The static census of the machine copies (#6, #7, #39, #31; a subagent, 2026-11-13 16:25)
+
+Over the 4,780 unique copies (9,534 definitions in 2,881 headers; 21,247 call sites). Scripts and JSON:
+the session scratchpad's agent_census (census_regs.py, census_cfg.py + cfg_live.py, census_stack.py, census_mem.py).
+
+- **#6 scratch registers dead across calls: dropped (nothing left to gain).** 138,324 reloads of r0, r5-r12, f0,
+  f2-f13 after a call; whole-function liveness: 113,466 dead (82 %: the compiler drops them already), 38 read by the
+  copy's own code (36 after the stack probe sub_82954F04, which writes only r0 and r11: right to read them), 29 by a
+  later copy, 15,165 only handed to a later non-copy call, 9,626 only written back at a return. r4: 5 reads, all after
+  the probe. Vectors: 90,951 reloads, 67 read (52 of them v1). What the assumption would save is the hand-overs and
+  write-backs: one store each, and wrong after the probe.
+- **#7 CR fields after a call: nothing.** 54 reloads, 0 read before being set; 27,051 CR locals kept across calls, 0
+  read before being set.
+- **#39 dead stack stores: too small.** The literal rule's 6,740 overcount (3,268 are fields of a stack object passed
+  by pointer, 80 stack arguments, 253 outgoing-argument stores); really unread: 2,617 back-chain stores, ~24 others
+  and 3 saves (sub_82A74E10, no return path). The back chain is what stack walks read: kept.
+- **#31 store-to-load forwarding: too small to build.** 951 loads in 327 functions match an earlier store at the same
+  base and offset (902 on the stack; 652 integer-to-float moves through the stack), 365 more inside a wider store; the
+  C++ compiler forwards most of these itself (not checked in the assembly).
