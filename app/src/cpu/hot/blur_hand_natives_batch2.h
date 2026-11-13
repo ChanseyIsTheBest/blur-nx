@@ -103,7 +103,17 @@ using F = simde__m128;
 // Declines: the 8 bytes at r1 - 16 wrapping or lying in 0x82000000-0x83000010 (where the constants are read).
 // Scratch not reproduced (hand.txt exact=f1): f2-f13, r8-r10, cr0, xer.
 // ---------------------------------------------------------------------------------------------------------------------
+// blur-nx (2026-11-13, #43 of docs/cpu-near-exact-50-1113.md: memoize hot pure functions; exact): with
+// cpu_nx_exp_memo, a table per thread of 64 recent (argument bits, result, the doubleword left at r1 - 16): the
+// function is pure (its constants are in the image's read-only data, the flush mode is set off first), so an argument
+// seen before gives the same result and the same stack word, which a hit writes as the computation would. The audio
+// parameter fetch 822EB500 calls it with the same dB offsets frame after frame (a subagent's reading, 2026-11-13).
+extern "C" bool blur_nx_exp_memo;  // app/src/blur_nx_mix.cpp
 namespace n_82954F28 {
+struct Memo {
+  uint64_t x, result, mem;
+  bool valid;
+};
 template <class S>
 [[gnu::always_inline]] inline bool Native(PPCContext& __restrict ctx, uint8_t* base, S& s) {
   using namespace blur_b2;
@@ -112,6 +122,21 @@ template <class S>
   if (!detail::Straight(sp - 16u, 8) || uint32_t(sp - 0x82000000u) < 0x01000010u) [[unlikely]] return false;
   s.Hand(kN82954F28, 0);
   const double x = ctx.f1.f64;
+  Memo* slot = nullptr;
+  if (blur_nx_exp_memo) {  // blur-nx (2026-11-13, #43)
+    thread_local Memo memo[64];
+    const uint64_t xb = U64(x);
+    slot = &memo[(xb ^ (xb >> 23) ^ (xb >> 41)) & 63u];
+    if (slot->valid && slot->x == xb) {
+      REX_NX_CENSUS(31);
+      if (!s.Note(sp - 16u, 8)) [[unlikely]] return true;
+      ::banjo::hot::Card(base, sp - 16u, 8);
+      St64(::banjo::hot::Raw(base, sp - 16u), slot->mem);
+      ctx.f1.u64 = slot->result;
+      return true;
+    }
+    REX_NX_CENSUS(32);
+  }
   ctx.fpscr.disableFlushMode();
   Fence();
   const uint8_t* t = ::banjo::hot::Raw(base, 0x82C40350u);  // lis r11,-32060; addi r11,r11,848
@@ -153,6 +178,12 @@ template <class S>
   f0 = ::rex::ppc::GeZeroAnyMode(f11b) ? c16 : f0;       // fsel f0,f11,f12,f0
   double result = ::rex::ppc::GeZeroAnyMode(f10b) ? f104 : f0;  // fsel f1,f10,f13,f0
   Pin(result);
+  if (slot) {  // blur-nx (2026-11-13, #43)
+    slot->x = U64(x);
+    slot->result = U64(result);
+    slot->mem = mem;
+    slot->valid = true;
+  }
   if (!s.Note(sp - 16u, 8)) [[unlikely]] return true;
   ::banjo::hot::Card(base, sp - 16u, 8);
   St64(::banjo::hot::Raw(base, sp - 16u), mem);

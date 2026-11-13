@@ -65,7 +65,7 @@ volatile unsigned long long g_rex_lr_write_checked = 0;
 // compares, arithmetic, cold paths, float copy loads and stores).
 volatile unsigned long long g_rex_diet_census[6] = {};
 // blur-nx (2026-11-13, docs/cpu-near-exact-50-1113.md): the near-exact ideas' census (rex/ppc/diet_ops.h REX_NX_CENSUS).
-volatile unsigned long long g_rex_nx_census[32] = {};
+volatile unsigned long long g_rex_nx_census[48] = {};
 }
 
 #if !defined(__SWITCH__)
@@ -285,8 +285,8 @@ void RuntimeCensusReport(int seconds) {
     // blur-nx (2026-11-13, docs/cpu-near-exact-50-1113.md): each rare case a near-exact switch would change, cumulative
     // (rex/ppc/diet_ops.h REX_NX_CENSUS: the numbers there are the doc's idea numbers).
     {
-      unsigned long long nx[32];
-      for (int i = 0; i < 32; ++i) nx[i] = g_rex_nx_census[i];
+      unsigned long long nx[48];
+      for (int i = 0; i < 48; ++i) nx[i] = g_rex_nx_census[i];
       REXLOG_INFO("[census] near-exact (cumulative): #1 signalling NaNs at float copy stores {} | #2 NaNs into "
                   "float-to-integer conversions {} | #17 signed divisions by zero {}, INT_MIN / -1 {}, unsigned "
                   "divisions by zero {} | #41 float compares with a NaN {} | #42 vector max/min with a differing lane "
@@ -302,6 +302,7 @@ void RuntimeCensusReport(int seconds) {
       REXLOG_INFO("[census] near-exact #49 (cumulative): resampling blocks {}, of them 256 samples at a ratio other "
                   "than 1 (the copy would newly take them) {}",
                   nx[27], nx[28]);
+      REXLOG_INFO("[census] near-exact #43 (cumulative): exp memo hits {}, misses {} (cpu_nx_exp_memo)", nx[31], nx[32]);
 #if !defined(__SWITCH__)
       CasCensusReport();  // blur-nx (2026-11-13, #32)
       REXLOG_INFO("[census] near-exact #57 / #34 (cumulative): single-object waits that succeeded {}, polls (a zero "

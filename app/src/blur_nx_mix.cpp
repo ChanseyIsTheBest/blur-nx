@@ -29,6 +29,10 @@ REXCVAR_DEFINE_DOUBLE(audio_nx_silent_eps, 0.0, "Audio",
                       "Blur near-exact #21: a mixer gain (or a ramp's two ends) under this is not mixed at all, as a "
                       "zero gain is not (0: off, as before; at most 2^-15)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(cpu_nx_exp_memo, false, "CPU",
+                    "Blur #43 (exact): the exp native (sub_82954F28) keeps the last 64 arguments per thread with their "
+                    "results; a repeated argument (the audio parameter fetch's dB offsets) gives the stored result")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(audio_nx_resample_copy, false, "Audio",
                     "Blur near-exact #49: a resampling block that consumes exactly 256 source samples is copied (the "
                     "kernels' own ratio-1 path) instead of interpolated at fraction 0 (the same samples apart from a -0, "
@@ -40,6 +44,7 @@ float blur_nx_ramp_eps = 0.0f;   // the generated statements' tolerances (tools/
 float blur_nx_unity_eps = 0.0f;
 float blur_nx_silent_eps = 0.0f;
 bool blur_nx_resample_copy = false;
+bool blur_nx_exp_memo = false;  // #43 (cpu/hot/blur_hand_natives_batch2.h)
 }
 
 namespace blur::nx_mix {
@@ -50,6 +55,7 @@ void Latch() {
   blur_nx_unity_eps = float(std::clamp(REXCVAR_GET(audio_nx_unity_eps), 0.0, kMax));
   blur_nx_silent_eps = float(std::clamp(REXCVAR_GET(audio_nx_silent_eps), 0.0, kMax));
   blur_nx_resample_copy = REXCVAR_GET(audio_nx_resample_copy);
+  blur_nx_exp_memo = REXCVAR_GET(cpu_nx_exp_memo);
   if (blur_nx_ramp_eps > 0.0f || blur_nx_unity_eps > 0.0f || blur_nx_silent_eps > 0.0f || blur_nx_resample_copy) {
     REXLOG_INFO("[audio] near-exact mixer: gain ramps under {:g} mixed as constant, gains within {:g} of 1 as unity, "
                 "gains under {:g} not mixed, 256-sample resampling blocks copied: {}",
