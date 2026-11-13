@@ -134,6 +134,12 @@ struct Slot {
   // sasrt-nx (2026-11-09; port 58, the guest threads' 16 MB host stacks: ~500 MB of heap in SASRT): the deepest the
   // sampled sp has been below the top of its stack mapping (svcQueryMemory of sp), since the slot's thread registered.
   std::atomic<u64> stack_deepest{0};
+  // blur-nx (2026-11-13, M-44 of Blur's docs/cpu-moonshots-50-1113.md; the census of #34 in docs/cpu-near-exact-50-1113.md):
+  // the thread's svcSleepThread calls by kind, written by the thread itself (its slot found once, a thread_local), read
+  // by the report: yields (0, -1, -2), short sleeps (up to 1 ms) and the ticks spent inside them, longer sleeps.
+  std::atomic<u64> yields{0}, sleeps{0}, sleep_ticks{0}, long_sleeps{0};
+  u64 last_yields = 0, last_sleeps = 0, last_sleep_ticks = 0, last_long = 0;  // the profiler thread's
+  double yields_s = 0.0, sleeps_s = 0.0, sleep_ms = 0.0, long_s = 0.0;
 };
 Slot g_slots[kMaxThreads];
 std::atomic<u64> g_stack_deepest_all{0};  // port 58: the deepest of any thread so far
@@ -333,6 +339,10 @@ void Register(Handle h) {
     if (s.handle.compare_exchange_strong(expected, h)) {
       s.name[0] = 0;
       s.stack_deepest.store(0, std::memory_order_relaxed);  // port 58
+      s.last_yields = s.yields.load(std::memory_order_relaxed);  // blur-nx (M-44): a reused slot's counts go on
+      s.last_sleeps = s.sleeps.load(std::memory_order_relaxed);
+      s.last_sleep_ticks = s.sleep_ticks.load(std::memory_order_relaxed);
+      s.last_long = s.long_sleeps.load(std::memory_order_relaxed);
       return;
     }
   }
@@ -486,6 +496,21 @@ void Report(u64 elapsed_ticks, u64 tick_freq, u64 counters_last[kCounterCount],
     }
     s.cpu = double(ticks - s.last_ticks) * 100.0 / double(elapsed_ticks);
     s.last_ticks = ticks;
+    {  // blur-nx (2026-11-13, M-44): the thread's sleeps and yields in the interval
+      const double seconds = double(elapsed_ticks) / double(armGetSystemTickFreq());
+      const u64 y = s.yields.load(std::memory_order_relaxed), n = s.sleeps.load(std::memory_order_relaxed);
+      const u64 t = s.sleep_ticks.load(std::memory_order_relaxed), l = s.long_sleeps.load(std::memory_order_relaxed);
+      s.yields_s = double(y - s.last_yields) / seconds;
+      s.sleeps_s = double(n - s.last_sleeps) / seconds;
+      s.sleep_ms = n != s.last_sleeps ? double(t - s.last_sleep_ticks) * 1000.0 / double(armGetSystemTickFreq()) /
+                                            double(n - s.last_sleeps)
+                                      : 0.0;
+      s.long_s = double(l - s.last_long) / seconds;
+      s.last_yields = y;
+      s.last_sleeps = n;
+      s.last_sleep_ticks = t;
+      s.last_long = l;
+    }
     /*
      * All threads are sampled, including those that use no CPU. In a hang caused by
      * a wait, the thread that matters is exactly that one: the stopped one.
@@ -797,11 +822,13 @@ void Report(u64 elapsed_ticks, u64 tick_freq, u64 counters_last[kCounterCount],
     svcGetThreadCoreMask(&preferred, &mask, s.handle.load());
     std::fprintf(f,
                  "\n-- thread %" PRIu64 " \"%s\": CPU %.1f%% | priority 0x%X, preferred core %d, "
-                 "mask 0x%llX | stack %llu KB deepest sampled (all threads %llu KB)\n",
+                 "mask 0x%llX | stack %llu KB deepest sampled (all threads %llu KB) | per second: yields %.0f, "
+                 "sleeps up to 1 ms %.0f (%.2f ms each), longer sleeps %.1f\n",
                  tid, s.name[0] ? s.name : "?", s.cpu, static_cast<unsigned>(priority),
                  static_cast<int>(preferred), static_cast<unsigned long long>(mask),
                  static_cast<unsigned long long>(s.stack_deepest.load(std::memory_order_relaxed) >> 10),
-                 static_cast<unsigned long long>(g_stack_deepest_all.load(std::memory_order_relaxed) >> 10));
+                 static_cast<unsigned long long>(g_stack_deepest_all.load(std::memory_order_relaxed) >> 10),
+                 s.yields_s, s.sleeps_s, s.sleep_ms, s.long_s);
 
     auto lo = std::lower_bound(samples.begin(), samples.end(), i,
                                [](const Sample& a, size_t v) { return a.slot < v; });
@@ -1322,10 +1349,40 @@ Result __wrap_bqDequeueBuffer(Binder* b, bool async, u32 width, u32 height, s32 
   return rc;
 }
 
+// blur-nx (2026-11-13, M-44): the calling thread's slot, found once (none: not registered, e.g. the main thread).
+Slot* CurrentSlot() {
+  thread_local size_t index = SIZE_MAX;
+  if (index == SIZE_MAX) [[unlikely]] {
+    const u32 h = threadGetCurHandle();
+    index = kMaxThreads;
+    for (size_t i = 0; i < kMaxThreads; ++i) {
+      if (g_slots[i].handle.load(std::memory_order_relaxed) == h) {
+        index = i;
+        break;
+      }
+    }
+  }
+  return index < kMaxThreads ? &g_slots[index] : nullptr;
+}
+
+void AddOwn(std::atomic<u64>& counter, u64 value) {  // one writer: a load and a store
+  counter.store(counter.load(std::memory_order_relaxed) + value, std::memory_order_relaxed);
+}
+
 void __wrap_svcSleepThread(s64 nano) {
   const u64 from = armGetSystemTick();
   __real_svcSleepThread(nano);
   Note(nano == 0 ? kSleep0 : nano < 0 ? kSleepYield : nano <= 1000000 ? kSleepShort : kSleepLong, from);
+  if (Slot* slot = CurrentSlot()) {  // blur-nx (2026-11-13, M-44): the thread's own counters
+    if (nano <= 0) {
+      AddOwn(slot->yields, 1);
+    } else if (nano <= 1000000) {
+      AddOwn(slot->sleeps, 1);
+      AddOwn(slot->sleep_ticks, armGetSystemTick() - from);
+    } else {
+      AddOwn(slot->long_sleeps, 1);
+    }
+  }
 }
 
 /*
