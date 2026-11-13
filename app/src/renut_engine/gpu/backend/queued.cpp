@@ -77,9 +77,10 @@ REXCVAR_DEFINE_BOOL(banjo_renut_delta_prefetch, true, "Banjo/Enhancements",
 // whole device, queued later than made) copies of the float constants only the registers its two shaders read. The
 // render thread reads a whole capture's state for that draw alone (DeviceForDraw), and of the 8 KB of float constants
 // only the registers in the bound shaders' cache entries (ShaderCacheEntry::floatConstants: UploadFloatConstants'
-// vs_used / ps_used, all of them when the shader indexes the register file); every other byte is copied. A shader that
-// is not a renderer record with a cache entry (an in-place XGRegister shader, one missing from the cache): the whole
-// device as before. Blur's console races: ~3,000 such draws a second at 12.9 KB each on the Game Master.
+// vs_used / ps_used, all of them when the shader indexes the register file); every other byte is copied. A shader
+// missing from the cache, or neither a renderer record nor an in-place XGRegister shader: the whole device as before.
+// (The first census found none narrowed: every shader of Blur's is an in-place one, which only the render thread's map
+// held; the game threads now keep their own, InPlaceShaderEntry.) Blur's console races: ~3,000 such draws a second at 12.9 KB each on the Game Master.
 REXCVAR_DEFINE_BOOL(banjo_renut_deferred_narrow, true, "Banjo/Enhancements",
                     "Renut's renderer: a Begin*Vertices draw's device capture copies of the float constants only the "
                     "registers its vertex and pixel shaders read (their cache entries' masks; the whole device when a "
@@ -168,6 +169,9 @@ struct DrawCapture {
   // draw reads it instead of 'state' (cleared when the capture goes back to the pool).
   std::unique_ptr<u8[]> narrow;
   bool narrowed = false;
+  // blur-nx (2026-11-13, #13's fix): the cache entries whose registers a narrowed capture holds (NarrowCheckLocked).
+  const ShaderCacheEntry *narrow_vs = nullptr;
+  const ShaderCacheEntry *narrow_ps = nullptr;
 };
 
 // banjo-nx (banjo_renut_capture_pool): a draw's capture comes from a pool and goes back to it once the render thread
@@ -693,6 +697,27 @@ const u8 *DeviceForDraw(const DrawCapture &capture) {
   return g_delta_device;
 }
 
+// blur-nx (2026-11-13, #13's fix): a narrowed capture's shaders as the render thread finds them for its draw. One whose
+// cache entry is not the one the capture was narrowed for (the guest re-registering a shader in the memory of one a
+// queued draw uses) reads registers the capture may have left out: counted, and reported every 10 s.
+std::atomic<uint64_t> g_narrow_checked{0}, g_narrow_differ{0};
+
+void NarrowCheckLocked(const DrawCapture &capture, const u8 *device) {
+  auto word = [device](u32 offset) {
+    u32 v;
+    std::memcpy(&v, device + offset, 4);
+    return __builtin_bswap32(v);
+  };
+  const ShaderRecord *vs = FindShaderLocked(word(d3d::kDeviceOffsetVertexShader), RecordKind::VertexShader);
+  const ShaderRecord *ps = FindShaderLocked(word(d3d::kDeviceOffsetPixelShader), RecordKind::PixelShader);
+  // A shader the draw cannot use (none found, or no cache entry: GetHostShader gives none) reads no register.
+  const bool vs_differs = vs && vs->entry && vs->entry != capture.narrow_vs;
+  const bool ps_differs = ps && ps->entry && ps->entry != capture.narrow_ps;
+  g_narrow_checked.fetch_add(1, std::memory_order_relaxed);
+  if (vs_differs || ps_differs)
+    g_narrow_differ.fetch_add(1, std::memory_order_relaxed);
+}
+
 void QueueCapture(DrawCapture *capture) {
   // banjo-nx (2026-10-20, from sa2-nx, banjo_renut_prefetch_next): the capture and its device bytes, written on the game thread's core,
   // are fetched into the render thread's cache while it does the item before this one.
@@ -703,6 +728,8 @@ void QueueCapture(DrawCapture *capture) {
     if (!capture->indices.empty())
       call.up_indices = capture->indices.data();
     const u8 *device = DeviceForDraw(*capture);
+    if (capture->narrowed)  // blur-nx (2026-11-13, #13's fix)
+      NarrowCheckLocked(*capture, device);
     banjo::renut_gpu::CountDrawSource(0);
     // blur-nx (2026-11-10, port 76; its key 215)
     SetReplayStackHeaders(capture->stack_headers.count ? &capture->stack_headers : nullptr);
@@ -743,32 +770,42 @@ DrawCapture *Capture(u32 device_va, const DrawCall &call) {
 }
 
 // blur-nx (2026-11-13, #13, banjo_renut_deferred_narrow): the float constant registers the bound shader at 'offset' reads,
-// as a count from register 0 (its highest one + 1); false when it is not a renderer record of 'kind' with a cache entry.
-// 'none_ok': a null shader reads none (the pixel shader: the render thread then uses kNoRegisters).
-bool ShaderRegisters(const u8 *device, u32 offset, RecordKind kind, bool none_ok, u32 &count, uint64_t &groups) {
+// as a count from register 0 (its highest one + 1); false when it is neither a renderer record of 'kind' nor an in-place
+// shader of 'kind' (FindShaderLocked's order: the record registry, then the in-place shaders), or has no cache entry.
+// 'none_ok': a null shader reads none (the pixel shader: the render thread then uses kNoRegisters). 'out': the entry.
+bool ShaderRegisters(const u8 *device, u32 offset, RecordKind kind, bool none_ok, u32 &count, uint64_t &groups,
+                     const ShaderCacheEntry *&out) {
   const u32 va = (u32(device[offset]) << 24) | (u32(device[offset + 1]) << 16) | (u32(device[offset + 2]) << 8) |
                  u32(device[offset + 3]);
   groups = 0;
+  out = nullptr;
   if (!va) {
     count = 0;
     return none_ok;
   }
   RecordKind found;
-  if (!records::Lookup(va, &found) || found != kind)
+  const ShaderCacheEntry *entry = nullptr;
+  if (records::Lookup(va, &found) && found == kind) {
+    const auto *record = GuestPtr<const ShaderRecord>(va);
+    if (!record)
+      return false;
+    entry = record->entry;
+  } else if (!InPlaceShaderEntry(va, kind, &entry)) {  // blur-nx (2026-11-13, #13's fix): Blur's shaders
     return false;
-  const auto *record = GuestPtr<const ShaderRecord>(va);
-  if (!record || !record->entry)
+  }
+  if (!entry)
     return false;
+  out = entry;
   count = 0;
   for (int w = 7; w >= 0; --w) {
-    if (const u32 bits = record->entry->floatConstants[w]) {
+    if (const u32 bits = entry->floatConstants[w]) {
       count = u32(w) * 32 + 32 - u32(__builtin_clz(bits));
       break;
     }
   }
   // blur-nx (2026-11-13, #53): the 64-byte groups (four registers) holding a register it reads.
   for (u32 w = 0; w < 8; ++w) {
-    const u32 bits = record->entry->floatConstants[w];
+    const u32 bits = entry->floatConstants[w];
     for (u32 g = 0; g < 8; ++g)
       if ((bits >> (4 * g)) & 0xFu) groups |= uint64_t(1) << (w * 8 + g);
   }
@@ -801,11 +838,16 @@ DrawCapture *CaptureDeferred(u32 device_va, const DrawCall &call) {
   const auto *bytes = reinterpret_cast<const u8 *>(device);
   u32 vs_regs = 0, ps_regs = 0;
   uint64_t vs_groups = 0, ps_groups = 0;
-  if (!ShaderRegisters(bytes, d3d::kDeviceOffsetVertexShader, RecordKind::VertexShader, false, vs_regs, vs_groups) ||
-      !ShaderRegisters(bytes, d3d::kDeviceOffsetPixelShader, RecordKind::PixelShader, true, ps_regs, ps_groups))
+  const ShaderCacheEntry *vs_entry = nullptr, *ps_entry = nullptr;
+  if (!ShaderRegisters(bytes, d3d::kDeviceOffsetVertexShader, RecordKind::VertexShader, false, vs_regs, vs_groups,
+                       vs_entry) ||
+      !ShaderRegisters(bytes, d3d::kDeviceOffsetPixelShader, RecordKind::PixelShader, true, ps_regs, ps_groups,
+                       ps_entry))
     return Capture(device_va, call);
   ClearPending(device);
   DrawCapture *capture = g_capture_pool.Take();
+  capture->narrow_vs = vs_entry;  // blur-nx (2026-11-13, #13's fix): checked on the render thread (NarrowCheckLocked)
+  capture->narrow_ps = ps_entry;
   if (!capture->narrow)
     capture->narrow.reset(new u8[d3d::kDeviceSnapshotSize]);
   u8 *out = capture->narrow.get();
@@ -999,12 +1041,14 @@ std::string SnapshotDeltaReport() {
       "device snapshots (banjo_renut_snapshot_deltas): {} draws, {:.0f} bytes kept a draw on average (the whole device "
       "is {}); {:.1f} chunks and {:.1f} constant groups a delta; {} whole copies (the frames' first draws); {} "
       "Begin*Vertices draws as whole copies ({} of them narrowed to their shaders' float constants, {:.0f} bytes a "
-      "copy, {:.0f} with the prefixes alone; banjo_renut_deferred_narrow); their vertex data {} draws, {:.0f} KB "
-      "(#52's census)",
+      "copy, {:.0f} with the prefixes alone; banjo_renut_deferred_narrow; {} checked on the render thread, {} drawn "
+      "with other shaders since the start); their vertex data {} draws, {:.0f} KB (#52's census)",
       draws, double(bytes) / double(draws), d3d::kDeviceSnapshotSize, double(chunks) / per_delta,
       double(groups) / per_delta, rebases, whole, narrowed,
       narrowed ? double(narrowed_bytes) / double(narrowed) : 0.0,
       narrowed ? double(narrowed_prefix) / double(narrowed) : 0.0,
+      g_narrow_checked.exchange(0, std::memory_order_relaxed),  // blur-nx (2026-11-13, #13's fix)
+      g_narrow_differ.load(std::memory_order_relaxed),
       g_deferred_vertex_draws.exchange(0, std::memory_order_relaxed),
       double(g_deferred_vertex_bytes.exchange(0, std::memory_order_relaxed)) / 1024.0);
   line += DrawerCensus();  // blur-nx (2026-11-13, M-31)
