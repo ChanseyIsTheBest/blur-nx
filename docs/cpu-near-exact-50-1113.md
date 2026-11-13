@@ -13,34 +13,34 @@ census-effort column).
 
 | # | Idea | Census / check | Status |
 |---|---|---|---|
-| 1 | No signalling-NaN quieting on float stores | shared float census build | planned |
-| 2 | Float-to-int without the NaN fix-ups | shared float census build | planned |
-| 3 | Round-to-nearest only | the existing kCensusRound* census | planned |
-| 4 | No FPU status flags | scan for the flag reads (mffs), then a counter | planned |
-| 5 | No integer-overflow summary bit | scan for the overflow-recording forms | planned |
-| 8 | Link-register elision (`SASRT_HOT_LR_ELIDE`) | scan for the return address used as data, then the guard | planned |
-| 9 | Stack pointer preserved everywhere | scan for stack-pointer writes that aren't frame setup | planned |
-| 12 | Hash-only caches (128-bit) | count collisions with the compare kept (debug) | planned |
-| 13 | Smaller Begin*Vertices device copies | the snapshot-deltas verify mode | planned |
-| 15 | Trust dirty-page marks over byte compares (Renut) | count compares that disagree with the marks | planned |
-| 16 | Skip the zero-fill before a full overwrite (audio kernels) | prove the overwrite, compare the audio dumps | planned |
-| 17 | Drop the division checks | counter of divisions by zero | planned |
-| 19 | Remove trap asserts in hot code | scan for the traps | planned |
-| 20 | Unguarded promoted calls | the promoted-call census | planned |
-| 23 | Near-unity gains use the unity kernel (audio) | census of gain values | planned |
-| 24 | Tiny ramps treated as constant (audio) | census of ramp sizes | planned |
-| 26 | Spin briefly, then yield | none (timing only) | planned |
-| 27 | No-op debug output and telemetry formatting | count the calls and their time | planned |
-| 29 | Cheaper performance-counter reads | none | planned |
-| 30 | Quiet the remaining host timers | list the timers and their wake-ups | planned |
-| 34 | Waiting threads sleep until a flag changes instead of yield-spinning | yield counts per thread and site | planned |
-| 35 | Higher priority for the frame-chain threads | none (timing only) | planned |
-| 38 | Batch dirty-page marks per block | the store-cards verify mode | planned |
-| 40 | Drop stack-cookie checks and stack probes in hot code | scan for the cookie checks | planned |
-| 41 | Float compares fused into Arm branches | shared float census build | planned |
-| 42 | Vector min, max and compares without NaN / -0 fix-ups | shared float census build | planned |
-| 48 | Skip draws that can't change anything | count masked draws in Renut, frame hashes | planned |
-| 49 | Skip resampling at a ratio of ~1 (audio) | counter of rate ratios | planned |
+| 1 | No signalling-NaN quieting on float stores | PC census slot 0 | switch REX_NX_SNAN_PASS (BLUR_NEAR_EXACT) |
+| 2 | Float-to-int without the NaN fix-ups | PC census slot 1 | switch REX_NX_FCTI_NO_NAN (AArch64 only) |
+| 3 | Round-to-nearest only | the kCensusRound* census | **dropped** (the game selects round-toward-zero); the exact part done: a write that changes nothing skips the `msr fpcr` |
+| 4 | No FPU status flags | scan | **nothing to do** (never modelled) |
+| 5 | No integer-overflow summary bit | scan + PC census slot 11 | switch REX_NX_XER_SO_ZERO |
+| 8 | Link-register elision | the guard | SASRT_HOT_LR_ELIDE ON in the near-exact builds; guard run pending |
+| 9 | Stack pointer preserved everywhere | REX_R1_CHECK (PC) | r1_preserve.py --near-exact (BLUR_NX_R1_ASSUME=1, a codegen-time choice) |
+| 12 | Hash-only caches | collision census in the XMA cache's report | key banjo_xma_frame_cache_hash_only (off) |
+| 13 | Smaller Begin*Vertices device copies | the narrowed copies' bytes (snapshot report), the NaN poison | **found exact**: banjo_renut_deferred_narrow (on) |
+| 15 | Trust marks over compares | the texture card counts | **mostly done before** (CheckedHash / ExtentClean) |
+| 16 | Skip the zero-fill before a full overwrite | (a subagent reads the kernels) | pending |
+| 17 | Drop the division checks | PC census slots 2-4 | switch REX_NX_DIV_NO_CHECK |
+| 19 | Remove trap asserts | 0 hits in the PC race | **found exact** (a hit only logs): switch REX_NX_NO_TRAPS |
+| 20 | Unguarded promoted calls | census_indirect1 | **skipped**: ~0.01 ms a frame, and a new target would be a wrong call (a crash), not a rare tiny difference |
+| 23 | Near-unity gains use the unity kernel | PC census slots 16-18, 23 | key audio_nx_unity_eps (0 = off), tools/blur_mix_nx.py |
+| 24 | Tiny ramps treated as constant | PC census slots 19, 20, 24 | key audio_nx_ramp_eps (0 = off) |
+| 26 | Spin briefly, then yield | none | keys switch_yield_spin (0 = off), switch_yield_spin_first |
+| 27 | No-op debug output and telemetry | export census | **nothing measurable** (DbgPrint not among the most called) |
+| 29 | Cheaper performance-counter reads | console counts | **nothing measurable** (0 clock reads a second in races) |
+| 30 | Quiet the remaining host timers | the timer list | **done by M-38** (the rest are the game's own timers) |
+| 34 | Sleep until the flag changes instead of yield-spinning | M-44 per-thread yields and sleeps (Switch profiler) | keys switch_yield_backoff_us / _after for the A/B; a wake on the job queue after the console census |
+| 35 | Higher priority for the frame chain | none | exists (switch_thread_priorities, CG-01, rejected 2026-11-12): A/B again with stereo and paired audio |
+| 38 | Batch dirty-page marks per block | PC census slots 25-26 | **done before** in the copies (card_groups.py, card runs); the generated tree now marks by the copies' rule (REX_CARD_VIEWS_ONLY, exact) |
+| 40 | Drop stack cookies and probes | scan | **probably nothing** (no cookie check found) |
+| 41 | Float compares fused into branches | PC census slot 5 | switch REX_NX_FCMP_NO_UN |
+| 42 | Vector min/max without fix-ups | PC census slots 6, 13 | switch REX_NX_VMINMAX_FAST (tools/near_exact.py) |
+| 48 | Skip draws that change nothing | Renut's draw kinds | **nothing to skip** (0 such draws in the PC race) |
+| 49 | Skip resampling at ratio ~1 | (a subagent reads the kernels) | pending |
 
 Already done before the choice: #11 (store_cards.py has always left stack stores plain: 186,852 in cycle 3's codegen;
 only stores that reach the stack through a pointer the tool cannot trace are marked) and #14 = M-35 (found exact:
@@ -146,6 +146,16 @@ From the static scans of cycle 3's generated code and cycle 3's PC check race (c
   fcmgt and SSE's cmpgt agree for every input).
 - **#48:** Renut already counts "draws that write nothing at all" (DiagCountsOn); the census run reads it.
 
+## Builds
+
+- PC census build: the near-exact codegen (BLUR_NX_R1_ASSUME=1), BLUR_NEAR_EXACT OFF (the census counts the rare cases
+  in the code as it was), SASRT_HOT_LR_ELIDE ON (for #8's guard run); a race with banjo_diag_runtime_census and the
+  poison of banjo_renut_deferred_narrow, then a guard run.
+- Switch: cycle 3 alone (exact items) and cycle 3 + near-exact (BLUR_NEAR_EXACT ON, SASRT_HOT_LR_ELIDE ON, the
+  near-exact codegen), each its own PGO training; ABBA against each other and the c2b build; the keys A/B'd in the
+  same session.
+
 ## Log
 
 - 2026-11-13 13:55: the user's choice; this doc.
+- 2026-11-13 14:00-15:00: the census code and every switch written (commits on branch cycle1).
