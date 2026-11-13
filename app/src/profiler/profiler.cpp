@@ -39,6 +39,16 @@ REXCVAR_DEFINE_INT32(banjo_stall_watch_seconds, 1, "Nuts&Bolts/Profiler",
     "logs/rex/banjo_profiler.log, and count frames over 100 ms (0 = off).")
     .range(0, 60)
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// blur-nx (2026-11-14, the boot black screen; profiler/switch_stall_watch.h).
+REXCVAR_DEFINE_BOOL(banjo_stall_watch_waits, true, "Nuts&Bolts/Profiler",
+    "[Switch] With the stall watchdog: each dump lists the guest threads blocked in a wait, on what and for how long, "
+    "and whether that object was set after the wait began (each blocking wait and each set or release is noted).")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_INT32(banjo_stall_watch_quiet_seconds, 30, "Nuts&Bolts/Profiler",
+    "[Switch] With the stall watchdog: dump when no file has been read for this many seconds, even while frames still "
+    "come (two dumps at most until reads resume; 0 = off). A file named stall_dump in logs/rex/ also dumps (on demand).")
+    .range(0, 3600)
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 namespace banjo::profiler {
 namespace {
@@ -157,7 +167,9 @@ void Start() {
   os::switch_cpu_profiler::SetSlowFrameThreshold(
       static_cast<uint32_t>(REXCVAR_GET(banjo_slow_frame_profile_ms)));
   os::switch_cpu_profiler::Start(REXCVAR_GET(banjo_cpu_profiler));
-  os::switch_stall_watch::Start(static_cast<double>(REXCVAR_GET(banjo_stall_watch_seconds)));
+  os::switch_stall_watch::Start(static_cast<double>(REXCVAR_GET(banjo_stall_watch_seconds)),
+                                static_cast<double>(REXCVAR_GET(banjo_stall_watch_quiet_seconds)),
+                                REXCVAR_GET(banjo_stall_watch_waits));
 #endif
 }
 

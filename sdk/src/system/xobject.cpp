@@ -15,6 +15,7 @@
 #include <rex/stream.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/util/string_utils.h>  // For TranslateAnsiStringAddress
+#include <rex/system/wait_registry.h>
 #include <rex/system/xobject.h>
 // #include <rex/kernel/xboxkrnl/private.h>  // TODO: JIT only
 #include <rex/system/xenumerator.h>
@@ -210,7 +211,11 @@ X_STATUS XObject::Wait(uint32_t wait_reason, uint32_t processor_mode, uint32_t a
                                 : std::chrono::milliseconds::max();
 
   XThread::CheckTitleTermination();
+  // blur-nx (2026-11-14, rex/system/wait_registry.h): the stall dumps' record of a blocked wait (polls are not marked).
+  waitreg::Begin(handles_.empty() ? 0u : uint32_t(handles_[0]), uint32_t(type_), 1, waitreg::kWaitOne,
+                 opt_timeout ? int64_t(timeout_ms.count()) : -1);
   auto result = rex::thread::Wait(wait_handle, alertable ? true : false, timeout_ms);
+  waitreg::End();
   XThread::CheckTitleTermination();
   // blur-nx (2026-11-13, #57 / #34's census, PC): polls, and their timeouts.
   const bool poll = timeout_ms.count() == 0;
@@ -242,9 +247,15 @@ X_STATUS XObject::SignalAndWait(XObject* signal_object, XObject* wait_object, ui
                                       TimeoutTicksToMs(*opt_timeout)))
                                 : std::chrono::milliseconds::max();
 
+  // blur-nx (2026-11-14, rex/system/wait_registry.h): the stall dumps' record of a blocked wait (polls are not marked).
+  waitreg::NoteSignalOf(signal_object,
+                        signal_object->type() == Type::Event ? uint32_t(waitreg::kSet) : uint32_t(waitreg::kRelease));
+  waitreg::Begin(wait_object->handles_.empty() ? 0u : uint32_t(wait_object->handles_[0]), uint32_t(wait_object->type_), 1,
+                 waitreg::kSignalAndWait, opt_timeout ? int64_t(timeout_ms.count()) : -1);
   auto result =
       rex::thread::SignalAndWait(signal_object->GetWaitHandle(), wait_object->GetWaitHandle(),
                                  alertable ? true : false, timeout_ms);
+  waitreg::End();
   switch (result) {
     case rex::thread::WaitResult::kSuccess:
       wait_object->WaitCallback();
@@ -286,9 +297,14 @@ X_STATUS XObject::WaitMultiple(uint32_t count, XObject** objects, uint32_t wait_
                                 : std::chrono::milliseconds::max();
 
   XThread::CheckTitleTermination();
+  // blur-nx (2026-11-14, rex/system/wait_registry.h): the stall dumps' record of a blocked wait (polls are not marked).
+  waitreg::Begin(count == 0 || objects[0]->handles_.empty() ? 0u : uint32_t(objects[0]->handles_[0]),
+                 count == 0 ? 0u : uint32_t(objects[0]->type_), count, wait_type ? waitreg::kWaitAny : waitreg::kWaitAll,
+                 opt_timeout ? int64_t(timeout_ms.count()) : -1);
   if (wait_type) {
     auto result =
         rex::thread::WaitAny(wait_handles, count, alertable ? true : false, timeout_ms);
+    waitreg::End();
     XThread::CheckTitleTermination();
     switch (result.first) {
       case rex::thread::WaitResult::kSuccess:
@@ -310,6 +326,7 @@ X_STATUS XObject::WaitMultiple(uint32_t count, XObject** objects, uint32_t wait_
   } else {
     auto result =
         rex::thread::WaitAll(wait_handles, count, alertable ? true : false, timeout_ms);
+    waitreg::End();
     XThread::CheckTitleTermination();
     switch (result) {
       case rex::thread::WaitResult::kSuccess:
