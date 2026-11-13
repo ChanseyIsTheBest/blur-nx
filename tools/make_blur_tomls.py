@@ -98,6 +98,15 @@ SHIPPED = {
     # (17c319b9), SMAA settings, the first two minutes of each race by Renut's wall clock: the kick with the lock 18.52
     # fps, without it 19.36 (32 and 17 shader compiles on the console in those runs). Not worse: on.
     'audio_xma_kick_without_lock': 'true  # blur-nx: on (A/B 2026-11-12: 18.52 locked, 19.36 lock-free)',
+    # blur-nx (2026-11-13; the user: "M43 is good implement and force the game to stereo"; after listening: "it sounds
+    # good"): Blur's own audio graph mixes two channels (tools/stereo_mix.py) and the pump asks for two frames every
+    # 10.7 ms (M-43). Console ABBA, cycle 2: 5.1 23.30 / 23.43, stereo 25.22 / 25.10, pairs 24.42 / 23.82, both
+    # 25.30 / 25.59 fps. The user then: "do increase it by the 2.8 db": audio_stereo_frame_gain 1.38 (+2.8 dB) brings the
+    # stereo race audio back to the 5.1 mix's level (three PC race pairs: -25.9 / -25.1 against -23.1 / -22.3 dBFS; the
+    # game's own dynamics see the folded pair); frames still carrying 5.1 (menus, movies) keep the plain fold.
+    'audio_stereo_mix': 'true  # blur-nx: the game mixes stereo (5.1 23.4 -> 25.2 fps on the console; the user: "it sounds good")',
+    'audio_switch_pump_pairs': 'true  # blur-nx: M-43, two audio frames every 10.7 ms (+5.3 ms latency; with stereo 25.2 -> 25.4 fps)',
+    'audio_stereo_frame_gain': '1.38  # blur-nx: +2.8 dB on the stereo race frames (the 5.1 mix\'s level; the user, 2026-11-13)',
     'banjo_shader_misses': '"sdmc:/switch/blur-nx/shader_misses"',
     'log_level': '"info"',
     # blur-nx (2026-11-12, CPU batch 3): the file log from a thread of its own (the base's writer, from futari-nx). The
