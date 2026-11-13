@@ -231,3 +231,14 @@ Status by row of the refilled 50 (15:15):
 - New questions (not in the table): the Bink decoder runs during races (~940 samples, ~2 % of all; a second subagent
   is finding which movie and whether it is shown); the LZX decoder of streamed resources (M-29, an exact native) at
   1.72 ms a frame on the frame chain's job workers.
+
+### Correction (2026-11-13 15:45): the copy list's sample counts are stale; Bink does not run in races
+
+A second subagent attributed every Bink symbol in 7 console race profiles against their own builds' ELFs: Bink runs
+only 10-30 s after launch (the boot logos 'Ui\movies\atvi.bik' and 'BizarreSplash.bik', on the Game Master) and has
+0 samples in every report of the menus, the loading and the 240 s race. localized_bulk.txt's counts are kept from the
+list's first version by `switch_hot_bulk.py --merge` (the Bink lines date from the boot-movie work of late October),
+so they rank functions, they do not measure today's races. Checked against cycle 1's race profile (perrep.py, 5 race
+reports): the exp native is inlined into the parameter fetch 822EB500, which takes 0.5-3.4 % of each audio worker
+(#43's memo: ~0.1-0.3 ms a frame, not ~1 ms); the LZX decoder (829D2E80 and its siblings) takes 4-10 % of JQ Worker 1
+and of JQ Worker 2 in every race report (~1.5-2 ms a frame on the frame chain's workers: M-29, an exact native).
