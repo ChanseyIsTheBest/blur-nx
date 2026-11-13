@@ -381,6 +381,13 @@ void ResolveStateLocked(const u8 *device_state, u32 flags, const ClearRect *sour
 // 32 bytes instead of copying the whole 12.9 KB device; ResolveStateLocked reads them out of a whole state and runs the
 // same code (exact: nothing else of the device is read).
 constexpr u32 kResolveTargetWords = 8;
+// blur-nx (2026-11-13, #55 of docs/cpu-near-exact-50-1113.md, exact): a clear reads of the device only the target words
+// above and the viewport's four floats (x, y, width, height at kClearViewportOffset: CDevice's, as D3D clamps a clear
+// to it). ClearTargetsLocked is the clear on those; ClearStateLocked reads them out of a whole state.
+constexpr u32 kClearViewportOffset = 0x3218;
+void ReadClearViewport(const u8 *device_state, float viewport[4]);
+void ClearTargetsLocked(const u32 *target_words, const float *viewport, u32 flags, const ClearRect *rect,
+                        const float color[4], float depth, u32 stencil);
 void ReadResolveTargets(const u8 *device_state, u32 targets[kResolveTargetWords]);
 void ResolveTargetsLocked(const u32 *targets, u32 flags, const ClearRect *source_rect,
                           u32 dest_texture_va, const d3d::TextureFetchConstant *dest_format,

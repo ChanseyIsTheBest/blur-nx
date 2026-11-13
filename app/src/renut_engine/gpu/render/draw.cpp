@@ -2140,9 +2140,17 @@ plume::RenderRect ScaleRect(const plume::RenderRect &rect, RenderScale scale) {
 
 bool RestoreDepthFromColorLocked(HostSurface *depth, HostSurface *color);  // sasrt-nx (2026-10-20): below
 
+// blur-nx (2026-11-13, #55): GatherTargets on the target words (draw.h kResolveTargetWords: the four render targets,
+// then the depth-stencil surface), as a queued clear keeps them.
+bool GatherTargetsWords(const u32 *words, Targets &t);
 bool GatherTargets(const GuestDevice &device, Targets &t) {
+  u32 words[kResolveTargetWords];
+  ReadResolveTargets(device.Bytes(0), words);
+  return GatherTargetsWords(words, t);
+}
+bool GatherTargetsWords(const u32 *words, Targets &t) {
   for (u32 i = 0; i < d3d::kMaxRenderTargets; ++i) {
-    const u32 va = device.U32(d3d::kDeviceOffsetRenderTargets + i * 4);
+    const u32 va = words[i];
     if (!va)
       break;
     HostSurface *surface = GetHostSurfaceLocked(va);
@@ -2150,14 +2158,13 @@ bool GatherTargets(const GuestDevice &device, Targets &t) {
       break;
     t.colors[t.color_count++] = surface;
   }
-  HostSurface *depth = GetHostSurfaceLocked(device.U32(d3d::kDeviceOffsetDepthStencil));
+  HostSurface *depth = GetHostSurfaceLocked(words[4]);  // kDeviceOffsetDepthStencil
   if (depth && depth->depth) {
     // rr6-nx (2026-11-02, rr6_depth_covers_colour): a colour target larger than the depth surface under it.
     if (t.color_count && depth->scale == t.colors[0]->scale &&
         (depth->width < t.colors[0]->width || depth->height < t.colors[0]->height) &&
         banjo::renut_gpu::DepthCoversColourOn())
-      depth = GrowDepthToColourLocked(device.U32(d3d::kDeviceOffsetDepthStencil), depth, t.colors[0]->width,
-                                      t.colors[0]->height);
+      depth = GrowDepthToColourLocked(words[4], depth, t.colors[0]->width, t.colors[0]->height);
     t.depth = depth;
   }
   if (!t.color_count && !t.depth)
@@ -15090,23 +15097,41 @@ plume::RenderRect ClampRect(const ClearRect *rect, uint32_t width, uint32_t heig
 
 } // namespace
 
+void ReadClearViewport(const u8 *device_state, float viewport[4]) {  // blur-nx (2026-11-13, #55)
+  const GuestDevice device(device_state);
+  for (u32 i = 0; i < 4; ++i)
+    viewport[i] = device.F32(kClearViewportOffset + i * 4);
+}
+
 void ClearStateLocked(const u8 *device_state, u32 flags, const ClearRect *rect,
                       const float color[4], float depth, u32 stencil) {
+  if (!device_state) {  // (as before: a null device clears nothing; the command list and SyncBound first)
+    ClearTargetsLocked(nullptr, nullptr, flags, rect, color, depth, stencil);
+    return;
+  }
+  u32 targets[kResolveTargetWords];
+  float viewport[4];
+  ReadResolveTargets(device_state, targets);
+  ReadClearViewport(device_state, viewport);
+  ClearTargetsLocked(targets, viewport, flags, rect, color, depth, stencil);
+}
+
+void ClearTargetsLocked(const u32 *target_words, const float *viewport, u32 flags, const ClearRect *rect,
+                        const float color[4], float depth, u32 stencil) {
   auto &s = State();
   if (!Video::EnsureCommandListLocked())
     return;
   SyncBound(s);
-  const GuestDevice device(device_state);
-  if (!device.valid())
+  if (!target_words)  // blur-nx (2026-11-13, #55): was a null device state
     return;
   Targets targets;
-  if (!GatherTargets(device, targets))
+  if (!GatherTargetsWords(target_words, targets))
     return;
 
-  // D3D clamps clears to the viewport (CDevice viewport floats at 0x3170).
+  // D3D clamps clears to the viewport (CDevice viewport floats at 0x3170; blur-nx: 0x3218, kClearViewportOffset).
   ClearRect r = rect ? *rect : ClearRect{0, 0, int32_t(targets.width), int32_t(targets.height)};
-  const float vx = device.F32(0x3218), vy = device.F32(0x321C);  // katamari-nx: 0x3170->0x3160, 0x3174->0x3164 (blur-nx: 0x3160->0x3218, 0x3164->0x321C)
-  const float vw = device.F32(0x3220), vh = device.F32(0x3224);  // katamari-nx: 0x3178->0x3168, 0x317C->0x316C (blur-nx: 0x3168->0x3220, 0x316C->0x3224)
+  const float vx = viewport[0], vy = viewport[1];
+  const float vw = viewport[2], vh = viewport[3];
   if (vw > 0.0f && vh > 0.0f) {
     int32_t vx2 = int32_t(vx + vw), vy2 = int32_t(vy + vh);
     // A target grown for tiling: D3D bounds the viewport by the tile-sized

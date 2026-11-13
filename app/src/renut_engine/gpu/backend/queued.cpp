@@ -158,6 +158,7 @@ struct DrawCapture {
   i32 dest_x = 0, dest_y = 0;
   d3d::TextureFetchConstant dest_format{};
   u32 resolve_targets[kResolveTargetWords] = {};  // blur-nx (2026-11-13, M-35): a resolve's device words (draw.h)
+  float clear_viewport[4] = {};                    // blur-nx (2026-11-13, #55): a clear's viewport (draw.h)
   u32 held = 0;  // bangaio-nx (2026-10-29): the bytes it holds, set when it goes back to the pool (CapturePool::Give)
   // blur-nx (2026-11-10, port 76; its key 215: blur_renut_stack_surface_headers): the headers of the stack surfaces bound
   // as targets when this draw, clear or resolve was captured (render/surfaces.h); count 0 nearly always.
@@ -1138,7 +1139,9 @@ void QueueClear(u32 device_va, u32 flags, const ClearRect *rect, const float col
   if (!device)
     return;
   DrawCapture *args = g_capture_pool.Take();  // banjo-nx (2026-10-19): pooled, see DrawCapture
-  args->state.assign(device, device + d3d::kDeviceSnapshotSize);
+  // blur-nx (2026-11-13, #55): the target words and the viewport the clear reads, not the whole device.
+  ReadResolveTargets(device, args->resolve_targets);
+  ReadClearViewport(device, args->clear_viewport);
   args->has_rect = rect != nullptr;
   args->rect = rect ? *rect : ClearRect{};
   std::memcpy(args->color, color, sizeof(args->color));
@@ -1148,8 +1151,8 @@ void QueueClear(u32 device_va, u32 flags, const ClearRect *rect, const float col
   CaptureStackHeaders(device, args->stack_headers);  // blur-nx (2026-11-10, port 76; its key 215)
   render_thread::Queue([args] {
     SetReplayStackHeaders(args->stack_headers.count ? &args->stack_headers : nullptr);
-    ClearStateLocked(args->state.data(), args->flags, args->has_rect ? &args->rect : nullptr, args->color,
-                     args->depth, args->stencil);
+    ClearTargetsLocked(args->resolve_targets, args->clear_viewport, args->flags,
+                       args->has_rect ? &args->rect : nullptr, args->color, args->depth, args->stencil);
     SetReplayStackHeaders(nullptr);
     g_capture_pool.Give(args, true);
   });
