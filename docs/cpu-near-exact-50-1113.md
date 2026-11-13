@@ -349,3 +349,18 @@ scratchpad's nx_pc_wave2.sh), then the Switch near-exact pipeline.
   on a page Renut reads, **197,750 writing a card**: the check-first leaves almost no card stores in the copies.
 - **#9:** the r1 mirror 383 M calls, 0 differences. **#43:** 76 % memo hits. The copies' guard was off in this race
   (guard_nx2 next). 0 crashes; the race renders right under the narrowing poison.
+
+### Driving (the user: hold RT in the PC races, as the console's hold ZR) and the console training race
+
+- **check_nx4** (19:00-19:08, 480 s, RT held from 125 s; at 300 s the car at 104 mph on lap 3): LZX verify 24,851
+  buffers compared (three times the standing race's: the track streams while driving), **0 differ, 0 fallbacks**;
+  4,419 of them (18 %) decoded before among the last 1,024 (#67's cache matters more in a driven race). The chain
+  117,198 draws verified, 0 differ, 548 bytes a draw. The r1 mirror 348 M calls, 0 differences. 0 crashes.
+- **guard_nx2** (18:29-18:39, not driven): 114 M copy calls compared, **0 differences** (0 NaN-sign cases), but no
+  picture from 120 s on (60 fps throughout): the known intermittent load hang of guard runs (the progress log's open
+  item; a run without the guard and with the LZX native's output in use, lzx_mode1_a, loaded the race: 8,354
+  buffers). guard_nx3 (driven) after the Switch build.
+- **The console training race** (2026-11-13_pgo_train_nx): the first try's eight menu presses stopped one screen
+  short (the race select) and its 240 s drive held ZR on the menu: that stream set aside (menu_only/); the second try
+  (one more confirm, the race loading checked) in the race at 20 s; one stream of 10.2 MB, merged into 537 files, 0
+  mismatch. The final build (switch-pgouse) building.
