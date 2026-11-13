@@ -336,3 +336,16 @@ assumption 353 M calls, 0 differences.
 The near-exact set (BLUR_NEAR_EXACT) is now #1, #17, #41, #5, #19 (#2 and #42 out by the census). One codegen and
 one PC build for the whole wave (main at the second wave's commits), then check_nx3 / guard_nx2 (tools: the
 scratchpad's nx_pc_wave2.sh), then the Switch near-exact pipeline.
+
+### The second wave's PC check race (check_nx3, 2026-11-13 17:55-18:03, 480 s, census on)
+
+- **LZX native (verify mode):** 8,345 buffers compared, **0 differ, 0 fallbacks** (the end-check fix: every buffer
+  now decoded by the native). #67: 683 buffers (8 %, 9.1 MB in) were decoded before among the last 1,024; the kept
+  copies checked against fresh decodes, 0 differ. cpu_lzx_cache_kb=8192 joins the console set.
+- **#51 the Begin*Vertices chain:** every Begin*Vertices draw in the chain (0 whole copies), 591 bytes kept a draw on
+  average (12,888 the whole device; the narrowed copies were 2,799); the deltas verify 106,703 draws checked, **0
+  differ**; 0 draws of another device (Blur draws on one).
+- **#66:** the copies' flushes with a run pending 3.77 G (the old count, 10.35 G, had the empty ones), 166 M of them
+  on a page Renut reads, **197,750 writing a card**: the check-first leaves almost no card stores in the copies.
+- **#9:** the r1 mirror 383 M calls, 0 differences. **#43:** 76 % memo hits. The copies' guard was off in this race
+  (guard_nx2 next). 0 crashes; the race renders right under the narrowing poison.
