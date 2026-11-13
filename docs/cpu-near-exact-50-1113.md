@@ -159,3 +159,30 @@ From the static scans of cycle 3's generated code and cycle 3's PC check race (c
 
 - 2026-11-13 13:55: the user's choice; this doc.
 - 2026-11-13 14:00-15:00: the census code and every switch written (commits on branch cycle1).
+
+## The refilled 50 (2026-11-13 15:15, the user: "with this new information make another table and refill it to 50")
+
+Removed (resolved): #13 and #19 found exact and built; #11, #14 (M-35), #15, #30 (M-38), #38 and #36 done before (the
+console profile shows every game thread allowed on all four cores: mask 0xF); #4, #27, #29, #40 and #48 nothing to
+gain; #3 dropped (round-toward-zero is used); #20 skipped. Estimates moved: #34 up (the backoff's "100 us" sleeps last
+~1 ms), #26 down (the CPU is 87 % busy: a spin takes a core others want), #1, #9, #12 and #41 down.
+
+The 15 new ones:
+
+| # | Idea | Est. ms | Only differs when | Census / check |
+|---|---|---|---|---|
+| 51 | Begin*Vertices captures as deltas against the previous one (a chain of their own) | 0.1-0.3 | never (exact) | the deltas verify mode |
+| 52 | Begin*Vertices vertex data written straight into the capture (no second copy) | 0.1-0.2 | never (exact) | none |
+| 53 | #13 per register group (the masks' 64-byte groups), not a prefix | 0.05-0.1 | never (exact) | the NaN poison |
+| 54 | Whole captures skip the device's never-read ranges (the head 1.1 KB, the private 0.9 KB) | ~0.05 | never (exact) | the deltas' narrow map |
+| 55 | Clears narrowed like resolves (M-35's method on ClearStateLocked) | ~0.05 | never (exact) | read ClearStateLocked |
+| 56 | Lock-free handle lookups (ObjectTable: 11,700 a second, 218 contended) | 0.05-0.2 | never (exact) | a stress test |
+| 57 | Event set and wait fast paths without the mutex (8,000 signals a second with nobody waiting) | 0.1-0.3 | never (exact) | a stress test |
+| 58 | The job queue's scan (sub_8227CC58: 10 queues, ~4,000 failed scans a second) as a native | 0.05-0.2 | never (exact) | the guard |
+| 59 | Audio threads on a core of their own (JQ3, JQ4, the XMA decoder on core 3; the frame chain on 0-2) | 0-1.5 | never (timing) | A/B (switch_thread_cores) |
+| 60 | No yield backoff for the frame-chain threads (the others back off sooner) | 0-1 | never (timing) | M-44's per-thread counts |
+| 61 | Fully open voice filters as a bypass (audio) | 0.1-0.4 | never audible | coefficient census |
+| 62 | The stereo pump takes the two channels directly when Blur mixes stereo (no fold, no gain scan) | ~0.05 | never (the output is the same) | none |
+| 63 | Renut's per-draw counters as single-writer adds (M-39's kind) | ~0.05 | never (exact) | none |
+| 64 | The mixer's row zero-fill folded into its first kernel (a store, not an add) | 0.1-0.3 | +0 against -0 (output the same) | audio dumps |
+| 65 | XMA kick coalescing (M-41) | 0-0.8 | never (timing: decodes up to 0.2 ms later) | M-44's counts, "requests without data" |
