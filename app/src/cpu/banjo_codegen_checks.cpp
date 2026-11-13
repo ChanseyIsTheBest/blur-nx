@@ -80,6 +80,9 @@ struct CasWord {
   uint64_t count = 0;
 };
 std::mutex g_cas_mutex;
+// blur-nx (2026-11-14, RR6's finding in the base: Katamari's PC start stalled ~33 s on this lock): the census only
+// with banjo_diag_runtime_census on (CodegenChecksInit); otherwise every guest compare-and-swap took the lock.
+std::atomic<bool> g_rex_cas_census{false};
 CasWord g_cas_words[65536];
 uint64_t g_cas_full = 0;
 uint32_t CasThreadId() {
@@ -89,6 +92,7 @@ uint32_t CasThreadId() {
 }
 }  // namespace
 extern "C" void RexNxCasCensus(const void* word) {
+  if (!g_rex_cas_census.load(std::memory_order_relaxed)) return;
   const uintptr_t w = reinterpret_cast<uintptr_t>(word);
   const uint32_t thread = CasThreadId();
   std::lock_guard<std::mutex> lock(g_cas_mutex);
@@ -384,6 +388,7 @@ void RuntimeCensusReport(int seconds) {
 namespace banjo {
 
 void CodegenChecksInit() {
+  g_rex_cas_census.store(REXCVAR_GET(banjo_diag_runtime_census), std::memory_order_relaxed);
   g_rex_indirect_census = REXCVAR_GET(banjo_diag_indirect_census).empty() ? 0 : 1;
   if (g_rex_indirect_census) {
     REXLOG_INFO("[census] indirect calls: every tagged call site reports its target; the table goes to {} with each "
