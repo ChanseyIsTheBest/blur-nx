@@ -424,3 +424,17 @@ blocks 218 MB; the audio output refused three buffers (0x1099) just before. Susp
 (libnx __nx_nv_transfermem_size, 8 MB by default; Blur does not raise it). SASRT has never had it (~30 runs). Next
 build (13e0171b): a breadcrumb in the thread's TLS before every dkMemBlockCreate (Atmosphère dumps it) and the live
 block counts in the deko3d log. 0 crashes in the 8 boots of abW since.
+
+### NewOp's set-words scan by changed chunks (13e0171b) verified on the PC (setwords_nx1, 22:10-22:18, driven, 480 s)
+
+banjo_renut_set_words_verify: 29.9 M ops checked against the whole scan, **0 words missed**; "chunks changed without
+a mark" 0 in every 10 s report (the tags complete). The race finished its three laps (results screen by 360 s). On the
+console it takes ~38 % of NewOp (NoteSetWords' two scans: the fetch constants and the tail, ~1.4 ms a frame on JQ0/JQ1)
+down to the changed chunks' blocks.
+
+#77's answer (the nx race profile and log): the Game Master's renderer waits are 0-3 ms a second (Swap's frames-ahead
+limit; no fence or display waits: why #37 did nothing), its job-wait polling 0.5-2 % of its samples: its ~35 % blocked
+is the game's own event waits, most likely on JQ0-2's jobs. sub_8250A7E8 (2.6 ms, physics) has no hot loop: 231
+sampled addresses in its 120 KB copy, none over 1.7 %: guest loads and the denormal check of each float result (these
+four JQ0-2 functions make denormals, CG-13's census). Hand natives gain less there than estimated; codegen-wide ideas
+(#72, a cheaper denormal check) reach it all.
