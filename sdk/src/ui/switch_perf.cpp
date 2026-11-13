@@ -165,7 +165,30 @@ std::atomic<u32> g_num_hitches{0};
 Sample g_samples[kMaxSamples];
 size_t g_sample_count = 0;
 
-std::atomic<u64> g_counters[kCounterCount];
+// blur-nx (2026-11-13, cycle 3, M-39's kind: Blur's docs/cpu-moonshots-50-1113.md): the counters in kCounterShards sets
+// on lines of their own, a thread's set picked by its TLS slot (tpidrro_el0, one register read; libnx's slots are 0x200
+// bytes apart). They were one array every thread added to: the kernel's REX_SYS_COUNT sites alone ~20,000 times a
+// second in Blur's races (ObjectTable lookups 11,700, signals with nobody blocked 8,000), each add an exclusive
+// load/store loop on a line other cores had just written. Two threads that share a set still count right (atomic
+// adds); CounterRead sums the sets. The max counters (RexSwitchPerfMax, 23) are set 0's alone (nothing adds to them).
+constexpr unsigned kCounterShards = 8;
+struct alignas(64) CounterShard {
+  std::atomic<u64> c[kCounterCount];
+};
+CounterShard g_counter_shards[kCounterShards];
+
+inline std::atomic<u64>& CounterOf(unsigned id) {
+  const uintptr_t tls = reinterpret_cast<uintptr_t>(armGetTls());
+  return g_counter_shards[(tls >> 9) % kCounterShards].c[id];
+}
+
+u64 CounterRead(unsigned id) {
+  u64 sum = 0;
+  for (const CounterShard& shard : g_counter_shards) {
+    sum += shard.c[id].load(std::memory_order_relaxed);
+  }
+  return sum;
+}
 
 /*
  * Wrapped libnx calls (see the file header): how many, how much time inside and, where it makes
@@ -438,7 +461,7 @@ void Report(u64 elapsed_ticks, u64 tick_freq, u64 counters_last[kCounterCount],
 
   u64 counters_now[kCounterCount];
   for (unsigned i = 0; i < kCounterCount; ++i) {
-    counters_now[i] = g_counters[i].load(std::memory_order_relaxed);
+    counters_now[i] = CounterRead(i);
   }
 
   // CPU of each thread over the interval, as % of one core.
@@ -515,7 +538,7 @@ void Report(u64 elapsed_ticks, u64 tick_freq, u64 counters_last[kCounterCount],
   // Mix clipping before conversion to 16 bits (21 samples above 1.0, 22 buffers with a peak of 0.98 or
   // more, 23 maximum peak of the interval in ten-thousandths) and the console mode, for the crackling
   // in handheld mode.
-  const u64 audio_peak = g_counters[23].exchange(0, std::memory_order_relaxed);
+  const u64 audio_peak = g_counter_shards[0].c[23].exchange(0, std::memory_order_relaxed);  // a max: set 0's
   std::fprintf(f,
                "     audio: %.0f client blocks mixed, %.0f requests without data, "
                "%.0f/%.0f audout buffers with non-zero PCM, %.0f saturated samples (above 1.0 before clipping), "
@@ -925,7 +948,7 @@ struct TicOverlay {
 
   void Boot(u64 now) {
     tic = now;
-    presented = g_counters[0].load(std::memory_order_relaxed);
+    presented = CounterRead(0);
     // Publish what is known right away: the resolution is valid from the first instant (g_resolution
     // starts at 1280x720 and the game corrects it when choosing the video mode), so the overlay's RES
     // row can show up even before the first frame.
@@ -940,7 +963,7 @@ struct TicOverlay {
       return;
     }
     const double seconds = double(now - tic) / double(freq);
-    const u64 presented_now = g_counters[0].load(std::memory_order_relaxed);
+    const u64 presented_now = CounterRead(0);
     const double fps = seconds > 0.0 ? double(presented_now - presented) / seconds : 0.0;
     media[pos] = fps;
     pos = (pos + 1) % 10;
@@ -1050,7 +1073,7 @@ void ProfilerMain(void*) {
 
   u64 counters_last[kCounterCount]{};
   for (unsigned i = 0; i < kCounterCount; ++i) {
-    counters_last[i] = g_counters[i].load(std::memory_order_relaxed);
+    counters_last[i] = CounterRead(i);
   }
   if (FILE* f = std::fopen(ReportPath().c_str(), "w")) {
     std::fprintf(f, "image 0x%016" PRIx64 ", code up to 0x%016" PRIx64 "\n\n", g_base,
@@ -1340,7 +1363,7 @@ void RexSwitchPerfIntervalSwap(unsigned vblanks) {
 
 void RexSwitchPerfCount(unsigned id) {
   if (id < kCounterCount) {
-    g_counters[id].fetch_add(1, std::memory_order_relaxed);
+    CounterOf(id).fetch_add(1, std::memory_order_relaxed);
   }
   if (id == 0) {
     // Counter 0 is presents. The console overlay clears the "alive" mark and the resolution mark and
@@ -1361,7 +1384,7 @@ void RexSwitchPerfCount(unsigned id) {
  */
 void RexSwitchPerfAdd(unsigned id, u64 value) {
   if (id < kCounterCount) {
-    g_counters[id].fetch_add(value, std::memory_order_relaxed);
+    CounterOf(id).fetch_add(value, std::memory_order_relaxed);
   }
 }
 
@@ -1370,8 +1393,9 @@ void RexSwitchPerfMax(unsigned id, u64 value) {
   if (id >= kCounterCount) {
     return;
   }
-  u64 actual = g_counters[id].load(std::memory_order_relaxed);
-  while (value > actual && !g_counters[id].compare_exchange_weak(actual, value, std::memory_order_relaxed)) {
+  std::atomic<u64>& max = g_counter_shards[0].c[id];  // blur-nx (2026-11-13): set 0's (CounterShard)
+  u64 actual = max.load(std::memory_order_relaxed);
+  while (value > actual && !max.compare_exchange_weak(actual, value, std::memory_order_relaxed)) {
   }
 }
 
