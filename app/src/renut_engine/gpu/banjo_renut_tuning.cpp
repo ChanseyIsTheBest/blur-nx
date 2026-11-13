@@ -8,6 +8,7 @@
 #include "renut_engine/gpu/d3d/d3d_native.h"  // banjo-nx (2026-10-26): g_touch_compare
 #include "renut_engine/gpu/backend/queued.h"
 #include "renut_engine/gpu/render/draw.h"
+#include "renut_engine/perf/frame_stats.h"  // blur-nx (2026-11-13): #37's census
 #include "renut_engine/gpu/render/graphics_options.h"  // banjo-nx (2026-10-28): dynamic resolution's ranges
 #include "renut_engine/gpu/guest/command_buffers.h"  // banjo-nx (2026-10-26): TagsReport
 #include "renut_engine/gpu/banjo_renut_record.h"
@@ -1395,6 +1396,7 @@ void StatsGameFrame() {
   if (::renut::gpu::IsDeko3D())  // banjo-nx (2026-10-17): the deko3d back end
     REXLOG_INFO("[renut] {}", deko3d::Report());
 #endif
+  REXLOG_INFO("[renut] {}", renut::frame_stats::WaitReport());  // blur-nx (2026-11-13, #37's census)
   REXLOG_INFO("[renut] draw kinds: {} depth-only ({} of them without alpha test or alpha to coverage, with a pixel "
               "shader; {} drawn without it, banjo_gpu_depth_only), {} writing nothing, {} writing part of a target's "
               "channels",
