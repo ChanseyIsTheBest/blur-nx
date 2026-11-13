@@ -4065,6 +4065,13 @@ std::string TagsReport() {
          (g_group_pointer_reads
               ? fmt::format("; group pointers verify (banjo_renut_replay_group_pointers_verify): {} reads, {} differ",
                             std::exchange(g_group_pointer_reads, 0), std::exchange(g_group_pointer_differ, 0))
+              : std::string()) +
+         // blur-nx (2026-11-13): banjo_renut_set_words_verify's counts (the ops checked in 10 s, the words missed in all)
+         (g_set_words_checked.load(std::memory_order_relaxed)
+              ? fmt::format("; set words by changed chunks verify (banjo_renut_set_words_verify): {} ops checked, {} "
+                            "words missed since the start",
+                            g_set_words_checked.exchange(0, std::memory_order_relaxed),
+                            g_set_words_missed.load(std::memory_order_relaxed))
               : std::string());
 }
 
