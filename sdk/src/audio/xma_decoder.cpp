@@ -53,6 +53,12 @@ REXCVAR_DECLARE(bool, audio_diag_critical_priority);  // defined in audio_system
 #else
 #define REX_XMA_IN_WORKER_BY_DEFAULT 0
 #endif
+// blur-nx (2026-11-13, #65's exact part): see g_worker_waiting.
+REXCVAR_DEFINE_BOOL(audio_xma_kick_wake_idle_only, false, "Audio",
+                    "XMA (audio_xma_in_worker 1 or 2): a kick signals the XMA Decoder thread only when it waits; a busy "
+                    "worker finds the kick's marks in its next pass (no wake is lost: a handshake on the marks). The "
+                    "same decodes, fewer signals")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_INT32(audio_xma_in_worker, REX_XMA_IN_WORKER_BY_DEFAULT, "Audio",
                      "Who decodes the XMA when a kick arrives (XMAEnableContext): 0 = the requesting thread, "
                      "as before; 1 = the XMA Decoder thread, which on the Switch runs at 0x2B and is not preempted by "
@@ -267,6 +273,21 @@ constexpr uint32_t kPendingWords = 10;  // 320 contexts / 32
 std::atomic<uint32_t> g_pending[kPendingWords];
 std::atomic<int64_t> g_pending_from_ns{0};
 
+// blur-nx (2026-11-13, #65 of Blur's docs/cpu-near-exact-50-1113.md, its exact part): the worker is about to wait (or
+// waits) on work_event_. A kick marks its contexts, then signals the event only when this is set
+// (audio_xma_kick_wake_idle_only): a worker that is not waiting finds the marks in its next pass. No wake is lost: the
+// worker sets this, then looks at the marks again before it waits; the kick sets its marks, then reads this; all four
+// sequentially consistent, so at least one of them sees the other's write. Blur's console: 6,500 kicks a second,
+// 27 ms a second on the kicking threads, mostly the event's signal.
+std::atomic<bool> g_worker_waiting{false};
+std::atomic<uint64_t> g_kick_wakes_skipped{0};  // the [xma] report's count
+
+bool AnyPending() {
+  for (uint32_t word = 0; word < kPendingWords; ++word)
+    if (g_pending[word].load(std::memory_order_seq_cst)) return true;
+  return false;
+}
+
 // blur-nx (2026-11-13, M-37 of docs/cpu-moonshots-50-1113.md): the measurements' clock. On the Switch the system tick
 // (cntpct, 19.2 MHz; armTicksToNs is a multiply and a division by a constant), where steady_clock::now() went through
 // clock_gettime per kick, per lock and per context a pass (0.15 ms a frame of samples, all at its entry). The same
@@ -281,7 +302,8 @@ int64_t NowNs() {
 }
 
 void MarkPending(uint32_t context_id) {
-  g_pending[context_id / 32].fetch_or(1u << (context_id % 32), std::memory_order_release);
+  // blur-nx (2026-11-13, #65): sequentially consistent, for g_worker_waiting's handshake (it was release).
+  g_pending[context_id / 32].fetch_or(1u << (context_id % 32), std::memory_order_seq_cst);
 }
 
 // Returns true if this thread takes the context; only one can.
@@ -343,11 +365,12 @@ void ReportXma() {
               double(now - last) / 1000.0, kicks, kick_contexts, double(kick_ns) / 1e6, double(kick_max) / 1e6,
               locks, lock_contexts, double(lock_ns) / 1e6, double(lock_max) / 1e6);
   REXLOG_INFO("[xma] split (mode {}): worker {} contexts in {:.1f} ms (max {:.2f} ms), fallback of the "
-              "kick thread {}; from the kick to the data ready mean {:.0f} us and max {:.2f} ms ({} measurements)",
+              "kick thread {}; from the kick to the data ready mean {:.0f} us and max {:.2f} ms ({} measurements); "
+              "kick wakes skipped (the worker not waiting: audio_xma_kick_wake_idle_only) {}",
               REXCVAR_GET(audio_xma_in_worker), of_the_worker, double(work_ns) / 1e6,
               double(work_max) / 1e6, of_the_backup,
               latency_n ? double(latency_ns) / double(latency_n) / 1e3 : 0.0, double(latency_max) / 1e6,
-              latency_n);
+              latency_n, g_kick_wakes_skipped.exchange(0, std::memory_order_relaxed));
 }
 
 }  // namespace
@@ -433,7 +456,14 @@ void XmaDecoder::WorkerThreadMain() {
       continue;
     }
     // No work done this iteration, block until signaled.
+    // blur-nx (2026-11-13, #65): announce the wait, then look at the marks once more (g_worker_waiting).
+    g_worker_waiting.store(true, std::memory_order_seq_cst);
+    if (AnyPending()) {
+      g_worker_waiting.store(false, std::memory_order_relaxed);
+      continue;
+    }
     rex::thread::Wait(work_event_.get(), false);
+    g_worker_waiting.store(false, std::memory_order_relaxed);
   }
 }
 
@@ -589,7 +619,13 @@ void XmaDecoder::WriteRegister(uint32_t addr, uint32_t value) {
         }
       }
       g_pending_from_ns.store(NowNs(), std::memory_order_release);
-      work_event_->Set();
+      // blur-nx (2026-11-13, #65): a worker that is not waiting finds the marks itself (g_worker_waiting).
+      static const bool idle_only = REXCVAR_GET(audio_xma_kick_wake_idle_only);
+      if (!idle_only || g_worker_waiting.load(std::memory_order_seq_cst)) {
+        work_event_->Set();
+      } else {
+        g_kick_wakes_skipped.fetch_add(1, std::memory_order_relaxed);
+      }
     }
     for (int i = 0; kicked_value && i < 32; ++i, kicked_value >>= 1) {
       if (kicked_value & 1) {
