@@ -68,6 +68,66 @@ volatile unsigned long long g_rex_diet_census[6] = {};
 volatile unsigned long long g_rex_nx_census[32] = {};
 }
 
+#if !defined(__SWITCH__)
+// blur-nx (2026-11-13, #32 of docs/cpu-near-exact-50-1113.md): the words the guest's compare-and-swaps write, and
+// whether more than one thread ever does (a word only one thread uses could take plain operations). An open-addressing
+// table of 65,536 words under a lock (the PC census only: tools/guest_cas.py's RexGuestCas calls it).
+namespace {
+struct CasWord {
+  uintptr_t word = 0;
+  uint32_t thread = 0;
+  bool shared = false;
+  uint64_t count = 0;
+};
+std::mutex g_cas_mutex;
+CasWord g_cas_words[65536];
+uint64_t g_cas_full = 0;
+uint32_t CasThreadId() {
+  static std::atomic<uint32_t> next{1};
+  thread_local uint32_t id = next.fetch_add(1, std::memory_order_relaxed);
+  return id;
+}
+}  // namespace
+extern "C" void RexNxCasCensus(const void* word) {
+  const uintptr_t w = reinterpret_cast<uintptr_t>(word);
+  const uint32_t thread = CasThreadId();
+  std::lock_guard<std::mutex> lock(g_cas_mutex);
+  size_t i = size_t((w >> 2) * 0x9E3779B97F4A7C15ull >> 48);
+  for (size_t probes = 0; probes < 65536; ++probes, i = (i + 1) & 65535) {
+    CasWord& c = g_cas_words[i];
+    if (c.word == w) {
+      if (c.thread != thread) c.shared = true;
+      ++c.count;
+      return;
+    }
+    if (c.word == 0) {
+      c.word = w;
+      c.thread = thread;
+      c.count = 1;
+      return;
+    }
+  }
+  ++g_cas_full;
+}
+static void CasCensusReport() {
+  std::lock_guard<std::mutex> lock(g_cas_mutex);
+  uint64_t words = 0, single = 0, single_count = 0, shared_count = 0;
+  for (const CasWord& c : g_cas_words) {
+    if (!c.word) continue;
+    ++words;
+    if (c.shared) {
+      shared_count += c.count;
+    } else {
+      ++single;
+      single_count += c.count;
+    }
+  }
+  REXLOG_INFO("[census] near-exact #32 (cumulative): {} words written by guest compare-and-swaps, {} of them by one "
+              "thread only ({} of {} compare-and-swaps; {} not tabled: the table full)",
+              words, single, single_count, single_count + shared_count, g_cas_full);
+}
+#endif
+
 #if defined(_WIN32)
 extern "C" __declspec(dllimport) void* __stdcall GetModuleHandleW(const wchar_t* name);
 static uint64_t CensusImageBase() { return reinterpret_cast<uint64_t>(GetModuleHandleW(nullptr)); }
@@ -242,6 +302,9 @@ void RuntimeCensusReport(int seconds) {
       REXLOG_INFO("[census] near-exact #49 (cumulative): resampling blocks {}, of them 256 samples at a ratio other "
                   "than 1 (the copy would newly take them) {}",
                   nx[27], nx[28]);
+#if !defined(__SWITCH__)
+      CasCensusReport();  // blur-nx (2026-11-13, #32)
+#endif
     }
     // blur-nx (2026-11-12, codegen-ideas-3 CG-13's census): what one flush mode for all code would change. The
     // any-mode cold paths above are scalar results in VMX code that met a denormal; the FPU-mode regions are the plain
