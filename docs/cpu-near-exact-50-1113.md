@@ -409,3 +409,18 @@ The nx race profile (abN5_1, cpu_table2): cores 0-2 81 % busy, core 3 84 %; 117 
 **audio (JQ Workers 3 and 4) 36 ms** (the node loop sub_8230AD50 5.0 ms, sub_822BEDD0 2.3, sub_822E17C8 2.2,
 sub_8230EDE0 2.1, memset 1.3); Renut's NewOp 3.75 ms on JQ0 / JQ1; the LZX native (DecodeBuffer) 1.2 ms. #59's
 'cores' variant (both audio workers on core 3 alone) cannot hold ~40 ms a frame: 'cores2' gives them cores 2-3.
+
+### #34 retested (abW, 2026-11-13 21:22-22:19; the user: "Retest this please") and left off ("Leave 34 off")
+
+All its races: without 27.39, 27.68, 27.82, 27.07, 28.63, 27.17, 27.67 (27.63, 7 races); with 28.80, 27.29, 27.74,
+27.75, 27.25, 27.57, 27.64, 27.88 (27.74, 8 races): +0.4 %, inside the race-to-race spread (about ±0.8 fps).
+switch_yield_wake_on_progress stays off. abK2 also: #59 'cores2' (audio workers on cores 2-3) 27.26 / 27.34: worse.
+
+**The crash of 21:16 (abK2 race 6, nx, the race loading):** Atmosphère's report (out/console_runs/2026-11-13_abK2_6_nx_nx/
+atmosphere_crash.log): User Break, result 0x367; the render thread's resolve (QueueResolve -> ResolveTargetsLocked ->
+ResolveTarget -> texture Create -> plume makeBlock -> dkMemBlockCreate -> dk::detail::RaiseError -> abort) on a
+GPU-region block (plume's storage: the failure was deko3d mapping it). Heap 1,796 MB free a second before; deko3d
+blocks 218 MB; the audio output refused three buffers (0x1099) just before. Suspected: nvservices' transfer memory
+(libnx __nx_nv_transfermem_size, 8 MB by default; Blur does not raise it). SASRT has never had it (~30 runs). Next
+build (13e0171b): a breadcrumb in the thread's TLS before every dkMemBlockCreate (Atmosphère dumps it) and the live
+block counts in the deko3d log. 0 crashes in the 8 boots of abW since.
