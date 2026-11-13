@@ -37,6 +37,11 @@ SHIPPED = {
     'banjo_renut_render_height_handheld': '720',
     'banjo_renut_render_height_docked': '720',
     'banjo_renut_dynamic_resolution': 'false',
+    # blur-nx (2026-11-14 02:44, docs/cpu-near-exact-50-1113.md): M-38 off. Blur's XEX never imports KeTimeStampBundle,
+    # yet the game reads its tick count (a runtime lookup), so with the timer started only on import the count froze
+    # and the boot stalled on a black screen unless a button was pressed (console bisect: 8 of 8 boots hung on, 2 of 2
+    # fine off). The timer runs from the start, as before M-38.
+    'kernel_timestamp_timer_on_import': 'false',
     # blur-nx (2026-11-12, the user: "can we please turn off x4 MSAA change it to SMAA please"): the game's MSAA off
     # (one sample per pixel: less GPU time and bandwidth), SMAA 1x on instead (banjo_renut_smaa, below).
     'disable_msaa': "false  # blur-nx: msaa_level decides (true forces no MSAA whatever it says); every level renders right since 2026-11-13",

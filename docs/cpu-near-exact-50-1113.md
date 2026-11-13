@@ -455,3 +455,29 @@ Both of tonight's incidents (the 21:16 dkMemBlockCreate failure, the 23:20 hang)
 runs of launches without a reboot (about 19 and 30), with SaltyNX attaching at every launch and an overlay running:
 the reading for now (SASRT's too) is something system-wide wearing out across launches. one_race.sh now waits 10 s
 before a launch. The NewOp A/B goes on after the reboot (abX2).
+
+## The boot hang found: M-38 (2026-11-14 02:00-02:45)
+
+**Symptom:** the nx builds (both near-exact rounds; nx, nx2, nx3) stalled at boot on a black screen at 60 fps when
+nobody pressed a button: the 00:02 hang and, on nx3 with the stall watchdog's guest waits, 8 boots of 8. The scripted
+A/B races never showed it: they press PLUS and confirm about 28 s after the launch, which skips the stalled intro.
+c2b (before both rounds) booted 6 of 6.
+
+**What the dumps showed (stall_watch_switch.cpp's guest waits, quiet trigger):** no frame yet; file reads stopped at
+exactly 733 (125.9 MB) every time; LoadingThread and LoadingScreenThread waiting on events never set since boot, the
+job workers and the file worker idle, ResourceLoading polling, the Game Master looping on input and sleeps
+(sub_825675C0). No wait whose object was set after it began: not a host lost wakeup, a signal never sent.
+
+**Bisect on the console (2 boots each, boot only):** the shipping toml (all nx run-time keys off, LZX native off): hung;
+the six default-on nx keys off: fine; the three SDK ones off: fine; audio_stereo_direct off alone: hung;
+**kernel_timestamp_timer_on_import off alone: fine**; clock_nap_clamp off with M-38 on: hung (so not the clamp).
+
+**Cause:** M-38 starts the KeTimeStampBundle refresh timer only when an XEX imports the bundle. Blur's import table
+never names it, yet the game reads the bundle's tick count (a run-time lookup: XexGetProcedureAddress ->
+KernelModule::GetProcAddressByOrdinal, which returned the variable without the import hook), so the count stayed at
+its boot value and the intro's timed wait never ended. **M-38 was not exact.**
+
+**Fix:** Blur's tomls and built-in defaults set kernel_timestamp_timer_on_import = false (the timer from the start, as
+before M-38); the SDK now calls the import hook from GetProcAddressByOrdinal for variables too, with a log line naming
+the caller (the next build shows the route). The base had already made the key default false (RR6's port 139, for the
+nap clamp's sake); SASRT and RR6 were told.

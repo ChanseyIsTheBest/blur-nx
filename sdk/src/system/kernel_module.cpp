@@ -12,6 +12,7 @@
 #include <rex/logging.h>
 #include <rex/ppc/function.h>
 #include <rex/runtime.h>
+#include <rex/system/export_resolver.h>
 #include <rex/system/kernel_module.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/function_dispatcher.h>
@@ -46,6 +47,14 @@ uint32_t KernelModule::GetProcAddressByOrdinal(uint16_t ordinal, uint32_t caller
 
   if (export_entry->type == rex::runtime::Export::Type::kVariable) {
     // Variables have guest addresses we can return directly
+    // blur-nx (2026-11-14, M-38's fix): a variable looked up at run time (XexGetProcedureAddress) is as good as an
+    // import: the hook that starts KeTimeStampBundle's refresh timer must see it too. Blur reads the bundle this way
+    // (no import record names it), and with the timer started only on import its tick count froze and the boot hung.
+    if (runtime::g_variable_import_hook) {
+      REXSYS_INFO("GetProcAddressByOrdinal: variable {} ({:04X}) of {} looked up at run time (caller {:08X})",
+                  export_entry->name, ordinal, name_, caller_address);
+      runtime::g_variable_import_hook(name_, ordinal);
+    }
     REXSYS_DEBUG("GetProcAddressByOrdinal: {} ({:04X}) -> variable at {:08X}", export_entry->name,
                  ordinal, export_entry->variable_ptr);
     return export_entry->variable_ptr;
