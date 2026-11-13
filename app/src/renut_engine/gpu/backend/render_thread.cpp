@@ -29,7 +29,8 @@
 // rewrite data before the render thread reads it. Ryujinx rarely shows it; a slow GPU shows it constantly.
 REXCVAR_DEFINE_INT32(rr6_frames_ahead, 1, "Banjo/Enhancements",
                      "How many frames the game may run ahead of Renut's render thread. 0: the game waits at its Swap "
-                     "until the render thread has done the frame. 1: one frame ahead")
+                     "until the render thread has done the frame. 1: one frame ahead. 2 (blur-nx #37, near-exact): two "
+                     "frames ahead (the game may rewrite data the render thread has yet to read)")
     .range(0, 1)
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_INT32(rr6_diag_render_delay_ms, 0, "Banjo/Enhancements",
