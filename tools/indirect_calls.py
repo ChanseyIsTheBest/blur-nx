@@ -58,9 +58,10 @@ MACROS = MARKER + '''
 // guest code byte (20 MB for Blur), so a virtual call's table load usually misses (0.4-0.5 % of all console samples,
 // 1.6-3.3 % of the audio worker's). The site keeps its last target and function in one 64-bit word (~target in the
 // high half, and an empty word never taken for target 0xFFFFFFFF; the function as a 32-bit offset from RexSiteAnchor),
-// read and written
-// whole, so it is never torn. A miss takes the table path, fills an empty word, and replaces a full one on 1 miss in 16
-// (a polymorphic site does not bounce its line between cores). Memory::SetFunction clears every word after a table
+// read and written whole, so it is never torn. A miss takes the table path, fills an empty word, and replaces a full
+// one on 1 miss in 16 (a polymorphic site does not bounce its line between cores; the 1 in 16 from the system counter,
+// cntpct_el0, which Horizon lets EL0 read: the 2026-11-17 instrumented build read cntvct_el0 and stopped at its first
+// miss). Memory::SetFunction clears every word after a table
 // write (sdk/src/system/xmemory.cpp: the section rex_site_cache, only when a word was filled since). The table path
 // and the result are the table's: exact. REX_SITE_CACHE_OFF: the plain lookup.
 extern "C" unsigned char g_rex_site_cache_dirty;
@@ -71,7 +72,7 @@ extern "C" unsigned char g_rex_site_cache_dirty;
   if (f) [[likely]] {
     const intptr_t off = (intptr_t)f - (intptr_t)&RexSiteAnchor;
     uint64_t now;
-    __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(now));
+    __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(now));  // not cntvct_el0: Horizon traps it at EL0
     if (off == (intptr_t)(int32_t)off && t != 0xFFFFFFFFu &&
         (__atomic_load_n(slot, __ATOMIC_RELAXED) == 0 || (now & 15) == 0)) {
       __atomic_store_n(slot, (uint64_t(~t) << 32) | uint32_t(int32_t(off)), __ATOMIC_RELAXED);
