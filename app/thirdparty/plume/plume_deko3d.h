@@ -229,6 +229,10 @@ namespace plume {
         uint32_t txqMask = 0;
         // vivapinata-nx (2026-11-03): a vertex shader that has the kill's constant 914 (tools/deko3d_glsl_opt.py vskill).
         bool writesVertexKill = false;
+        // blur-nx (2026-11-12): a vertex or geometry shader whose text names gl_ClipDistance (true for the other stages).
+        // One that does not writes no clip distance in any variant, and its pipelines draw with the clip slot off
+        // (Deko3DGraphicsPipeline::noUserClip).
+        bool writesClipDistance = true;
     };
 
     struct Deko3DShader : RenderShader {
@@ -880,6 +884,11 @@ namespace plume {
 
     std::unique_ptr<RenderInterface> CreateDeko3DInterface();
 
+    // vivapinata-nx (2026-11-12, diagnostic: renut_gpu_profile_counters): a hardware counter (a DkCounter) reported into
+    // a query pool's entry 'index' (16 bytes an entry; the report of a counter is its 64-bit value, then the time), and
+    // the pool's words as the GPU wrote them.
+    void Deko3DReportCounter(RenderCommandList *commandList, const RenderQueryPool *pool, uint32_t index, uint32_t counter);
+    const volatile uint64_t *Deko3DQueryPoolWords(const RenderQueryPool *pool);
     // banjo-nx: the blend constant on a deko3d command list (false when the list is not one).
     bool Deko3DSetBlendConstant(RenderCommandList *commandList, const float rgba[4]);
     // banjo-nx: the memexport buffer of the next draws (storage binding 14 of the graphics stages).

@@ -13,6 +13,7 @@
 
 #include "renut_engine/gpu/d3d/d3d.h"
 #include "renut_engine/gpu/guest/guest_records.h"
+#include "renut_engine/gpu/render/fetch_filters.h"  // port 145
 #include "renut_engine/gpu/render/vertex_format.h"
 #include "shader_cache.h"
 
@@ -108,6 +109,11 @@ struct ShaderRecord {
 
   std::mutex host_mutex;  // building host
 
+  // renut-ultimate (2026-11-16, port 145; tw2de_nx's): its texture fetches' own filters (render/fetch_filters.h),
+  // read from the microcode when made; used with banjo_renut_fetch_filters (off by default). At the end: the fields
+  // every draw reads stay in the record's first lines.
+  FetchFilterOverrides fetch_filters;
+
   bool pixel() const { return kind == RecordKind::PixelShader; }
 };
 
@@ -131,6 +137,16 @@ void PrefetchShaderBehind(u32 shader_va);
 // Drops the host side of an in-place guest shader object, if it has one.
 // Requires State().mutex.
 void ReleaseGuestShaderLocked(u32 shader_va);
+
+// blur-nx (2026-11-13, #13's fix, banjo_renut_deferred_narrow): the cache entry of the in-place shader of 'kind' last
+// registered at 'shader_va' (XGRegisterVertexShader/PixelShader), for a capture made on a game thread (the render
+// thread's own map, FindShaderLocked's, is not read there). False when no such shader is registered there; '*entry' is
+// null when the shader cache lacks it. ForgetInPlaceShader: the object's D3DResource_Destroy. Either is called after
+// the render-thread item that makes the same change to the render thread's map is queued, so a capture that sees the
+// change is queued after that item.
+bool InPlaceShaderEntry(u32 shader_va, RecordKind kind, const ShaderCacheEntry **entry);
+void ForgetInPlaceShader(u32 shader_va);
+void NoteInPlaceShader(u32 shader_va, RecordKind kind, const ShaderCacheEntry *entry);  // RegisterGuestShader's
 
 // Fills a declaration's host input layout and layout hash from its elements.
 void BuildDeclarationLayout(VertexDeclarationRecord &declaration);

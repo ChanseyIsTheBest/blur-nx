@@ -17,6 +17,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>  // blur-nx (2026-11-13, #13's fix)
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -286,6 +287,37 @@ void PrefetchShaderBehind(u32 shader_va) {
     __builtin_prefetch(d + 64);
     __builtin_prefetch(d + 128);
   }
+}
+
+// blur-nx (2026-11-13, #13's fix, banjo_renut_deferred_narrow): g_guest_shaders as the game threads changed it (every
+// shader of Blur's is an in-place one: a narrowed capture looked in the record registry alone, and none was narrowed).
+// The render thread's item for the same change is queued first (RegisterGuestShader, D3DResource_Destroy_hook).
+namespace {
+struct InPlaceShader {
+  RecordKind kind;
+  const ShaderCacheEntry *entry;
+};
+std::shared_mutex g_in_place_mutex;
+std::unordered_map<u32, InPlaceShader> g_in_place;
+}  // namespace
+
+bool InPlaceShaderEntry(u32 shader_va, RecordKind kind, const ShaderCacheEntry **entry) {
+  std::shared_lock lock(g_in_place_mutex);
+  const auto it = g_in_place.find(shader_va);
+  if (it == g_in_place.end() || it->second.kind != kind)
+    return false;
+  *entry = it->second.entry;
+  return true;
+}
+
+void ForgetInPlaceShader(u32 shader_va) {
+  std::unique_lock lock(g_in_place_mutex);
+  g_in_place.erase(shader_va);
+}
+
+void NoteInPlaceShader(u32 shader_va, RecordKind kind, const ShaderCacheEntry *entry) {
+  std::unique_lock lock(g_in_place_mutex);
+  g_in_place[shader_va] = {kind, entry};
 }
 
 ShaderRecord *FindShaderLocked(u32 shader_va, RecordKind kind) {
@@ -620,6 +652,7 @@ u32 CreateShaderRecord(const be_u32 *function, bool pixel) {
   shader->entry = FindShaderEntry(shader->hash);
   shader->fetch_3d_mask = Fetch3DMask(container);  // kameo-nx (2026-11-03)
   shader->export_only = !pixel && ContainerIsExportOnly(container);  // vivapinata-nx (2026-11-03)
+  shader->fetch_filters = ScanFetchFilters(container);  // port 145 (tw2de_nx's, 2026-10-31)
   if (!shader->entry)
     CaptureMissingShader(container, pixel, shader->hash);
   NoteShaderSortKey(shader->self_va, shader->hash, ShaderSortableByHash(shader->hash, shader->entry, pixel));  // 2026-10-27
@@ -661,7 +694,9 @@ void RegisterGuestShader(u32 shader_va, u32 physical_va, bool pixel) {
   NoteShaderSortKey(shader_va, hash, ShaderSortableByHash(hash, sort_entry, pixel));  // banjo-nx (2026-10-27)
 
   // In order with the draws that use it (render thread).
-  render_thread::Queue([shader_va, pixel, hash, kind, fetch_3d_mask = Fetch3DMask(container.data()), export_only] {
+  const FetchFilterOverrides fetch_filters = ScanFetchFilters(container.data());  // port 145 (tw2de_nx's)
+  render_thread::Queue([shader_va, pixel, hash, kind, fetch_3d_mask = Fetch3DMask(container.data()), export_only,
+                        fetch_filters] {
     auto &shader = g_guest_shaders[shader_va];
     if (shader && shader->hash == hash && shader->kind == kind)
       return;
@@ -680,8 +715,10 @@ void RegisterGuestShader(u32 shader_va, u32 physical_va, bool pixel) {
     shader->entry = FindShaderEntry(hash);
     shader->fetch_3d_mask = fetch_3d_mask;  // kameo-nx (2026-11-03)
     shader->export_only = export_only;  // vivapinata-nx (2026-11-03)
+    shader->fetch_filters = fetch_filters;  // port 145
     PipelineShaderLoaded(shader->entry);
   });
+  NoteInPlaceShader(shader_va, kind, sort_entry);  // blur-nx (2026-11-13, #13's fix): after the item above is queued
 }
 
 // void XGRegisterVertexShader(D3DVertexShader *pShader, void *pPhysicalPart) [0x826376C8]

@@ -176,6 +176,9 @@ extern uint64_t g_ab_draws;
 void CountExactCheck(uint64_t bytes, bool stale, bool repeat_in_frame);
 void CountKick();        // a KickOff reached the render thread (FlushVertexFillsLocked)
 void CountDrawKind(bool depth_only, bool depth_only_plain, bool writes_nothing, bool partial_mask);  // package 28
+// blur-nx (2026-11-13, #47 of Blur's docs/cpu-near-exact-50-1113.md): a draw's shaders that index their float
+// constants (their masks hold every register: all of them uploaded), and the registers the others upload.
+void CountConstantUse(bool vs_indexed, bool ps_indexed, uint32_t registers);
 void CountExactMemoHit(uint64_t bytes);  // a check answered by the interval memo (no bytes read)
 void CountFenceQuery();  // the game asked whether a fence is done (BlockOnFence / IsFencePending)
 void CountLateStale(uint64_t copies);
@@ -256,6 +259,10 @@ void CountDepthOnly();
 // banjo_renut_record_worker's half of the in-run A/B (target 14), read when a command list is opened.
 bool RecordWorkerAbOn();
 void CountDepthWords(bool viewed);
+// vivapinata-nx (2026-11-12, vivapinata_depth_resolve_skip_unread, A/B 156; port 115): left out (0), drawn late from an
+// unchanged source (1), drawn late from newer content or not at all (2).
+bool DepthResolveSkipUnreadOn();
+void CountDepthResolveSkip(int what);
 // banjo_deko3d_draw_resolves (2026-10-18): colour resolves drawn instead of copied on deko3d.
 [[gnu::always_inline]] inline bool DrawResolvesOn() { return Latch().draw_resolves; }
 // 2026-10-18, a census: binds of a depth resolve's float (R32F) target, not its words.

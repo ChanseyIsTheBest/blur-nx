@@ -10,6 +10,7 @@
  */
 
 #include <rex/cvar.h>
+#include <rex/kernel/xboxkrnl/threading.h>  // port 143: XamSwapDisc's event
 #include <rex/kernel/xam/module.h>
 #include <rex/kernel/xam/private.h>
 #include <rex/logging.h>
@@ -30,6 +31,12 @@
 #include <fmt/xchar.h>
 
 REXCVAR_DECLARE(uint32_t, user_language);  // xam_user.cpp
+// renut-ultimate (2026-11-16, port 143; tw2de_nx's, off by default).
+REXCVAR_DEFINE_BOOL(xam_swap_disc_signal, false, "Kernel",
+                    "tw2de_nx (exact): XamSwapDisc (with no title handler, SetSwapDiscHandler) sets the completion "
+                    "event the game passes and waits on: every disc's files are in the one game folder, so the swap is "
+                    "done at once. FINAL FANTASY XIII waited for ever at the end of chapter 4 (insert disc 2). false: "
+                    "success returned and the event left unset, as before");
 
 namespace rex {
 namespace kernel {
@@ -315,9 +322,19 @@ u32 XamLoaderGetDvdTrayState_entry(mapped_u32 out_state) {
   return X_STATUS_SUCCESS;
 }
 
-u32 XamSwapDisc_entry(u32 disc_number) {
+// XamSwapDisc(disc, the completion event, the dialog's texts). Port 143 (tw2de_nx, xam_swap_disc_signal): the event
+// set, as the swap is done; without it a multi-disc game waits on it for ever.
+u32 XamSwapDisc_entry(u32 disc_number, ppc_ptr_t<X_KEVENT> completion, u32 texts) {
+  (void)texts;
   // Stub for multi-disc games. Single-disc games (like Blue Dragon's reblue test)
   // don't need this, but the game may look it up dynamically via XexGetProcedureAddress.
+  static const bool signal = REXCVAR_GET(xam_swap_disc_signal);
+  if (signal && completion) {
+    REXKRNL_INFO("XamSwapDisc({}): every disc is the game folder, the swap is done (xam_swap_disc_signal)",
+                 (uint32_t)disc_number);
+    rex::kernel::xboxkrnl::xeKeSetEvent(completion, 1, 0);
+    return X_ERROR_SUCCESS;
+  }
   REXKRNL_DEBUG("XamSwapDisc({}) - stub, returning success", (uint32_t)disc_number);
   return X_STATUS_SUCCESS;
 }

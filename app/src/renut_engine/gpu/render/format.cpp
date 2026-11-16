@@ -9,7 +9,25 @@
 
 #include <cstring>
 
+#include <rex/cvar.h>
+
+// renut-ultimate (2026-11-16, port 145; tw2de_nx's tw2de_deko3d_native_formats of 2026-10-25, ON at the user's word:
+// "port the speed ups as on by default").
+REXCVAR_DEFINE_BOOL(banjo_deko3d_native_16bit, true, "Banjo/Renut",
+                    "tw2de_nx (exact): the game's unsigned 5:6:5, 1:5:5:5 and 4:4:4:4 textures in the GPU's own 16-bit "
+                    "formats (deko3d RGB565, RGB5A1, RGBA4: the same bit layout), the guest's words copied. false: "
+                    "expanded on the CPU to RGBA8 at upload, twice the memory and the GPU's reads, as before. deko3d only")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 namespace renut::gpu {
+
+namespace {
+// Port 148: banjo_deko3d_native_16bit, read once.
+bool Native16Bit() {
+  static const bool on = IsDeko3D() && REXCVAR_GET(banjo_deko3d_native_16bit);
+  return on;
+}
+}  // namespace
 
 // sasrt-nx (2026-11-11, port 75; its formats batch, row 38 and the diagnostic): the 32-bit float formats the Xenos
 // cannot filter (renut_float32_point_filter), and the formats' names for renut_diag_formats' lines.
@@ -226,12 +244,14 @@ TextureFormatInfo GetTextureFormatInfo(GpuTextureFormat format, bool is_signed) 
   case T::Fmt8_8_8_8_A:
   case T::Fmt8_8_8_8_As16_16_16_16:
     return plain(is_signed ? F::R8G8B8A8_SNORM : F::R8G8B8A8_UNORM, 4);
+  // renut-ultimate (2026-11-16, port 145; tw2de_nx's, banjo_deko3d_native_16bit): the unsigned ones as the GPU's own
+  // formats, the guest's words copied (the signed ones as before: the expansion makes them unsigned too).
   case T::Fmt1_5_5_5:
-    return expand(F::R8G8B8A8_UNORM, C::R5G5B5A1, 2, 4);
+    return Native16Bit() && !is_signed ? plain(F::R5G5B5A1_UNORM, 2) : expand(F::R8G8B8A8_UNORM, C::R5G5B5A1, 2, 4);
   case T::Fmt5_6_5:
-    return expand(F::R8G8B8A8_UNORM, C::R5G6B5, 2, 4);
+    return Native16Bit() && !is_signed ? plain(F::R5G6B5_UNORM, 2) : expand(F::R8G8B8A8_UNORM, C::R5G6B5, 2, 4);
   case T::Fmt4_4_4_4:
-    return expand(F::R8G8B8A8_UNORM, C::R4G4B4A4, 2, 4);
+    return Native16Bit() && !is_signed ? plain(F::R4G4B4A4_UNORM, 2) : expand(F::R8G8B8A8_UNORM, C::R4G4B4A4, 2, 4);
   // sasrt-nx (2026-11-11, port 75; its formats batch, rows 6, 8, 10, 74, 93: renut_format_10bit_exact): 2_10_10_10
   // copied as it is into 10:10:10:2 (X in bits 0-9 is the host's R, as the expansion below read it); the
   // _AS_16_16_16_16 form (filtered at 16 bits on the console) keeps 16.

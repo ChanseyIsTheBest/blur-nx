@@ -112,6 +112,9 @@ REXCVAR_DEFINE_BOOL(sasrt_gpu_readback_compute, true, "SASRT/GPU",
                     "pixels")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+// renut-ultimate (2026-11-16, port 145): kept OFF although tw2de_nx runs it on (its console: prologue 23.7-23.8 ->
+// 24.9-25.2 fps, GPU 40.4 -> 35.8-36.8 ms a frame): vivapinata-nx measured it slower (19.0 -> 17.7 fps) and sasrt-nx no
+// better (docs/off-by-default.md, section 3a). Game by game.
 REXCVAR_DEFINE_BOOL(sasrt_gpu_tiled_cache, false, "SASRT/GPU",
                     "deko3d renderer (GPU round of 2026-11-08, item 12, A/B 102; OFF by default until a console run says "
                     "the picture is the same: Ryujinx does not emulate it): Maxwell's tiled caching (binning: the GPU "

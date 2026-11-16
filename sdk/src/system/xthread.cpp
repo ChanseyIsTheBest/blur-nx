@@ -53,9 +53,13 @@ REXCVAR_DEFINE_BOOL(ignore_thread_affinities, true, "Kernel",
 // it is heap (SASRT's 31 guest threads at once held ~500 MB). The profiler's thread lines give each thread's deepest
 // sampled stack (switch_profile_stacks) to choose from: measure a game before lowering it. threading_posix.cpp pools
 // stacks of this size and more.
-REXCVAR_DEFINE_INT32(switch_guest_stack_mb, 16, "Threading",
-                     "The host stack of each guest thread, in MB (16 as Xenia; heap on the Switch). Lower only after "
-                     "the profiler's deepest sampled stack says so, with a wide margin")
+// renut-ultimate (2026-11-12, port 112, the user's choice: "8mb is meant to be a good trade off for the base"): 8 MB by
+// default, half the heap a guest thread held (SASRT's 31 threads at once: ~250 MB instead of ~500). A game that needs
+// more (a deep recursion: its deepest sampled stack near 8 MB) sets 16, Xenia's, in its toml.
+REXCVAR_DEFINE_INT32(switch_guest_stack_mb, 8, "Threading",
+                     "The host stack of each guest thread, in MB (8 by default, the base's trade-off; 16 as Xenia for a "
+                     "game that needs more; heap on the Switch). Lower only after the profiler's deepest sampled stack "
+                     "says so, with a wide margin")
     .range(2, 64)
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 static size_t GuestHostStackBytes() {
@@ -80,6 +84,12 @@ thread_local uint32_t t_layout_applied = 0;
 thread_local uint8_t t_guest_kind = 0;
 }  // namespace
 #endif
+
+// renut-ultimate (2026-11-16, port 144; tw2de_nx's rex_spin_hint of 2026-10-22): the Xenon's spin-wait hints with the
+// codegen option spin_hint_yield (off by default; rex/ppc/context.h). The base's yield: on the Switch MaybeYield, whose
+// backoff (switch_yield_backoff) turns a long run of them into short sleeps, so a spinning thread gives its core to the
+// one it waits for.
+extern "C" void rex_spin_hint(void) { rex::thread::MaybeYield(); }
 
 namespace rex::system {
 
