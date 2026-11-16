@@ -230,6 +230,12 @@ CONFIGS = {
     'renut_15ms_yieldspin.toml': ({'switch_yield_spin': '64'},
                                   'near-exact #26 (timing only): the first yields of a quick run spin 64 `yield` '
                                   'instructions instead of svcSleepThread(0)'),
+    # 2026-11-16, the base merge (ports 107-147): port 145's async present is on by the base's default; RR6 (Katamari
+    # in Ryujinx) saw worse pacing with it in one run, but its port-143 run without it spiked the same way. The console
+    # A/B against this config decides: fps and the [latency] line's swap -> present max.
+    'renut_async_present_off.toml': ({'banjo_async_present': 'false'},
+                                     'port 145 off: the window queue and dequeue on the feed thread itself (the base '
+                                     'before the merge)'),
 }
 
 
