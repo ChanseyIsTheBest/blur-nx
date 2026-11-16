@@ -57,7 +57,8 @@ MACROS = MARKER + '''
 // blur-nx (2026-11-17, CG-08 of docs/codegen-ideas-3.md): a one-entry cache per site. The dispatch table is 2 bytes per
 // guest code byte (20 MB for Blur), so a virtual call's table load usually misses (0.4-0.5 % of all console samples,
 // 1.6-3.3 % of the audio worker's). The site keeps its last target and function in one 64-bit word (~target in the
-// high half: an empty word matches nothing; the function as a 32-bit offset from RexSiteAnchor), read and written
+// high half, and an empty word never taken for target 0xFFFFFFFF; the function as a 32-bit offset from RexSiteAnchor),
+// read and written
 // whole, so it is never torn. A miss takes the table path, fills an empty word, and replaces a full one on 1 miss in 16
 // (a polymorphic site does not bounce its line between cores). Memory::SetFunction clears every word after a table
 // write (sdk/src/system/xmemory.cpp: the section rex_site_cache, only when a word was filled since). The table path
@@ -88,7 +89,7 @@ extern "C" unsigned char g_rex_site_cache_dirty;
     static uint64_t rex_site_cache_ __attribute__((section("rex_site_cache")));                         \\
     const uint32_t rex_site_t_ = (uint32_t)(x);                                                         \\
     const uint64_t rex_site_c_ = __atomic_load_n(&rex_site_cache_, __ATOMIC_RELAXED);                   \\
-    if ((uint32_t)(rex_site_c_ >> 32) == ~rex_site_t_) [[likely]]                                       \\
+    if ((uint32_t)(rex_site_c_ >> 32) == ~rex_site_t_ && rex_site_c_ != 0) [[likely]]                  \\
       ((PPCFunc*)((intptr_t)&RexSiteAnchor + (intptr_t)(int32_t)(uint32_t)rex_site_c_))(ctx, base);     \\
     else                                                                                                \\
       RexSiteMiss(&rex_site_cache_, rex_site_t_, ctx, base);                                            \\
