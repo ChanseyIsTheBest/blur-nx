@@ -188,6 +188,7 @@ set(RENUT_SOURCES
     # blur-nx (2026-11-13, the user: "force the game to stereo"): audio_stereo_mix (tools/stereo_mix.py's patches).
     src/blur_stereo.cpp
     src/blur_nx_mix.cpp
+    src/blur_small_alloc.cpp  # blur-nx (2026-11-17, #220: small C++ allocations per thread, Switch)
     src/blur_lzx_native.cpp
     src/blur_job_wake.cpp  # blur-nx (2026-11-13, #34)
     # katamari-nx (2026-10-31): DLC packages in the "dlc" folder next to the NRO installed at start (reNut upstream's).
