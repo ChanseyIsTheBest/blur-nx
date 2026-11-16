@@ -143,6 +143,15 @@ bool DoneNotifyAll() {
   static const bool on = REXCVAR_GET(banjo_renut_done_notify_waiters);
   return !on;
 }
+// blur-nx (2026-11-17, the Renut audit's #11, blur_renut_render_address_wait; the Switch): the ring's sleep on an
+// address instead of g_work_cv. The render thread reads g_wake_word, looks at the ring once more and sleeps while the
+// word is unchanged (svcWaitForAddress); a push that publishes, then reads g_waiting true, adds to the word and wakes
+// the address (svcSignalToAddress): no g_mutex on either side, and the woken thread does not take a mutex first (a
+// condition variable's wake on Horizon hands it the mutex). Either the push's add comes before the render thread's read
+// of the word (then its look at the ring, after that read, sees the item) or after it (then the wait sees the word
+// changed, or is woken). g_stop_flag: g_stopping for the sleeper, which holds no g_mutex.
+std::atomic<uint32_t> g_wake_word{0};
+std::atomic<bool> g_stop_flag{false};
 // blur-nx (2026-11-17, audit #11): blur_renut_render_address_wait (the Switch only).
 bool AddressWakeOn() {
 #if defined(__SWITCH__)
@@ -200,15 +209,6 @@ RingSlot *g_ring = nullptr;                      // made by Start, before the th
 alignas(64) std::atomic<uint64_t> g_enqueue{0};  // the next position a push claims (the items queued)
 alignas(64) std::atomic<uint64_t> g_dequeue{0};  // the next position the render thread takes (its own)
 std::atomic<bool> g_waiting{false};              // the render thread is going to sleep, or asleep, in g_work_cv
-// blur-nx (2026-11-17, the Renut audit's #11, blur_renut_render_address_wait; the Switch): the ring's sleep on an
-// address instead of g_work_cv. The render thread reads g_wake_word, looks at the ring once more and sleeps while the
-// word is unchanged (svcWaitForAddress); a push that publishes, then reads g_waiting true, adds to the word and wakes
-// the address (svcSignalToAddress): no g_mutex on either side, and the woken thread does not take a mutex first (a
-// condition variable's wake on Horizon hands it the mutex). Either the push's add comes before the render thread's read
-// of the word (then its look at the ring, after that read, sees the item) or after it (then the wait sees the word
-// changed, or is woken). g_stop_flag: g_stopping for the sleeper, which holds no g_mutex.
-std::atomic<uint32_t> g_wake_word{0};
-std::atomic<bool> g_stop_flag{false};
 std::atomic<bool> g_accepting{false};            // started and not stopping: pushes go to the ring
 // The slot at 'pos' holds a published item.
 inline bool RingReady(uint64_t pos) {
