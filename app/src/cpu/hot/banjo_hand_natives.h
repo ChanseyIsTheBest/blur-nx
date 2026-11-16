@@ -226,5 +226,7 @@ template <class S>
 // 2026-11-16, the 15 ms batch (the user: natives for the top 7 audio functions, which may cheat a bit): the audio
 // graph's natives, inexact in the audio they compute and declining under the guard (the file's comment).
 #include "cpu/hot/blur_hand_natives_audio.h"
+// The resampler's two kernels (N4 of the same batch): exact, checked by the guard.
+#include "cpu/hot/blur_hand_natives_resampler.h"
 
 }  // namespace banjo::hand
