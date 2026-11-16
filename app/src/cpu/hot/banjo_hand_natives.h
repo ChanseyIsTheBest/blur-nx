@@ -228,5 +228,7 @@ template <class S>
 #include "cpu/hot/blur_hand_natives_audio.h"
 // The resampler's two kernels (N4 of the same batch): exact, checked by the guard.
 #include "cpu/hot/blur_hand_natives_resampler.h"
+// Blur's own small memset and memcpy (the same batch): exact, checked by the guard.
+#include "cpu/hot/blur_hand_natives_crt.h"
 
 }  // namespace banjo::hand

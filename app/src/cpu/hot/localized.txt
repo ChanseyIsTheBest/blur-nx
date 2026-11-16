@@ -32,3 +32,5 @@
 822E98B0 hand-written native in front of its copy (hand.txt, the 15 ms batch: audio)
 822E29A8 hand-written native in front of its copy (hand.txt, the 15 ms batch: the resampler's filter, exact)
 822D7DF0 hand-written native in front of its copy (hand.txt, the 15 ms batch: the resampler's stereo converter, exact)
+82953880 hand-written native in front of its copy (hand.txt, the 15 ms batch: Blur's memset, exact)
+82954218 hand-written native in front of its copy (hand.txt, the 15 ms batch: Blur's memcpy, exact)

@@ -24,7 +24,7 @@ enum : uint32_t {
   kN822E9F20, kN82500AC0, kN8230A4D8, kN822D92D8, kN822D9040,
   kN822D79A8, kN82432918, kN8251E438, kN82526568,
   // 2026-11-16, the 15 ms batch (the user: natives for the top 7 audio functions): blur_hand_natives_audio.h.
-  kN8230B778, kN822E29A8, kN822D7DF0, kN822E98B0, kN822D2378, kN822BEDD0,
+  kN8230B778, kN822E29A8, kN822D7DF0, kN82953880, kN82954218, kN822E98B0, kN822D2378, kN822BEDD0,
   kNatives
 };
 
