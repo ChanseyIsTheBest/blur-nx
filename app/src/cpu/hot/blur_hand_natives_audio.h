@@ -14,6 +14,14 @@
 // The DRAFT rule as the other files: included inside `namespace banjo::hand` after banjo_hand_natives.h's own helpers;
 // no #include lines.
 
+// blur-nx (2026-11-17): a virtual call from a native: on the Switch through the site-cached dispatch (CG-08; the site arguments are not
+// read there), elsewhere the plain dispatch (so the PC's indirect-call census never sees a site no bctrl has).
+#if defined(__SWITCH__) && !defined(REX_SITE_CACHE_OFF)
+#define BLUR_CALL_VIRTUAL(fn) REX_CALL_INDIRECT_FUNC_AT(0, 0, fn)
+#else
+#define BLUR_CALL_VIRTUAL(fn) REX_CALL_INDIRECT_FUNC(fn)
+#endif
+
 namespace blur_audio {
 
 [[gnu::always_inline]] inline uint32_t LdW(uint8_t* base, uint32_t a) {
@@ -543,7 +551,7 @@ inline bool Native(PPCContext& __restrict ctx, uint8_t* base, S& s) {
     };
     const auto call_virtual = [&](uint32_t slot) {  // the source object's vtable entry at +slot
       const uint32_t fn = LdW(base, LdW(base, source) + slot);
-      REX_CALL_INDIRECT_FUNC(fn);
+      BLUR_CALL_VIRTUAL(fn);  // 2026-11-17: the site-cached dispatch (CG-08) on the Switch
     };
     if (LdB(base, node + 57) != 0 && source != 0) {
       const double thr = double(Bits(LdW(base, 0x8202E3FCu)));

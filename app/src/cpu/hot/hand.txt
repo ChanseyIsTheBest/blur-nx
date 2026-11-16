@@ -46,3 +46,9 @@
 # Blur's own small C runtime routines (the same batch; RR6's tw2de list, item 3): EXACT, blur_hand_natives_crt.h.
 82953880 exact=r4,r5,r6   # console 2026-11-11 (rebased build 46b3f6d6) profiles: 515 samples summed, among the 50 hottest game functions; memset by byte to a word boundary, then four stw a pass, each a guest store; members of hundreds of copies. Native: the host's fill (overlapping stores up to 64 bytes), one check, one card range
 82954218 exact=r4,r5,r6,r7,r8,r9,r10   # console 2026-11-11 profiles: 538 samples summed; memcpy by byte to a word boundary, then lwz / stw (or four lbz merged when the source is unaligned); members of hundreds of copies. Native: the host's move (overlapping 16/8/4/2-byte forms up to 128 bytes), declines a forward smear
+822CBAD0 inexact   # 2026-11-17 (24-hour run, audio native 1): the sound update's child walk, 0.8-1.0 ms a frame on its XThread on vtable / dispatch misses; site-cached virtual calls (CG-08), the next child prefetched
+822CD2B0 inexact calls=822CBA00,822CBB80   # 2026-11-17 (audio native 2): the 8-byte entry list, 0.6-1.0 ms a frame on JQ3 / JQ4; entries read whole first, the next entry's object prefetched
+8230B5E8 inexact calls=822E9F20,822EE948   # 2026-11-17 (audio native 3): a node's four sends (through 823016D0 / 823040B8), ~0.4 ms a frame; 822EEF78's queue inlined
+82302950 inexact   # 2026-11-17 (audio native 4): the frame-kept parameter product, ~0.45 ms a frame; the parameters' modulators through site-cached calls
+822EB500 inexact calls=82954F28   # 2026-11-17 (audio native 5): a gain from two parameters (exp through 82954F28), ~0.45 ms a frame
+82953D90 exact=r3   # 2026-11-17 (#224): the XDK's memcpy, 0.36 ms a frame on JQ3; non-overlapping copies (the red-zone word and the bytes), overlapping ones decline

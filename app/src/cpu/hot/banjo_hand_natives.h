@@ -230,5 +230,7 @@ template <class S>
 #include "cpu/hot/blur_hand_natives_resampler.h"
 // Blur's own small memset and memcpy (the same batch): exact, checked by the guard.
 #include "cpu/hot/blur_hand_natives_crt.h"
+// blur-nx (2026-11-17, the 24-hour run): five more audio natives and the XDK's large memcpy (#224).
+#include "cpu/hot/blur_hand_natives_audio2.h"
 
 }  // namespace banjo::hand
