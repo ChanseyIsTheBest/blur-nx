@@ -223,5 +223,8 @@ template <class S>
 #include "cpu/hot/blur_hand_natives_batch3a.h"
 #include "cpu/hot/blur_hand_natives_batch3b.h"
 #include "cpu/hot/blur_hand_natives_batch3c.h"
+// 2026-11-16, the 15 ms batch (the user: natives for the top 7 audio functions, which may cheat a bit): the audio
+// graph's natives, inexact in the audio they compute and declining under the guard (the file's comment).
+#include "cpu/hot/blur_hand_natives_audio.h"
 
 }  // namespace banjo::hand

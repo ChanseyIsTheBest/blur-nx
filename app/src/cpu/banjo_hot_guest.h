@@ -175,6 +175,16 @@ struct InPlaceCopy {
 #define BANJO_HOT_REFERENCE(ID) nullptr
 #endif
 
+// blur-nx (2026-11-16): true while this thread is inside a guarded call (banjo_hot_guest.cpp); the inexact hand-written
+// natives (audio) decline then. Without the guard's forms there is no guarded call.
+namespace banjo::hot {
+#if BANJO_HOT_GUARD_FORMS
+bool GuardBusy() noexcept;
+#else
+[[gnu::always_inline]] constexpr bool GuardBusy() noexcept { return false; }
+#endif
+}  // namespace banjo::hot
+
 // SYM: the generated function's name; ID: the namespace suffix of its header (n_<ID>); KEY: its cvar; SLOT: its
 // PPCContext::host_counters slot. Written by tools/localize_native.py (app/generated/hot/banjo_hot_list.inc, and
 // banjo_hot_bulk_<k>.inc for the bulk list: BANJO_HOT_HOOK_BULK, its keys in a category of their own).

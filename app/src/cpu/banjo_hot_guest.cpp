@@ -815,6 +815,12 @@ Outcome Attempt(Hook& h, PPCContext& ctx, uint8_t* base, Scratch& t, std::string
 
 }  // namespace
 
+// blur-nx (2026-11-16, the 15 ms batch): an inexact hand-written native (audio only: hand.txt inexact; the user, "Its
+// ok for the audio functions to cheat a bit and not be exact as like as the game doesnt break") declines while this
+// thread is inside a guarded call, so the guard compares the exact copy with the original and the native runs only
+// outside the comparisons.
+bool GuardBusy() noexcept { return Thread().depth != 0; }
+
 void Check(Hook& h, PPCContext& ctx, uint8_t* base, uint32_t& counter) {
   // The next guarded call of this thread: at once while it is still in its first guard_calls (or in verify mode),
   // else after `period` calls. The counter word: banjo_hot_guest.h.

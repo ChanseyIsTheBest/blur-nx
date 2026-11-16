@@ -554,6 +554,10 @@ def hand_entries(path=HAND):
                 entry['exact'] = set(value.split(','))
             elif key == 'id':
                 entry['id'] = value
+            elif key == 'inexact':
+                # blur-nx (2026-11-16): an inexact native (audio) declines while the guard runs, so the guard compares
+                # the exact copy: it adds nothing to the hook's skip set.
+                entry['inexact'] = True
             elif key == 'calls':
                 # blur-nx (2026-11-16, the 15 ms batch): a native that calls guest functions (see calls_struct).
                 entry['calls'] = ['sub_' + c.upper() if re.fullmatch(r'[0-9A-Fa-f]{8}', c) else c
@@ -1398,7 +1402,8 @@ def localize(index, hooks, reach, root, what, opts, out_dir, quiet=False, hand=N
     hand_members = [m for m in members if m in hand]
     skip = set()
     for m in hand_members:
-        skip |= set(funcs[m]['written']) - hand[m]['exact']
+        if not hand[m].get('inexact'):
+            skip |= set(funcs[m]['written']) - hand[m]['exact']
     # sasrt-nx (2026-11-11, port 74; its idea 37): the registers the hook may leave different from the original: those
     # dead after the root returns (its LiveOut). A member's dropped write-back of a register live after the root is
     # rewritten before the root's exit (or LiveOut would have kept it): still compared (sasrt-nx's round A audit,
