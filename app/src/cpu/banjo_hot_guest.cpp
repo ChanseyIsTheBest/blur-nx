@@ -861,8 +861,10 @@ Outcome Attempt(Hook& h, PPCContext& ctx, uint8_t* base, Scratch& t, std::string
 // blur-nx (2026-11-16, the 15 ms batch): an inexact hand-written native (audio only: hand.txt inexact; the user, "Its
 // ok for the audio functions to cheat a bit and not be exact as like as the game doesnt break") declines while this
 // thread is inside a guarded call, so the guard compares the exact copy with the original and the native runs only
-// outside the comparisons.
+// outside the comparisons. Without the guard's forms (the Switch builds) banjo_hot_guest.h answers false inline.
+#if BANJO_HOT_GUARD_FORMS
 bool GuardBusy() noexcept { return Thread().depth != 0; }
+#endif
 
 namespace {
 // banjo_hot_guard_keep: is this hook's function on the list? (The list read once; a hook's answer cached in a small
