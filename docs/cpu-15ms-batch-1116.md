@@ -234,3 +234,12 @@ loses is split into its keys.
 | renut_p145_renderer_off | port 145's stream redeem, kept targets, dirty rows, native 16-bit | render thread |
 | renut_p146_runtime_off | port 146's lock-free mutant release and file pieces | fps, load times |
 | renut_p143_kernel_off | port 143's overlapped delay and XMP throttle | boot and menu times |
+
+## The audio natives on the PC (2026-11-16, round 2: the merged build, four races, natives on / off / off / on)
+
+The six inexact natives the guard cannot check, compared through the PC's audio dump (120 s of each race from 150 s;
+scratchpad audio_dump_compare.py, audio_silences.py). No non-finite sample, no clipping, no silent stretch in any of the
+four; peaks 0.473-0.479. Spectral centroid: on 2,998 / 3,151 Hz, off 3,053 / 3,127; loudness on -22.65 / -22.69 dBFS
+(left), off -22.45 / -21.79; octave bands within about 0.5 dB. The two off races differ from each other as much as on
+from off: no difference the natives make shows. Round 1's three empty frames and its brighter on-race came with that
+run's census and another session's build beside it (none in any round-2 race).
