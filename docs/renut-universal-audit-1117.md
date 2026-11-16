@@ -71,3 +71,42 @@ GPU frame (one racing window of 1117_b2_2scene_1): 29.1 ms, of which resolves 5.
 | G4 | Review the translated GLSL of the top full-screen shaders | PS EFE544B8F1999133 1.52 ms for 1 draw a frame; PS B20CDC973266527B (Blur's composite) 1.21 ms | yes | census |
 | G5 | Depth resolves: a cheaper copy | 1.88 ms; the depth hand-over takes 376 per 10 s but draws all 376 after all (a depth write follows each one) | check | census |
 | G6 | The shipping diagnostics' GPU side (CPU #2) | per-shader timestamps on the GPU too | yes | A/B |
+
+## Implementation (batch 3, 2026-11-17)
+
+The user (09:30): "work on all the CPU and GPU ideas and implement them and test on PC". Commits 24ecc433 (the CPU
+batch) and b416ed69 (#10). Every change has its own key, so the console A/Bs can turn each one off.
+
+| # | What was done | Key (default) |
+|---|---|---|
+| 1-3, G6 | toml only: shipping without the sampler, the per-shader timestamps, the trace and the terrain census; the A/B races decide | (toml) |
+| 4 | render-target images given back by Retire are kept once their frame is done (96 MB / 48 images at most) and Create takes a matching one (video.cpp TakePooledLocked) | `blur_renut_texture_pool` (on) |
+| 5 | why ResolveTarget makes a destination (7 reasons) and which target textures are released (memory, idle, cold), with the pool's counts, in a 10 s line | (always) |
+| 6 | a rumble thread (priority 0x3C) sends the latest value per pad; a failed send is redone by the game thread's next call | `input_switch_rumble_thread` (on) |
+| 7, 8 | gpu/lean_mutex.h: the guest-record registry's and the in-place shaders' locks as one std::mutex each | `blur_renut_lean_rwlock` (on) |
+| 9 | the handle table's own lock tries `global_lock_spin` times (CPU yields) before it blocks | `kernel_handle_lookup_spin` (on) |
+| 10 | semaphores wait on an address (port 65's core; a release hands units to blocked threads first); host stress test tools/test_address_semaphore.cpp passed | `thread_semaphore_address_wait` (off: A/B) |
+| 11 | the render thread's ring sleep on an address (svcWaitForAddress / svcSignalToAddress), no g_mutex either side | `blur_renut_render_address_wait` (on; the Switch) |
+| 12 | the ring's batch end counts and reads the done waiters as atomics, g_mutex only to wake one | `blur_renut_done_lockfree` (on) |
+| 13 | an event wait watches the event N CPU yields before it blocks | `thread_event_spin` (0: A/B) |
+| 14-16 | toml A/Bs (core masks, kick submit, the XMA kick's lock) | (toml) |
+| 17-22, 30 | gpu/stage_census.h: the time and calls of FastDrawLocked, DrawStateLocked, FillTextures, the constants, BindTargets, setPipeline, BindStreams, WholeGeometryTry, the host draw, CardsProve, Upload, RefreshBindingLocked, ResolveTargetsLocked, each render-thread item, NewOp and BeginCommandBuffer's fence wait | `blur_renut_diag_stage_census` (off) |
+| 19 | checked: every caller proves a range only once per kick (`proven_flush != g_flush_serial`); nothing to add | - |
+| 23 | found: the guest function taking a mutex and an rwlock is Renut's own BeginVertices hook (sub_82242BC0): the rwlock is the in-place shader lookup (#8 makes it a mutex) and the mutex the deferred-draw chain (g_delta / g_deferred_mutex) | - |
+| 24 | DrawStateLocked's 15 one-line key statics in one struct read at the first draw (one plain check a draw) | (always) |
+| 25, 26 | a replay's closure is a pooled job (one pointer, stored in the std::function), a run's control block from a free list | `blur_renut_replay_pool` (on) |
+| 27 | the controller calls copy the user's device list into a per-thread vector | (always) |
+| 28 | Blur's CPU-lock-of-resolve diagnostic behind a key | `blur_renut_diag_cpu_lock_resolve` (off) |
+| 29 | the libnx counting wrappers skip their clock reads and atomics when the title says so | `switch_perf_count_calls` (on) |
+| 31 | the 10 s report's own time on the game thread logged at the next report (it runs in the Game Master's Swap, under g_stats.mutex) | (always) |
+| 32 | checked: the render thread's 21 % in WaitSlotLocked is the GPU's back-pressure (2 frames in flight, the GPU at 28 of 32 ms): no CPU work removes it; the GPU ideas are the lever | - |
+
+GPU extras:
+
+| # | Finding |
+|---|---|
+| G1 | toml A/B (`sasrt_gpu_handover_with_smaa = true`). The whole same-size 1280x720 resolves (formats 10 and 20, about half of the resolve pixels in the trace) are among those SMAA's gate now draws |
+| G2 | not built: the tiles are not back to back. Each tile's resolve is followed by its clear-after and target changes (the trace), so merging them needs each tile's clear-after deferred too, with every other op checked against the pending regions; at most the 1280x720 colour tiles' copy (~10 % of the resolve pixels) |
+| G3 | not built as designed: the edge pass also writes the depth mask (D16) that lets the weights and blend passes skip most pixels, which a compute shader cannot write. A luma pre-pass (R32F, exact) with gathers in the edge pass would cut 5 RGBA reads to 1 + 2 gathers, ~0.3 ms at most |
+| G4 | PS EFE544B8F1999133 (1.52 ms, 1 draw): 6 taps of a 64-bit texture a pixel (5.5 M taps a frame), at the texture units' half rate for that format: fetch-bound, nothing for an ALU pass |
+| G5 | the depth hand-over takes ~1.2 depth resolves a frame and draws every one after all (a depth write follows): those copies are needed; the 1.88 ms (two screens' worth) is next to split by the stage census's resolve setup and a GPU split of decompress vs copy |
