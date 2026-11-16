@@ -319,8 +319,16 @@ template <class S>
   const simde__m128 lane = simde_mm_set_ps(3.0f, 2.0f, 1.0f, 0.0f);
   uint8_t* const rp = rows ? ::banjo::hot::Raw(base, buf) : nullptr;
   const bool meter = LdB(base, p + 88) == 0;
+  // blur-nx (2026-11-17, #198 of docs/cpu-ideas-196-225-1116.md): a block whose gain ramp is exactly 1.0 throughout
+  // (start 1.0, slope 0: the level under the threshold, nothing to compress) leaves the rows as they are: no multiply
+  // and no store (x * 1.0 is x, but for a denormal the vector unit would have flushed: inaudible). Census slots 38-39.
+  const bool unity = start == 1.0f && slope == 0.0f;
+  REX_NX_CENSUS(38);
+  REX_NX_CENSUS_IF(unity, 39);
   double f6 = 0.0;
-  if (!meter) {
+  if (!meter && unity) {
+    // nothing: the rows stay
+  } else if (!meter) {
     for (uint32_t r = 0; r < rows; ++r)
       for (uint32_t c = 0; c < 64; ++c) {
         uint8_t* q = rp + r * 1024u + 16u * c;
@@ -345,7 +353,7 @@ template <class S>
           if (l < nr) {
             uint8_t* q = rp + (r0 + l) * 1024u + 16u * c;
             x[l] = blur_swap::LoadWords(q);
-            blur_swap::StoreWords(q, simde_mm_mul_ps(x[l], gain));
+            if (!unity) blur_swap::StoreWords(q, simde_mm_mul_ps(x[l], gain));
           } else {
             x[l] = simde_mm_setzero_ps();
           }
@@ -366,7 +374,7 @@ template <class S>
         f6 = double(float(double(st[l]) + f6));  // fadds f6,f8,f6, row by row
       }
     }
-    if (rows) ::banjo::hot::Card(base, buf, rows * 1024u);
+    if (rows && !unity) ::banjo::hot::Card(base, buf, rows * 1024u);
     // loc_822DA5A0: the level, as the original computes it.
     const double f0 = 1.0, f7 = 0.0, half = double(Bits(0x3F000000u));
     const double f10 = double(float(double(int64_t(int32_t(rows)))));
