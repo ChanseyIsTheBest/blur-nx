@@ -132,3 +132,28 @@ calls each callee's copy (f_ form, so the guard's logged run follows it) or, out
   system calls a thread). Its own thread is left out of the reports, so its cost appears nowhere in the CPU tables.
   Worth an A/B: 1 ms against 10 ms sampling.
 
+## Where it stands (2026-11-16, evening)
+
+**Built in code, not yet compiled or tested (the worktree, commits 7b1ee5bc, a6ebbbc8):**
+
+- cold-block splitting, -fno-trapping-math (the 18 FPSCR writers excepted), -fno-math-errno for the SDK and renderer;
+- relaxed CAS (#163), the PowerPC fences (#164, #165), the APC check (#171), back-chain elision (#145);
+- #196: audio_switch_pump_frames (1-4 audio frames a tick; the shipped tomls keep pairs) for an A/B;
+- #197: switch_profile_stacks_ms (5 in Blur's tomls);
+- natives that call guest code (hand.txt calls=, localize_native.py's Calls_<id> struct). No native written on it yet.
+
+**Expected from those:** about 2-5 ms of CPU a frame (estimates), plus whatever the sampler's pauses cost (measure).
+
+**Most of the requested items had already been done, or are small:**
+
+- **Already in:** #131, #138, #146, #160-#162, #167, #181.
+- **No gain:** #144, #153.
+- **Small:** #150, #166, #172, #173, #184, #185, and the stack slots (#134 / #157 / #159) in the hot code.
+
+**The audio natives:** the profile and the earlier round agree that the seven roots' time is node-state cache misses
+and control flow, not arithmetic (the kernels under them are natives already). An exact native cannot remove a cache
+miss: about 0.5-1.5 ms for all seven together, at a large cost in work and risk.
+
+**So the 15 ms target is not in reach with these exact items.** Measuring what is built first, then deciding, is the
+honest next step.
+
