@@ -972,6 +972,12 @@ if(REXGLUE_PLATFORM_SWITCH)
             list(APPEND _blur_tc_gen --param=hot-bb-count-ws-permille=${BLUR_SWITCH_HOT_PERMILLE})
             target_link_options(renut PRIVATE --param=hot-bb-count-ws-permille=${BLUR_SWITCH_HOT_PERMILLE})
         endif()
+        # #212: the generated shards (the game code that is not a copy: flat, I-cache bound) at -O2 (after the
+        # configuration's -O3, so it wins); the copies keep -O3.
+        option(BLUR_SWITCH_GEN_O2 "#212: the generated game code at -O2 (the copies stay at -O3)" OFF)
+        if(BLUR_SWITCH_GEN_O2)
+            list(APPEND _blur_tc_gen -O2)
+        endif()
         if(_blur_tc_gen AND TARGET renut_recomp)
             target_compile_options(renut_recomp PRIVATE ${_blur_tc_gen})
         endif()
