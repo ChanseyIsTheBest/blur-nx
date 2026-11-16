@@ -803,3 +803,61 @@ inline bool Native(PPCContext& __restrict ctx, uint8_t* base, S& s) {
   return true;
 }
 }  // namespace n_822D2378
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 822BEDD0 - the audio graph's effect stage (r3 = the node, r4 = the graph's frame context). Read from its generated
+// statements: unless the node's stamp (+8) is the frame's or its index (+4) is -1, each of its u16 +24 effect entries
+// (8 bytes {type, offset} at node + u16 +26; type -1 skipped) whose type - 2 is one of the jump table's 14 cases calls
+// that effect (r3 = r4[+24] + offset, r4 = the node's rows r4[+28] + index * 4, r5 = r4, r6 = the node's +31), then
+// the node is stamped with the frame (+8 = r4[+0]); r3 = 1. The cases: 0 822E80E0, 1 822E53C8, 2 822E57E0,
+// 4 822E4FE8, 6 822E6E98, 10 822E61E0, 11 822E8418, 16 822DA210 (the compressor: its own native), 18 822E69A0,
+// 19 822E98B0 (the convolution reverb: its own native), 21 822E95F8, 22 822BD5E8, 23 822BD6E8, 25 822E4EA0.
+// Console profile (the nx race): 249 samples, 2.3 ms a frame with the effects its copy inlines (the compressor's
+// chain the hottest). The native: the dispatch without the copy's context traffic, every effect through the header's
+// calls (C), the natives among them first. Exact; flagged inexact (it calls guest code: it declines under the guard).
+// ---------------------------------------------------------------------------------------------------------------------
+namespace n_822BEDD0 {
+template <class C, class S>
+inline bool Native(PPCContext& __restrict ctx, uint8_t* base, S& s) {
+  using namespace blur_audio;
+  if (!On(kN822BEDD0) || !Runs<S>()) [[unlikely]] return false;
+  const uint32_t node = ctx.r3.u32, g = ctx.r4.u32, sp0 = ctx.r1.u32;
+  if (!detail::Straight(node, 32) || !detail::Straight(g, 32)) [[unlikely]] return false;
+  const uint32_t list = node + LdH(base, node + 26);
+  if (LdW(base, node + 8) != LdW(base, g + 0) && LdW(base, node + 4) != 0xFFFFFFFFu) {
+    const uint32_t rows = (LdW(base, node + 4) << 2) + LdW(base, g + 28);
+    ctx.r1.u64 = sp0 - 128u;
+    for (uint32_t k = 0; k < LdH(base, node + 24); ++k) {
+      const uint32_t entry = list + 8u * k;
+      const uint32_t type = LdW(base, entry);
+      if (type == 0xFFFFFFFFu) continue;
+      const uint32_t effect = LdW(base, g + 24) + LdW(base, entry + 4);
+      ctx.r6.u64 = LdB(base, node + 31);
+      ctx.r3.u64 = effect;
+      ctx.r4.u64 = rows;
+      ctx.r5.u64 = g;
+      switch (type - 2u) {
+        case 0: C::sub_822E80E0(ctx, base, s); break;
+        case 1: C::sub_822E53C8(ctx, base, s); break;
+        case 2: C::sub_822E57E0(ctx, base, s); break;
+        case 4: C::sub_822E4FE8(ctx, base, s); break;
+        case 6: C::sub_822E6E98(ctx, base, s); break;
+        case 10: C::sub_822E61E0(ctx, base, s); break;
+        case 11: C::sub_822E8418(ctx, base, s); break;
+        case 16: C::sub_822DA210(ctx, base, s); break;
+        case 18: C::sub_822E69A0(ctx, base, s); break;
+        case 19: C::sub_822E98B0(ctx, base, s); break;
+        case 21: C::sub_822E95F8(ctx, base, s); break;
+        case 22: C::sub_822BD5E8(ctx, base, s); break;
+        case 23: C::sub_822BD6E8(ctx, base, s); break;
+        case 25: C::sub_822E4EA0(ctx, base, s); break;
+        default: break;
+      }
+    }
+    ctx.r1.u64 = sp0;
+    StW(base, node + 8, LdW(base, g + 0));
+  }
+  ctx.r3.u64 = 1;
+  return true;
+}
+}  // namespace n_822BEDD0
