@@ -23,6 +23,7 @@
 #endif
 
 extern "C" float blur_nx_voice_floor;  // blur-nx (2026-11-17): app/src/blur_nx_mix.cpp, audio_nx_voice_floor
+extern "C" bool blur_nx_skip_silent;    // blur-nx (2026-11-17): app/src/blur_nx_mix.cpp, audio_nx_skip_silent_rows
 
 namespace blur_audio {
 
@@ -43,6 +44,18 @@ namespace blur_audio {
   ::banjo::hot::Card(base, a, 4);
 }
 [[gnu::always_inline]] inline float Bits(uint32_t b) { return std::bit_cast<float>(b); }
+// blur-nx (2026-11-17, #197): are the n bytes of big-endian floats at guest address a all +0 or -0? (the sign bit of
+// each float is bit 7 of its first byte: bits 7 and 39 of each 8-byte little-endian word). Stops at the first other.
+inline bool RowsZero(uint8_t* base, uint32_t a, uint32_t n) {
+  const uint8_t* p = ::banjo::hot::Raw(base, a);
+  constexpr uint64_t kNoSign = ~((uint64_t(1) << 7) | (uint64_t(1) << 39));
+  for (uint32_t b = 0; b < n; b += 64) {
+    uint64_t w[8];
+    std::memcpy(w, p + b, 64);
+    if (((w[0] | w[1] | w[2] | w[3] | w[4] | w[5] | w[6] | w[7]) & kNoSign) != 0) return false;
+  }
+  return true;
+}
 
 // The running form only, outside the guard (see the file's comment).
 template <class S>
@@ -259,6 +272,19 @@ inline bool Native(PPCContext& __restrict ctx, uint8_t* base, S& s) {
           op.g = start;
           op.step = (end - start) * Bits(LdW(base, 0x82B9D114u));  // vsubfp128, vmulfp128 (8230CBB8)
         }
+      }
+    }
+    // blur-nx (2026-11-17, #197 of docs/cpu-ideas-196-225-1116.md, inexact audio): a child whose input rows are all
+    // zero (a voice under the floor or the game's own inaudible floor, an idle node) adds nothing to the mix: its mix
+    // is skipped (the gain bookkeeping above is kept). The rows are checked after the child ran, its effects included
+    // (a filter may ring into a zeroed row). Differs only where a -0 output would have become +0 (and where a NaN or
+    // infinite gain met a zero sample). audio_nx_skip_silent_rows; census slots 40 (children mixed) and 41 (skipped).
+    if (blur_nx_skip_silent && processed && detail::Straight(src, inputs << 10)) {
+      REX_NX_CENSUS(40);
+      if (RowsZero(base, src, inputs << 10)) {
+        REX_NX_CENSUS(41);
+        for (uint32_t j = 0; j < inputs; ++j)
+          for (uint32_t i = 0; i < outputs; ++i) ops[j][i].kind = kSkip;
       }
     }
     // The mixing. Normally one pass per output row with this child's input rows in order (j); a source that is also a

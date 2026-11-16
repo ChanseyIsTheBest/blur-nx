@@ -324,8 +324,9 @@ void RuntimeCensusReport(int seconds) {
                   nx[27], nx[28]);
       REXLOG_INFO("[census] near-exact #43 (cumulative): exp memo hits {}, misses {} (cpu_nx_exp_memo)", nx[31], nx[32]);
       REXLOG_INFO("[census] inexact audio (cumulative; the voice step native): voice steps {}, under Blur's own floor {}, "
-                  "under audio_nx_voice_floor too {}; compressor blocks {}, at unity gain (not multiplied) {}",
-                  nx[35], nx[36], nx[37], nx[38], nx[39]);
+                  "under audio_nx_voice_floor too {}; compressor blocks {}, at unity gain (not multiplied) {}; mixer "
+                  "children checked {}, silent (not mixed) {}",
+                  nx[35], nx[36], nx[37], nx[38], nx[39], nx[40], nx[41]);
 #if !defined(__SWITCH__)
       CasCensusReport();  // blur-nx (2026-11-13, #32)
       REXLOG_INFO("[census] near-exact #57 / #34 (cumulative): single-object waits that succeeded {}, polls (a zero "
