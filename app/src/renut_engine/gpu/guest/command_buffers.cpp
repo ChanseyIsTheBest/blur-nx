@@ -1222,6 +1222,8 @@ inline void NoteSetWords(HostCommandBuffer &buffer, const DeviceRecording &set, 
     }
     u32 at = from;
     for (; at + 128 <= to; at += 128) {  // 'from' is a multiple of 128 (static_asserts below): one set_words word a block
+      if (buffer.set_words[at / 128] == 0xFFFFFFFFu)  // #218 (2026-11-17): all 32 words marked already
+        continue;
       if (Equal128(device + at, set.begin_image + at))
         continue;
       buffer.set_words[at / 128] |= DifferingWordsOf128(device + at, set.begin_image + at);
@@ -1259,8 +1261,14 @@ void NoteSetWordsOf(HostCommandBuffer &buffer, const DeviceRecording &set, const
     blocks[b >> 6] |= uint64_t(1) << (b & 63);
   }
   for (u32 h = 0; h < 2; ++h) {
-    for (uint64_t m = blocks[h]; m; m &= m - 1)
-      NoteSetBlock(buffer, set, device, (h * 64 + u32(std::countr_zero(m))) * 128);
+    for (uint64_t m = blocks[h]; m; m &= m - 1) {
+      const u32 at = (h * 64 + u32(std::countr_zero(m))) * 128;
+      // blur-nx (2026-11-17, #218 of docs/cpu-ideas-196-225-1116.md): a block whose 32 words are all marked since Begin
+      // already has nothing to add (the marks only accumulate): its compare is skipped. Exact.
+      if (buffer.set_words[at / 128] == 0xFFFFFFFFu && at + 128 <= d3d::kDeviceSnapshotSize)
+        continue;
+      NoteSetBlock(buffer, set, device, at);
+    }
   }
   if (verify) {
     u32 mine[kWords];
