@@ -236,6 +236,39 @@ CONFIGS = {
     'renut_async_present_off.toml': ({'banjo_async_present': 'false'},
                                      'port 145 off: the window queue and dequeue on the feed thread itself (the base '
                                      'before the merge)'),
+    # 2026-11-16, the user: "Do a/bs of the untested and new stuff when you get to console". One config per group,
+    # each the shipped settings with that group as before (raced ABBA against renut.toml); a group that loses is then
+    # split. The compile-time items (the batch's flags, spin_hint_yield, the NORMSHORT2 form) are the build itself.
+    'renut_p145_renderer_off.toml': ({'banjo_renut_stream_redeem': 'false', 'banjo_renut_keep_unused_targets': 'false',
+                                      'banjo_renut_dynamic_texture_rows': 'false',
+                                      'banjo_deko3d_native_16bit': 'false'},
+                                     'port 145\'s renderer speed-ups off (stream redeem, kept targets, dirty texture '
+                                     'rows, native 16-bit formats)'),
+    'renut_p146_runtime_off.toml': ({'thread_mutant_release_lockfree': 'false', 'filesystem_bounce_piece_mb': '1',
+                                     'filesystem_bounce_guest_only': 'false'},
+                                    'port 146\'s runtime speed-ups off (the mutant release under the mutex, 1 MB '
+                                    'file pieces, every read through the bounce buffer)'),
+    'renut_p143_kernel_off.toml': ({'kernel_deferred_overlapped_delay_ms': '100',
+                                    'kernel_overlapped_reset_event': 'false', 'xmp_poll_throttle': 'false'},
+                                   'port 143\'s kernel speed-ups off (Xenia\'s 100 ms before every deferred overlapped '
+                                   'call, the XMP delay on every poll): boot and menu times'),
+    'renut_15ms_audio_natives_off.toml': ({'blur_hand_8230AD50': 'false', 'blur_hand_822DA210': 'false',
+                                           'blur_hand_8230B778': 'false', 'blur_hand_822E17C8': 'false',
+                                           'blur_hand_822D2378': 'false', 'blur_hand_822BEDD0': 'false',
+                                           'blur_hand_822E98B0': 'false'},
+                                          'the 15 ms batch\'s seven inexact audio natives off (their generated '
+                                          'copies run)'),
+    'renut_15ms_exact_natives_off.toml': ({'blur_hand_822E29A8': 'false', 'blur_hand_822D7DF0': 'false',
+                                           'blur_hand_82953880': 'false', 'blur_hand_82954218': 'false'},
+                                          'the 15 ms batch\'s four exact natives off (the resampler\'s filter and '
+                                          'stereo converter, memset, memcpy)'),
+    'renut_15ms_keys_off.toml': ({'audio_nx_silent_eps': '0', 'audio_nx_unity_eps': '0', 'audio_nx_ramp_eps': '0',
+                                  'audio_nx_resample_copy': 'false', 'audio_xma_kick_wake_idle_only': 'false',
+                                  'cpu_nx_exp_memo': 'false', 'banjo_xma_frame_cache_mb': '256',
+                                  'banjo_xma_frame_cache_hash_only': 'false'},
+                                 'the 15 ms batch\'s new shipped keys as before the batch (the audio tolerances 0, no '
+                                 'resample copy, every kick wakes the decoder, no exp memo, the 256 MB XMA cache '
+                                 'comparing packets)'),
 }
 
 

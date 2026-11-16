@@ -214,3 +214,23 @@ output), then code and process. ms: CPU a frame, estimates.
   forwards those already.
 - **The Bink decoder during races:** no sample in the nx race.
 
+
+## The console A/Bs (planned; the user, 2026-11-16: "Do a/bs of the untested and new stuff when you get to console")
+
+Each config is the shipped renut.toml with one group as before, raced ABBA against renut.toml on the same build (the
+usual measured race; wall-clock fps over the first 12 racing lines, the [latency] line where it matters). A group that
+loses is split into its keys.
+
+| Config | What is turned back | Measures |
+|---|---|---|
+| (the build) against c2b | the whole batch and the base merge (compile-time items included: cold splitting, -fno-trapping-math / -fno-math-errno, the hot alignment, #145, CG-11, CG-06, spin_hint_yield, the NORMSHORT2 form) | the total |
+| renut_15ms_audio_natives_off | the seven inexact audio natives | their gain (and the PC's three empty frames, by ear) |
+| renut_15ms_exact_natives_off | the resampler's filter and converter, memset, memcpy | their gain |
+| renut_15ms_keys_off | the batch's new shipped keys | their gain |
+| renut_15ms_pump3 / pump4 | #196, three / four audio frames a tick | fps against latency |
+| renut_15ms_old_atomics | #163-#165 (the relaxed CAS, the split fences) | their gain |
+| renut_15ms_yieldspin | #26 | timing |
+| renut_async_present_off | port 145's async present (RR6: pacing to check on a console) | fps, swap -> present max |
+| renut_p145_renderer_off | port 145's stream redeem, kept targets, dirty rows, native 16-bit | render thread |
+| renut_p146_runtime_off | port 146's lock-free mutant release and file pieces | fps, load times |
+| renut_p143_kernel_off | port 143's overlapped delay and XMP throttle | boot and menu times |
