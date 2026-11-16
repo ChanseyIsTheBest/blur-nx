@@ -190,6 +190,12 @@ INDEX_FORMAT = 12  # raise when summarise() changes: the cached index is rebuilt
 # leaves it (sub_82507988, sub_825087A0; harmless by the calling convention, but the guard turns them off). Not
 # verifiable as it stands: parked.
 PROMOTED_MEMBERS = os.environ.get('BLUR_LOCALIZE_PROMOTED_MEMBERS', '0') == '1'
+# blur-nx (2026-11-17, #232): the non-volatile registers of the Xbox 360's PowerPC ABI (r14-r31, f14-f31, the VMX
+# v14-v31 and VMX128 v64-v127, CR fields 2-4): a real call returns them as it found them (call_text).
+ABI_TRUST = os.environ.get('BLUR_LOCALIZE_ABI_TRUST', '1') != '0'
+NONVOLATILE = frozenset(['r%d' % i for i in range(14, 32)] + ['f%d' % i for i in range(14, 32)] +
+                        ['v%d' % i for i in list(range(14, 32)) + list(range(64, 128))] + ['cr2', 'cr3', 'cr4'])
+ABI_SKIPPED = [0, 0]  # (real calls with a reload left out, reloads left out)
 PROMOTED_SITE = re.compile(r'^\tif \(REX_PROMOTED_IS\(')
 
 REG = re.compile(r'\bctx\.(r\d+|f\d+|v\d+|cr\d|ctr|xer|reserved)\b')
@@ -1290,6 +1296,16 @@ def localize(index, hooks, reach, root, what, opts, out_dir, quiet=False, hand=N
                     CALL_SKIPPED[3] += len(out_regs) - len(kept)
                     out_regs = kept
         in_regs = my_regs if change is ALL else [r for r in my_regs if r in change]
+        # blur-nx (2026-11-17, #232 of docs/cpu-codegen-universal-30-1116.md, near-exact): after a real call, the
+        # PowerPC ABI's non-volatile registers are taken as the callee left them, i.e. as they were: not reloaded. Only
+        # a callee that breaks the ABI (hand-written assembly) tells; the guard then sees this copy's write-back of the
+        # register differ from the original's. BLUR_LOCALIZE_ABI_TRUST=0: every register the callee can change, as before.
+        if ABI_TRUST and not closed:
+            kept_in = [r for r in in_regs if r not in NONVOLATILE]
+            if len(kept_in) < len(in_regs):
+                ABI_SKIPPED[0] += 1
+                ABI_SKIPPED[1] += len(in_regs) - len(kept_in)
+                in_regs = kept_in
         before = ''.join(f'ctx.{r} = l_{r}; ' for r in out_regs)
         after = ''.join(f' l_{r} = ctx.{r};' for r in in_regs)
         stats['synced'].append((len(out_regs), len(in_regs)))
@@ -1744,6 +1760,8 @@ def main():
         print(f'localize_native: {LOOP_STATS[0]} pointer-chase prefetches (idea 52), {LOOP_STATS[1]} counted loops\' '
               f'barriers left out (idea 60), {LOOP_STATS[2]} hand-named prefetches (M-19, prefetch_rules.txt)')
         print(f'localize_native: {CONST_ARG_FORCED[0]} members with a constant argument forced inline (idea 34)')
+        print(f'localize_native: {ABI_SKIPPED[1]} non-volatile register reloads left out after {ABI_SKIPPED[0]} real '
+              f'calls (#232, ABI trust{"" if ABI_TRUST else ": OFF"})')
         # Port 74 (its idea 39; sasrt-nx's batch 2 audit, finding 2): the shards turn the card runs on only for copies
         # written with them (app/src/cpu/banjo_hot_prelude.h reads this header).
         opt = os.path.join(a.out, 'banjo_hot_options.h')
