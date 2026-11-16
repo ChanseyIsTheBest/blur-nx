@@ -204,6 +204,16 @@ CONFIGS = {
                                "15 fps in a race; 17.7 against 20.8 fps without it on the 4-core console)"),
     'renut_profile.toml': ({'switch_profile_stacks': 'true'},
                            'the console profile: the sampler on (logs/rex/rex_profile.log, one report every 10 s)'),
+    # blur-nx (2026-11-16, the 15 ms batch: docs/cpu-15ms-batch-1116.md): the batch's run-time switches, each against
+    # the shipped toml in the console A/B (one key apart).
+    'renut_15ms_old_atomics.toml': ({'blur_guest_cas_relaxed': 'false', 'blur_guest_fences_split': 'false'},
+                                    'the game\'s compare-and-swap and its lwsync / eieio in their old forms (the '
+                                    'sequentially consistent loop, a full dmb ish): #163-#165 off'),
+    'renut_15ms_pump4.toml': ({'audio_switch_pump_frames': '4'},
+                              'four audio frames back to back a tick (21.3 ms) instead of two: #196, 16 ms more '
+                              'audio latency'),
+    'renut_15ms_sampler1.toml': ({'switch_profile_stacks_ms': '1'},
+                                 'the SDK sampler every 1 ms, as before the batch: #197 off'),
 }
 
 
