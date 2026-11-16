@@ -133,6 +133,9 @@ template <class S>
       ::banjo::hot::Card(base, sp - 16u, 8);
       St64(::banjo::hot::Raw(base, sp - 16u), slot->mem);
       ctx.f1.u64 = slot->result;
+      // blur-nx (2026-11-16, the 15 ms batch's PC guard run): the original sets the flush mode off on every call, so a
+      // hit does too (it returned with the mode a vector caller had left on: fpscr.csr 0x9fc0 against 0x1f80).
+      ctx.fpscr.disableFlushMode();
       return true;
     }
     REX_NX_CENSUS(32);

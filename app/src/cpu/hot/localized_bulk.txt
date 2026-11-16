@@ -59,7 +59,7 @@
 825087A0 217 console samples, 1872 instructions, 9 direct callees
 8230A4D8 206 console samples, 72 instructions, 1 direct callees
 824638B8 206 console samples, 90 instructions, 2 direct callees
-826803B0 member=2400 closure=12000 200 console samples, 704 instructions, 5 direct callees
+826803B0 200 console samples, 704 instructions, 5 direct callees
 826EFE18 member=2400 closure=12000 186 console samples, 184 instructions, 1 direct callees
 8251E438 181 console samples, 80 instructions, 0 direct callees
 8230B778 179 console samples, 80 instructions, 5 direct callees

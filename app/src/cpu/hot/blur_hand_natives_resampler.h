@@ -284,7 +284,10 @@ template <class S>
     g8 = 2ull * h;
     done = h;
   }
-  // (3) the vectors of four frames
+  // (3) the vectors of four frames. Every path first sets r10 = ((n - r11) & ~3) + r11 (subf / rlwinm / add at
+  // 0x8230EEB8: the end of the vectors), which stays when neither the vectors nor the last frames run (the PC guard,
+  // 2026-11-16: n == 0 left r10 at the lis of 0x822D7E30 here).
+  g10 = uint64_t(uint32_t(n64 - uint64_t(done)) & ~3u) + uint64_t(done);
   {
     const uint32_t k = (n - done) >> 2;
     if (k != 0) {
