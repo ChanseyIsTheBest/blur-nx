@@ -599,8 +599,9 @@ def calls_struct(entry, member_set, externs, hand):
                          'S& s) { f_%s(ctx, base, s); }' % (c, c))
         else:
             externs.add(c)
+            # The generated function by its global name: inside the struct the bare name is the member itself.
             lines.append('  [[gnu::always_inline]] static inline void %s(PPCContext& __restrict ctx, uint8_t* base, '
-                         'S& s) { if (s.Open()) return; %s(ctx, base); }' % (c, c))
+                         'S& s) { if (s.Open()) return; ::%s(ctx, base); }' % (c, c))
     lines.append('};')
     return lines
 
