@@ -225,6 +225,12 @@ REXCVAR_DEFINE_BOOL(switch_profile_stacks, false, "Banjo/Enhancements",
                     "Switch: the SDK's sampling profiler records every thread's pc (logs/rex/rex_profile.log), as an "
                     "empty logs/rex/stacks_profile.flag does. On in the A/B and profile configs")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// blur-nx (2026-11-16, the 15 ms batch): the sampler's interval in ms (read by name too). Each sample pauses one game
+// thread from a thread above all of them; 5 ms keeps ~24,000 samples in a two-minute race window for the CPU tables
+// at a fifth of the pauses.
+REXCVAR_DEFINE_INT32(switch_profile_stacks_ms, 1, "Banjo/Enhancements",
+                     "Switch: the SDK sampler's interval in milliseconds (1-100; each sample pauses one game thread)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 // The native copies of hot game functions (src/cpu/banjo_hot_guest.cpp, from sa2-nx): one key per function
 // (banjo_cpu_native_<function>, CPU group), defined by the list tools/localize_native.py writes. Calls `row` for each.

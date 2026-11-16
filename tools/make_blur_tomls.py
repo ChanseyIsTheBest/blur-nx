@@ -42,6 +42,9 @@ SHIPPED = {
     # and the boot stalled on a black screen unless a button was pressed (console bisect: 8 of 8 boots hung on, 2 of 2
     # fine off). The timer runs from the start, as before M-38.
     'kernel_timestamp_timer_on_import': 'false',
+    # blur-nx (2026-11-16, the 15 ms batch): the SDK sampler every 5 ms instead of 1 (each sample pauses one game thread
+    # from a thread above all of them; its cost is in no report). A two-minute race window still has ~24,000 samples.
+    'switch_profile_stacks_ms': "5  # blur-nx: 1 -> 5 (a fifth of the sampler's thread pauses)",
     # blur-nx (2026-11-12, the user: "can we please turn off x4 MSAA change it to SMAA please"): the game's MSAA off
     # (one sample per pixel: less GPU time and bandwidth), SMAA 1x on instead (banjo_renut_smaa, below).
     'disable_msaa': "false  # blur-nx: msaa_level decides (true forces no MSAA whatever it says); every level renders right since 2026-11-13",

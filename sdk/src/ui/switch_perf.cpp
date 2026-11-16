@@ -43,6 +43,7 @@
 #include <atomic>
 #include <cinttypes>
 #include <cstdio>
+#include <cstdlib>  // blur-nx (2026-11-16): strtol (switch_profile_stacks_ms)
 #include <cstring>
 #include <string>
 #include <string_view>
@@ -1097,6 +1098,16 @@ void ProfilerMain(void*) {
     const std::string value = rex::cvar::GetFlagByName("switch_profile_stacks");
     if (value == "true" || value == "1") sample_stacks = true;
   }
+  // blur-nx (2026-11-16, the 15 ms batch): the interval between two stack samples, from the title's cvar
+  // switch_profile_stacks_ms (1 when it has none). Each sample pauses one game thread (svcSetThreadActivity), reads its
+  // context and stack and resumes it, from a thread above every game thread: at 1 ms that is ~1,000 pauses and ~5,000
+  // system calls a second, which no report counts (the sampler leaves itself out).
+  u64 sample_interval_ns = kSampleIntervalNs;
+  {
+    const std::string value = rex::cvar::GetFlagByName("switch_profile_stacks_ms");
+    const long ms = value.empty() ? 0 : std::strtol(value.c_str(), nullptr, 10);
+    if (ms >= 1 && ms <= 100) sample_interval_ns = u64(ms) * 1000000ULL;
+  }
 
   u64 counters_last[kCounterCount]{};
   for (unsigned i = 0; i < kCounterCount; ++i) {
@@ -1105,7 +1116,8 @@ void ProfilerMain(void*) {
   if (FILE* f = std::fopen(ReportPath().c_str(), "w")) {
     std::fprintf(f, "image 0x%016" PRIx64 ", code up to 0x%016" PRIx64 "\n\n", g_base,
                  g_text_hi);
-    std::fprintf(f, "Stack sampling: %s\n", sample_stacks ? "active (1 ms)" : "disabled");
+    std::fprintf(f, "Stack sampling: %s (%u ms)\n", sample_stacks ? "active" : "disabled",
+                 unsigned(sample_interval_ns / 1000000ULL));
     const FpcrCost fpcr = MeasureFpcrCost(tick_freq);
     std::fprintf(f,
                  "FPCR on this CPU (per access, loop overhead taken off): read %.1f ns, write of the same value "
@@ -1125,7 +1137,7 @@ void ProfilerMain(void*) {
   size_t rr = 0;
   size_t mode_index = 0;
   while (true) {
-    __real_svcSleepThread(sample_stacks ? kSampleIntervalNs : kPassiveIntervalNs);
+    __real_svcSleepThread(sample_stacks ? sample_interval_ns : kPassiveIntervalNs);
 
     for (size_t tries = 0; sample_stacks && tries < kMaxThreads; ++tries) {
       const size_t idx = rr;

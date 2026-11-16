@@ -46,7 +46,7 @@ the PC before the console.
 | #146 | only ABI argument registers at calls | already in | the generator keeps non-volatile and non-argument registers as C++ locals (REX_CONFIG_NON_VOLATILE_AS_LOCAL, _NON_ARGUMENT_AS_LOCAL): calls hand over only ABI registers; one copy reloads r22-r31 after a kernel call |
 | #148 | non-wrapping induction variables | todo | |
 | #149 | profile-pruned copies with a bail-out | todo | |
-| #150 | card marks once per page per function | todo | |
+| #150 | card marks once per page per function | small | the card runs already cost one compare per store (banjo_hot_prelude.h); card_groups.py merges groups |
 | #153 | mfcr / mtcrf narrowed | no gain | one mfcr in the whole game, no mtcrf |
 | #156 | indirect calls without range / null checks | census | the null check is only safe if no run reaches an empty slot (ResolveIndirectFunction): count it first |
 | #157 | leaf red-zone slots as locals | todo | |
@@ -66,10 +66,10 @@ docs/cpu-ideas-176-195-replacements-1116.md.
 | #178 tail calls in copies | todo | |
 | #179 first-write mixer rows | todo | inside N1, N3 |
 | #180 XMA straight into the guest buffer | census | |
-| #181 console XMA cache hit rate | census | |
+| #181 console XMA cache hit rate | already in | the nx race: 91-97 % answered after the first minute (cache v2; the 50 % was cycle 1) |
 | #182 LZX output cache | census | |
-| #184 critical sections inline | census | |
-| #185 hot imports without the wrapper | census | |
+| #184 critical sections inline | small | RtlEnterCriticalSection is not among the top 16 imports in the PC census |
+| #185 hot imports without the wrapper | small | the Switch wrapper is thin; the top imports are yields and events |
 | #186 natives for the top 7 frame-chain functions | todo | after N1-N7 |
 | #187 audio natives with FMA / reordered sums | todo | inside N1-N7 |
 | #188 NEON radix-4 FFT for the reverb | todo | inside N5 |
@@ -93,4 +93,42 @@ docs/cpu-ideas-176-195-replacements-1116.md.
   AArch64. Two runtime bytes give the old forms back without a rebuild: keys blur_guest_cas_relaxed and
   blur_guest_fences_split.
 - **CG-26:** tools/fp_env_files.py lists the 18 generated files with a guest FPSCR write; they keep -ftrapping-math.
+
+## The audio natives: what the code allows (2026-11-16)
+
+**The hand-native framework allows only leaves:** natives may call other natives, but no guest function. The guard
+compares every byte either form writes, the stack included, so a native writes the same stack words its original
+does (82500AC0's native does).
+
+**The seven roots' callee trees** (tools: scratchpad callee_tree.py):
+
+| Root | Instructions | Callees | Leaf tree? |
+|---|---|---|---|
+| 8230AD50 (node loop) | 228 | the child processors (itself, 822E17C8, 8230A4D8, 822BD548), the kernels (822E9F20, 822EA500, 8230CBB8: natives), 822BEDD0, memcpy | no |
+| 822BEDD0 (effect stage) | 103 | 14 effect processors, most leaves calling CRT math (the sine 82954478 is a native); 822E69A0 has indirect calls | almost |
+| 822E17C8 (voice step) | 153 | 4 indirect calls | no |
+| 8230EDE0 (resampler) | 737 | 36 direct (the XDK's XMA functions at 0x82A24xxx among them), 1 indirect | no |
+| 822E98B0 (convolution reverb) | 412 | an FFT tree (822E9198, 822E8968, 82262100, 82264640...), no indirect call | yes (large) |
+| 822D2378 (sound update) | 321 | the job system's yield loop 822862B0 and more | no |
+| 8230B778 (node dispatch) | 80 | the child processors | no |
+
+**The node loop's profile:** 537 samples in its copy. 118 are in the inlined multiply-add kernel, 89 in vector copies
+and stores, and 330 (~3 ms) in scalar control: node-field loads that miss the cache, and spills around calls. The 1 KB
+kernels themselves are cheap (~0.2 us a call).
+
+**So:** five roots need natives that call guest code: an extension. The native gets a struct from the copy header that
+calls each callee's copy (f_ form, so the guard's logged run follows it) or, outside the closure, the generated function
+(the logged run stops there). hand.txt option calls=.
+
+## More measurements (2026-11-16, later)
+
+- **Stack slots as locals (#134 / #157 / #159):** the copies' f_ bodies have 32.6 k stack accesses against 210 k guest
+  accesses. But the 30 hottest copies' own bodies have only 345 of them, 80 provably private (most frames have their
+  addresses taken for callees). The stack traffic is in cold code, so the gain in the hot code is well under 1 ms.
+- **The near-exact audio tolerances** (#21 / #23 / #24: audio_nx_silent_eps, _ramp_eps, _unity_eps) are off in the
+  shipping toml, but the census showed #21 skips only 1.4 % more kernel calls than the exact zeros already do.
+- **The console's own sampler (switch_profile_stacks = true in every shipped toml):** every 1 ms it pauses each thread
+  that ran, reads its context and resumes it (svcSetThreadActivity, svcGetThreadContext3, svcSetThreadActivity: three
+  system calls a thread). Its own thread is left out of the reports, so its cost appears nowhere in the CPU tables.
+  Worth an A/B: 1 ms against 10 ms sampling.
 

@@ -547,17 +547,58 @@ def hand_entries(path=HAND):
             continue
         parts = line.split()
         name = parts[0] if not re.fullmatch(r'[0-9A-Fa-f]{8}', parts[0]) else 'sub_' + parts[0].upper()
-        entry = {'id': identifier(name), 'exact': set()}
+        entry = {'id': identifier(name), 'exact': set(), 'calls': []}
         for part in parts[1:]:
             key, _, value = part.partition('=')
             if key == 'exact':
                 entry['exact'] = set(value.split(','))
             elif key == 'id':
                 entry['id'] = value
+            elif key == 'calls':
+                # blur-nx (2026-11-16, the 15 ms batch): a native that calls guest functions (see calls_struct).
+                entry['calls'] = ['sub_' + c.upper() if re.fullmatch(r'[0-9A-Fa-f]{8}', c) else c
+                                  for c in value.split(',') if c]
             else:
                 sys.exit(f'localize_native: hand.txt: {part!r} in the line of {name}')
         out[name] = entry
     return out
+
+
+def native_call(entry):
+    """The call of a hand-written native: `::banjo::hand::n_<id>::Native` with, for one that calls guest functions
+    (hand.txt calls=), the header's struct of those calls as its first template argument."""
+    if entry.get('calls'):
+        return '::banjo::hand::n_%s::Native<Calls_%s>' % (entry['id'], entry['id'])
+    return '::banjo::hand::n_%s::Native' % entry['id']
+
+
+def calls_struct(entry, member_set, externs, hand):
+    """blur-nx (2026-11-16, the 15 ms batch): the guest calls of a hand-written native (hand.txt calls=), for one copy
+    header. A native that calls guest functions gets this struct as its template argument C and calls C::sub_X(ctx,
+    base, s) with the callee's arguments in ctx, as the guest code would; then `if (s.Stopped()) return true;`.
+      - A callee in this header's closure runs as its copy f_sub_X (any form: the guard's logged run follows it, its
+        stores recorded).
+      - Any other callee is a real call of the generated function (the in-place copy on the Switch); in the guard's
+        logged forms Open() stops the run there (the call is then not compared), as for the copies' own real calls.
+    The native hands over registers through ctx itself (it holds none of the guest's), and sets ctx.r1 to the frame its
+    original allocates, so the callees' frames land where they would."""
+    lines = ['struct Calls_%s {' % entry['id']]
+    for c in entry['calls']:
+        lines.append('  template <class S>')
+        if c in member_set and c in hand:
+            # A callee with a native of its own (the node loop's child mixers: itself): the native first, as at the
+            # copies' own call sites.
+            lines.append('  [[gnu::always_inline]] static inline void %s(PPCContext& __restrict ctx, uint8_t* base, '
+                         'S& s) { if (!%s(ctx, base, s)) f_%s(ctx, base, s); }' % (c, native_call(hand[c]), c))
+        elif c in member_set:
+            lines.append('  [[gnu::always_inline]] static inline void %s(PPCContext& __restrict ctx, uint8_t* base, '
+                         'S& s) { f_%s(ctx, base, s); }' % (c, c))
+        else:
+            externs.add(c)
+            lines.append('  [[gnu::always_inline]] static inline void %s(PPCContext& __restrict ctx, uint8_t* base, '
+                         'S& s) { if (s.Open()) return; %s(ctx, base); }' % (c, c))
+    lines.append('};')
+    return lines
 
 
 def skip_literal(regs):
@@ -1146,8 +1187,8 @@ def localize(index, hooks, reach, root, what, opts, out_dir, quiet=False, hand=N
                 # registers their originals write back (hand.txt exact=: the hash and the comparison return r3), and
                 # a caller that read r3 after an inlined native that ran got its own stale r3 (sub_82737F80 and
                 # sub_8271F9C0 took the other branch; the first diet PC run crashed after them).
-                return ('{ ' + before + CARD_FLUSH + 'if (!::banjo::hand::n_%s::Native(ctx, base, s)) { f_%s(ctx, base, s); '
-                        'if (s.Stopped()) return; } else if (s.Stopped()) return;%s }' % (hand[b]['id'], b, after))
+                return ('{ ' + before + CARD_FLUSH + 'if (!%s(ctx, base, s)) { f_%s(ctx, base, s); '
+                        'if (s.Stopped()) return; } else if (s.Stopped()) return;%s }' % (native_call(hand[b]), b, after))
             return '{ ' + before + CARD_FLUSH + 'f_%s(ctx, base, s); if (s.Stopped()) return;' % b + after + ' }'
         stats['calls_open'] += 1
         return '{ if (s.Open()) return; ' + before + CARD_FLUSH + m.group(0) + after + ' }'
@@ -1366,8 +1407,12 @@ def localize(index, hooks, reach, root, what, opts, out_dir, quiet=False, hand=N
     if root_keep is not None:
         skip |= {r for m in members for r in funcs[m]['written'] if not root_keep(r)}
     LIVE_OUT_DROPPED[0] += sum(1 for m, _ in dead_out if m in members)
-    entry = (f'if (!::banjo::hand::n_{hand[root]["id"]}::Native(ctx, base, s)) f_{root}(ctx, base, s);'
+    entry = (f'if (!{native_call(hand[root])}(ctx, base, s)) f_{root}(ctx, base, s);'
              if root in hand else f'f_{root}(ctx, base, s);')
+    # blur-nx (2026-11-16): the guest calls of the natives that make any (hand.txt calls=), after the declarations.
+    for m in hand_members:
+        if hand[m].get('calls'):
+            declarations.extend([''] + calls_struct(hand[m], member_set, externs, hand))
     hand_note = ('' if not hand_members else
                  '\n// Hand-written natives in front of their copies (app/src/cpu/hot/banjo_hand_natives.h): '
                  + ', '.join(hand_members) + '.\n// Registers the guard does not compare for this hook (they leave '

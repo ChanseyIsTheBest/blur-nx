@@ -44,6 +44,13 @@ REXCVAR_DEFINE_BOOL(audio_switch_pump_pairs, false, "Audio",
                     "engine renders the second right after the first, its voices' and effects' state still in the "
                     "caches. One more frame of latency (5.3 ms); the game's audio parameters take effect at 10.7 ms "
                     "steps; read when the audio is opened");
+// blur-nx (2026-11-16, the 15 ms batch, #196): M-43 widened: 1-4 frames back to back per pump tick (0: as
+// audio_switch_pump_pairs says). The engine renders the later frames of a tick with its voices' and effects' state still
+// in the caches; each frame of a tick past the first adds 5.3 ms of latency, and the game's audio parameters take effect
+// at the tick's steps. The same frames, rendered sooner or later: exact output.
+REXCVAR_DEFINE_INT32(audio_switch_pump_frames, 0, "Audio",
+                     "With audio_switch_pump: frames asked back to back per tick, 1-4 (0: audio_switch_pump_pairs "
+                     "decides, 2 or 1); read when the audio is opened");
 REXCVAR_DEFINE_INT32(audio_switch_frames_in_queue, 10, "Audio",
                      "With audio_switch_pump: game frames kept queued before audout "
                      "(cushion; 10 = 53 ms, 6 up to build 105). A longer queue lets the game wait without cutting the "
@@ -236,9 +243,14 @@ bool SwitchAudioSystem::StartOutput() {
   auto output = std::make_unique<Output>();
   output->pump = REXCVAR_GET(audio_switch_pump);
   output->frames_per_tick = REXCVAR_GET(audio_switch_pump_pairs) ? 2 : 1;  // blur-nx (2026-11-13, M-43)
+  if (const int32_t n = REXCVAR_GET(audio_switch_pump_frames); n >= 1) {  // blur-nx (2026-11-16, #196)
+    output->frames_per_tick = uint32_t(n > 4 ? 4 : n);
+  }
   output->frames_in_queue = static_cast<size_t>(std::clamp(REXCVAR_GET(audio_switch_frames_in_queue), 2, 32));
   REXLOG_INFO("SwitchAudioSystem: 187.5 Hz pump {}{}, {} frames queued", output->pump ? "active" : "off",
-              output->frames_per_tick == 2 ? " (two frames every 10.7 ms: audio_switch_pump_pairs)" : "",
+              output->frames_per_tick == 2   ? " (two frames every 10.7 ms: audio_switch_pump_pairs)"
+              : output->frames_per_tick > 2 ? " (frames back to back per tick: audio_switch_pump_frames)"
+                                            : "",
               output->frames_in_queue);
 
   Result rc = audoutInitialize();
