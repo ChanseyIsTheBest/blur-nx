@@ -1328,6 +1328,8 @@ void StatsGameFrame() {
     REXLOG_INFO("[renut] {}", dk);
   if (const std::string ss = ::renut::gpu::StateSourceReport(); !ss.empty())  // banjo-nx (2026-10-26)
     REXLOG_INFO("[renut] {}", ss);
+  if (const std::string rl = ::renut::gpu::RecordLockReport(); !rl.empty())  // blur-nx (2026-11-17)
+    REXLOG_INFO("[renut] {}", rl);
   if (const std::string rc = ::renut::gpu::ReplayRepeatCensusReport(); !rc.empty())  // banjo-nx (2026-10-26)
     REXLOG_INFO("[renut] {}", rc);
   if (const std::string pc = ::renut::gpu::PacketCensusReport(); !pc.empty())  // banjo-nx (2026-10-28)

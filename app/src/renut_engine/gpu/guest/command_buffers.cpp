@@ -13,6 +13,7 @@
 #include <initializer_list>
 #include <memory>
 #include <mutex>
+#include <thread>  // blur-nx (2026-11-17): RecordMutex's yield off the Switch
 #include <unordered_map>
 #include <type_traits>
 #include <utility>
@@ -28,6 +29,7 @@
 #include <plume_deko3d.h>  // sasrt-nx (2026-11-09; port 58): Deko3DRegionGiveBack
 #endif
 #if defined(__SWITCH__)
+#include <switch.h>  // blur-nx (2026-11-17): svcSleepThread (RecordMutex)
 #include <unistd.h>  // banjo-nx (2026-10-28): sbrk (ReleaseSpareBuffersWhenHeapShort)
 extern "C" char *fake_heap_end;  // libnx: the end of the malloc heap
 #endif
@@ -56,6 +58,14 @@ extern "C" char *fake_heap_end;  // libnx: the end of the malloc heap
 // that changed since the device's previous op (the op's 'changed', which the replay relies on as well). Exact:
 // set_words only accumulates, and a chunk that did not change still differs from the Begin image where it did at the
 // previous op, already noted; a buffer's first op scans everything.
+// blur-nx (2026-11-17, the 24-hour run): the record mutex as a spin-then-yield lock (RecordMutex below).
+REXCVAR_DEFINE_BOOL(blur_renut_record_spin, true, "Banjo/Enhancements",
+                    "The command buffers' record mutex (every recorded op's NewOp when its memo misses, BeginCommandBuffer, "
+                    "RunCommandBuffer) as a lock that spins briefly, then yields, then naps, instead of Horizon's mutex, "
+                    "which hands a released lock to a waiting thread even when that thread is not running (the frame "
+                    "jobs waited 12 % of their time on it while its holders were almost never sampled inside). Off: "
+                    "the system mutex, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 // blur-nx (2026-11-17, the 24-hour run): RunCommandBuffer's runs from a pool (QueueRunCommandBuffer, NewRun).
 REXCVAR_DEFINE_BOOL(blur_renut_run_pool, true, "Banjo/Enhancements",
                     "Each D3DDevice_RunCommandBuffer's run (its 12.9 KB copy of the running device and its buffers) "
@@ -584,10 +594,75 @@ struct DeviceRecording {
 // may be recording the next frame's into the same D3DCommandBuffers.
 using BufferSet = std::unordered_map<u32, std::shared_ptr<HostCommandBuffer>>;
 
+// blur-nx (2026-11-17, the 24-hour run; blur_renut_record_spin): the record mutex. The game threads that record
+// (the frame jobs, Game Master) take it some 30,000 times a second for a microsecond or so; Horizon's mutex parks a
+// waiter in the kernel and, at the unlock, hands the lock to it, so the lock then belongs to a thread that may wait
+// for its core while the others wait for it. This lock never hands over: a waiter spins a little (the holder is
+// usually running), then yields to any thread on its core (a lower-priority holder there gets to finish), then naps
+// 20 us at a time. The key is read once, before the first lock (kInitOnly), so every lock and unlock agree.
+class RecordMutex {
+public:
+  void lock() {
+    if (!Spin()) {
+      mutex_.lock();
+      return;
+    }
+    uint32_t expected = 0;
+    if (!flag_.compare_exchange_strong(expected, 1, std::memory_order_acquire, std::memory_order_relaxed)) [[unlikely]]
+      LockSlow();
+  }
+  void unlock() {
+    if (!Spin()) {
+      mutex_.unlock();
+      return;
+    }
+    flag_.store(0, std::memory_order_release);
+  }
+  // The slow paths and their waits since the last report (RecordLockReport).
+  std::atomic<uint64_t> slow{0}, yields{0}, naps{0};
+
+private:
+  static bool Spin() {
+    static const bool spin = REXCVAR_GET(blur_renut_record_spin);
+    return spin;
+  }
+  void LockSlow() {
+    slow.fetch_add(1, std::memory_order_relaxed);
+    for (uint32_t i = 0;; ++i) {
+      if (flag_.load(std::memory_order_relaxed) == 0) {
+        uint32_t expected = 0;
+        if (flag_.compare_exchange_weak(expected, 1, std::memory_order_acquire, std::memory_order_relaxed))
+          return;
+      }
+      if (i < 64) {
+#if defined(__aarch64__)
+        __asm__ __volatile__("yield");
+#endif
+      } else if (i < 80) {
+        yields.fetch_add(1, std::memory_order_relaxed);
+#if defined(__SWITCH__)
+        svcSleepThread(-2);  // YieldType_ToAnyThread: lower-priority threads on this core run too
+#else
+        std::this_thread::yield();
+#endif
+      } else {
+        naps.fetch_add(1, std::memory_order_relaxed);
+#if defined(__SWITCH__)
+        svcSleepThread(20'000);
+#else
+        std::this_thread::sleep_for(std::chrono::microseconds(20));
+#endif
+      }
+    }
+  }
+  std::atomic<uint32_t> flag_{0};
+  std::mutex mutex_;
+};
+
 // Guards the three below; never taken with State().mutex (the render thread
 // replays captured buffers without it). A buffer a queued run still holds is
 // replaced, not cleared, when the game records it again (BeginRecording).
-std::mutex g_record_mutex;
+RecordMutex g_record_mutex;
 std::unordered_map<u32, std::shared_ptr<HostCommandBuffer>> g_buffers;
 
 // Buffers no recording or queued run holds any more, kept with their capacity:
@@ -737,6 +812,9 @@ struct RecordCache {
   u32 cb_generation = 0;  // blur-nx (2026-11-17)
   HostCommandBuffer *buffer = nullptr;
   DeviceRecording *set = nullptr;
+  // blur-nx (2026-11-17): NewOp's census (RecordLockReport): answered here, and the misses by why (another device or
+  // buffer, the buffer begun / made / released since, this device's Begin*Vertices data pending).
+  uint64_t hits = 0, miss_other = 0, miss_generation = 0, miss_pending = 0;
 };
 thread_local RecordCache t_record_cache;
 // banjo-nx (2026-10-27, render thread night): the memo kept per recording device, by its g_touch slot (a device records
@@ -2146,7 +2224,14 @@ Op *NewOp(u32 device_va, OpKind kind, HostCommandBuffer **out_buffer) {
                    g_pending_count.load(std::memory_order_acquire) == 0)) {
     found = cache.buffer;
     found_set = cache.set;
+    ++cache.hits;  // blur-nx (2026-11-17): the census
   } else {
+    if (cache.device_va != device_va || cache.command_buffer != command_buffer || !cache.set)  // blur-nx: the census
+      ++cache.miss_other;
+    else if (cache.cb_generation != CbGeneration(command_buffer).load(std::memory_order_relaxed))
+      ++cache.miss_generation;
+    else
+      ++cache.miss_pending;
     std::lock_guard lock(g_record_mutex);
     FlushDevicePending(device_va);
     auto &slot = g_buffers[command_buffer];
@@ -2156,9 +2241,14 @@ Op *NewOp(u32 device_va, OpKind kind, HostCommandBuffer **out_buffer) {
     }
     found = slot.get();
     found_set = &g_recording_devices[device_va];
-    if (memo)
-      cache = {device_va, command_buffer, g_record_generation.load(std::memory_order_relaxed),
-               CbGeneration(command_buffer).load(std::memory_order_relaxed), found, found_set};
+    if (memo) {
+      cache.device_va = device_va;  // blur-nx (2026-11-17): field by field, the census kept
+      cache.command_buffer = command_buffer;
+      cache.generation = g_record_generation.load(std::memory_order_relaxed);
+      cache.cb_generation = CbGeneration(command_buffer).load(std::memory_order_relaxed);
+      cache.buffer = found;
+      cache.set = found_set;
+    }
   }
   HostCommandBuffer &buffer = *found;
   DeviceRecording &set = *found_set;
@@ -4063,6 +4153,36 @@ void ReleaseCommandBuffer(u32 command_buffer_va) {
     }
     SyncPendingCount();
   }
+}
+
+// blur-nx (2026-11-17): NewOp's memo census and the record lock's slow paths since the last report. The memos of the
+// devices with a touch slot are summed (each written by the one thread recording its device; read here without a lock,
+// a census); those of the threads without one are not reachable and are left out.
+std::string RecordLockReport() {
+  static uint64_t last[4] = {};
+  uint64_t now[4] = {};
+  for (const SlotRecordCache &s : g_record_cache_slots) {
+    now[0] += s.c.hits;
+    now[1] += s.c.miss_other;
+    now[2] += s.c.miss_generation;
+    now[3] += s.c.miss_pending;
+  }
+  uint64_t d[4];
+  for (int i = 0; i < 4; ++i) {
+    d[i] = now[i] - last[i];
+    last[i] = now[i];
+  }
+  const uint64_t calls = d[0] + d[1] + d[2] + d[3];
+  const uint64_t slow = g_record_mutex.slow.exchange(0, std::memory_order_relaxed);
+  const uint64_t yields = g_record_mutex.yields.exchange(0, std::memory_order_relaxed);
+  const uint64_t naps = g_record_mutex.naps.exchange(0, std::memory_order_relaxed);
+  if (!calls && !slow)
+    return {};
+  return fmt::format("record lock: NewOp {} ops, {} answered by the memo ({:.1f} %), misses: {} another device or "
+                     "buffer, {} the buffer begun or changed, {} vertices pending; spin lock (blur_renut_record_spin "
+                     "{}): {} slow paths, {} yields, {} naps of 20 us",
+                     calls, d[0], calls ? 100.0 * double(d[0]) / double(calls) : 0.0, d[1], d[2], d[3],
+                     REXCVAR_GET(blur_renut_record_spin) ? "on" : "off", slow, yields, naps);
 }
 
 // banjo-nx (2026-10-26, banjo_renut_diag_fast_census): the setters' and the inline writes' shares of the changed state.
