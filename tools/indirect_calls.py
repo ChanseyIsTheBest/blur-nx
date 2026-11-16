@@ -53,7 +53,48 @@ MACROS = MARKER + '''
 #endif
 #endif
 #ifndef REX_CALL_INDIRECT_FUNC_AT
-#if defined(__SWITCH__) || defined(REX_INDIRECT_CENSUS_OFF)
+#if defined(__SWITCH__) && !defined(REX_SITE_CACHE_OFF)
+// blur-nx (2026-11-17, CG-08 of docs/codegen-ideas-3.md): a one-entry cache per site. The dispatch table is 2 bytes per
+// guest code byte (20 MB for Blur), so a virtual call's table load usually misses (0.4-0.5 % of all console samples,
+// 1.6-3.3 % of the audio worker's). The site keeps its last target and function in one 64-bit word (~target in the
+// high half: an empty word matches nothing; the function as a 32-bit offset from RexSiteAnchor), read and written
+// whole, so it is never torn. A miss takes the table path, fills an empty word, and replaces a full one on 1 miss in 16
+// (a polymorphic site does not bounce its line between cores). Memory::SetFunction clears every word after a table
+// write (sdk/src/system/xmemory.cpp: the section rex_site_cache, only when a word was filled since). The table path
+// and the result are the table's: exact. REX_SITE_CACHE_OFF: the plain lookup.
+extern "C" unsigned char g_rex_site_cache_dirty;
+[[gnu::noinline, gnu::used]] inline void RexSiteAnchor(PPCContext&, uint8_t*) {}
+[[gnu::noinline]] inline void RexSiteMiss(uint64_t* slot, uint32_t t, PPCContext& ctx, uint8_t* base) {
+  PPCFunc* f = nullptr;
+  if ((uint32_t)(t - REX_CODE_BASE) < REX_CODE_SIZE + REX_THUNK_RESERVE_SIZE) [[likely]] f = REX_LOOKUP_FUNC(base, t);
+  if (f) [[likely]] {
+    const intptr_t off = (intptr_t)f - (intptr_t)&RexSiteAnchor;
+    uint64_t now;
+    __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(now));
+    if (off == (intptr_t)(int32_t)off && t != 0xFFFFFFFFu &&
+        (__atomic_load_n(slot, __ATOMIC_RELAXED) == 0 || (now & 15) == 0)) {
+      __atomic_store_n(slot, (uint64_t(~t) << 32) | uint32_t(int32_t(off)), __ATOMIC_RELAXED);
+      if (!__atomic_load_n(&g_rex_site_cache_dirty, __ATOMIC_RELAXED))
+        __atomic_store_n(&g_rex_site_cache_dirty, 1, __ATOMIC_RELAXED);
+    }
+  } else {
+    ctx.last_indirect_target = t;
+    f = rex::runtime::ResolveIndirectFunction(t);
+  }
+  f(ctx, base);
+}
+#define REX_CALL_INDIRECT_FUNC_AT(function, site, x)                                                    \\
+  do {                                                                                                  \\
+    static uint64_t rex_site_cache_ __attribute__((section("rex_site_cache")));                         \\
+    const uint32_t rex_site_t_ = (uint32_t)(x);                                                         \\
+    const uint64_t rex_site_c_ = __atomic_load_n(&rex_site_cache_, __ATOMIC_RELAXED);                   \\
+    if ((uint32_t)(rex_site_c_ >> 32) == ~rex_site_t_) [[likely]]                                       \\
+      ((PPCFunc*)((intptr_t)&RexSiteAnchor + (intptr_t)(int32_t)(uint32_t)rex_site_c_))(ctx, base);     \\
+    else                                                                                                \\
+      RexSiteMiss(&rex_site_cache_, rex_site_t_, ctx, base);                                            \\
+  } while (0)
+#define REX_PROMOTED_CALL(target, function) ((void)0)
+#elif defined(__SWITCH__) || defined(REX_INDIRECT_CENSUS_OFF)
 #define REX_CALL_INDIRECT_FUNC_AT(function, site, x) REX_CALL_INDIRECT_FUNC(x)
 #define REX_PROMOTED_CALL(target, function) ((void)0)
 #else
