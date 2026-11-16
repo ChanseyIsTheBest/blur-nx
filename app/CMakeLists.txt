@@ -861,7 +861,12 @@ if(REXGLUE_PLATFORM_SWITCH)
     # (libnx's switch.ld gathers those first, away from .text.hot), so the hot copies (sub_8250A7E8's is 120 KB, the
     # A57's I-cache 48 KB) pack their hot paths together. Exact: only the layout changes. The profile's checksums are
     # taken before the pass, so the existing profile still applies. The compile and the LTO link both get it.
-    option(BLUR_SWITCH_SPLIT_COLD "Switch: cold-block splitting (-freorder-blocks-and-partition)" ON)
+    # 2026-11-16 (the batch's first Switch build): OFF. The LTO link failed in the assembler: a libstdc++ switch's
+    # jump table (std::__format's _M_format_arg) with cases split into .text.unlikely, its offsets across the two
+    # sections ("invalid operands ... for `-'"); GCC 16.1 partitions AArch64 functions with pc-relative jump tables, and
+    # the generated code's switches could meet the same once the profile drives the split. Per-function options are
+    # streamed into the LTO objects, so the link's own flag cannot turn it off: the compile must not have it.
+    option(BLUR_SWITCH_SPLIT_COLD "Switch: cold-block splitting (-freorder-blocks-and-partition; breaks the LTO link)" OFF)
     if(BLUR_SWITCH_SPLIT_COLD)
         foreach(target ${_banjo_opt_targets})
             if(TARGET ${target})
