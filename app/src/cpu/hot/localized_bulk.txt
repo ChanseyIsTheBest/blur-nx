@@ -3151,3 +3151,7 @@
 82720880 1 console samples, 20 instructions, 0 direct callees
 8283C228 1 console samples, 122 instructions, 2 direct callees
 822D6360 1 console samples, 4 instructions, 0 direct callees
+824BA680 9 console samples, 770 instructions, 19 direct callees
+822DDB20 5 console samples, 344 instructions, 6 direct callees
+824A7328 4 console samples, 60 instructions, 1 direct callees
+823CA2D8 3 console samples, 34 instructions, 1 direct callees
