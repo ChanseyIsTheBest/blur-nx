@@ -141,6 +141,11 @@ struct HostTexture {
   uint64_t last_source_writes = 0;
   int32_t last_src[4] = {};
   int32_t last_dest_x = 0, last_dest_y = 0;
+  // vivapinata-nx (2026-11-12, vivapinata_depth_resolve_skip_unread; render/draw.cpp DepthResolveReadLocked): read,
+  // something has sampled this depth resolve destination (its float or its words), or a destination at its address
+  // before; skipped, its last resolve was left out (the last_* fields above say from where and what).
+  bool depth_read = false;
+  bool depth_skipped = false;
   // A texture over a depth resolve's memory: the resolve its words were
   // copied from last.
   uint64_t copied_resolve = 0;

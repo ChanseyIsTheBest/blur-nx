@@ -184,6 +184,19 @@ bool GuardBusy() noexcept;
 [[gnu::always_inline]] constexpr bool GuardBusy() noexcept { return false; }
 #endif
 }  // namespace banjo::hot
+// sasrt-nx (2026-11-12, banjo_hot_poison_dead; port 121): after an unguarded run of a copy, the registers of its hook's
+// skip set (dead after the return by LiveOut: the guard does not compare them) are overwritten with garbage, so a wrong
+// LiveOut shows (a crash, NaNs, a wrong picture) instead of hiding behind the skip set the guard takes from the same
+// analysis (tools/reg_liveness.py, leaf_dead_stores.py).
+namespace banjo::hot {
+extern std::atomic<bool> g_poison_dead;
+void PoisonDead(PPCContext& ctx, const RegSkip& skip);
+}  // namespace banjo::hot
+#define BANJO_HOT_POISON(ID)                                                    \
+  do {                                                                          \
+    if (banjo::hot::g_poison_dead.load(std::memory_order_relaxed)) [[unlikely]] \
+      banjo::hot::PoisonDead(ctx, banjo::hot::n_##ID::kSkip);                   \
+  } while (0)
 
 // SYM: the generated function's name; ID: the namespace suffix of its header (n_<ID>); KEY: its cvar; SLOT: its
 // PPCContext::host_counters slot. Written by tools/localize_native.py (app/generated/hot/banjo_hot_list.inc, and
@@ -230,6 +243,7 @@ bool GuardBusy() noexcept;
     uint8_t st = h.state.load(std::memory_order_relaxed);                                                        \
     if (st == banjo::hot::kDirect) [[likely]] {                                                                  \
       banjo::hot::n_##ID::Native(ctx, base);                                                                     \
+      BANJO_HOT_POISON(ID);                                                                                      \
       return;                                                                                                    \
     }                                                                                                            \
     if (st != banjo::hot::kOn) [[unlikely]] {                                                                    \
@@ -264,5 +278,6 @@ bool GuardBusy() noexcept;
       h.shared_counter.store(counter - 1, std::memory_order_relaxed);                                            \
     }                                                                                                            \
     banjo::hot::n_##ID::Native(ctx, base);                                                                       \
+    BANJO_HOT_POISON(ID);                                                                                        \
   }
 #endif  // BANJO_HOT_IN_PLACE

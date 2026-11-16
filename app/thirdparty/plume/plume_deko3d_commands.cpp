@@ -1689,14 +1689,27 @@ namespace plume {
             return;
         t->depthPending = false;
         flushBarriers();
+        // renut-ultimate (2026-11-13, sasrt-nx's finding merging port 45): as resolveUnboundDepth. The texture used and
+        // written now (trackedTargetWait, trackedReadWait: the read's barrier recorded next waits for this decompression);
+        // work since the last fragment wait (leanBarrierSkip); the bound targets' serial dropped (sameTargetsKept: with no
+        // framebuffer to bind again, or rebind false, the GPU has only this view bound, and the next setFramebuffer of the
+        // last bound framebuffer skipped its bind: draws with no targets); the image known decompressed
+        // (preciseDepthResolve).
+        markUsed(t);
+        if (g_deko3dTrace)
+            Deko3DTraceToken("Z");
         dkCmdBufBindRenderTargets(cmd, nullptr, 0, &t->depthPendingView);
+        boundTargetsSerial = 0;
+        workSinceFragmentWait = true;
         dkCmdBufResolveDepthValues(cmd);
+        t->depthUnresolved = false;
         if (rebind) {
             if (framebuffer) {
                 const DkImageView *colors[8];
                 for (uint32_t i = 0; i < framebuffer->colorCount; i++)
                     colors[i] = &framebuffer->colors[i];
                 dkCmdBufBindRenderTargets(cmd, colors, framebuffer->colorCount, framebuffer->hasDepth ? &framebuffer->depth : nullptr);
+                boundTargetsSerial = framebuffer->serial;
             }
             else
                 dkCmdBufBindRenderTargets(cmd, nullptr, 0, nullptr);
@@ -2109,6 +2122,21 @@ namespace plume {
         return true;
     }
 
+    void Deko3DReportCounter(RenderCommandList *commandList, const RenderQueryPool *queryPool, uint32_t index,
+                             uint32_t counter) {
+        auto *list = static_cast<Deko3DCommandList *>(commandList);
+        const auto *pool = static_cast<const Deko3DQueryPool *>(queryPool);
+        if (!list || !list->cmd || !pool || !pool->block || index >= pool->results.size())
+            return;
+        list->flushBarriers();
+        dkCmdBufReportCounter(list->cmd, DkCounter(counter), dkMemBlockGetGpuAddr(pool->block) + uint64_t(index) * 16);
+    }
+
+    const volatile uint64_t *Deko3DQueryPoolWords(const RenderQueryPool *queryPool) {
+        const auto *pool = static_cast<const Deko3DQueryPool *>(queryPool);
+        return pool && pool->block ? static_cast<const volatile uint64_t *>(dkMemBlockGetCpuAddr(pool->block)) : nullptr;
+    }
+
     bool Deko3DSetBlendConstant(RenderCommandList *commandList, const float rgba[4]) {
         if (!commandList)
             return false;
@@ -2242,10 +2270,17 @@ namespace plume {
 
     Deko3DSwapChain::~Deko3DSwapChain() { destroy(); }
 
+    }  // namespace plume
+    extern "C" void RexSwitchPerfPresentQuiesce(NWindow *nw);  // sdk/src/ui/switch_perf.cpp (port 145)
+    namespace plume {
+
     void Deko3DSwapChain::destroy() {
         if (!swapchain)
             return;
         dkQueueWaitIdle(device->queue);
+        // renut-ultimate (2026-11-16, port 145; tw2de_nx's, banjo_async_present): the buffer dequeued ahead goes back
+        // first (libnx does not release the window's buffers while one is dequeued).
+        RexSwitchPerfPresentQuiesce(desc.renderWindow ? desc.renderWindow : nwindowGetDefault());
         dkSwapchainDestroy(swapchain);
         swapchain = nullptr;
         textures.clear();

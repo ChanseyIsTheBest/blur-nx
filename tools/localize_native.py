@@ -60,6 +60,9 @@ import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import reg_liveness as reg_liveness_mod  # noqa: E402  (sasrt-nx 2026-11-12, stage 1; port 121: tools/reg_liveness.py)
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP = os.path.join(ROOT, 'app')
 GEN = os.path.join(APP, 'generated')
@@ -78,6 +81,47 @@ LIVE_OUT = os.environ.get('SASRT_LOCALIZE_LIVE_OUT', '1') != '0'
 LIVE_OUT_JSON = os.path.join(ROOT, 'out', 'leaf_live_out.json')
 _live_out = None
 LIVE_OUT_DROPPED = [0]
+# sasrt-nx (2026-11-12, its docs/calling-convention-plan.md stage 1; port 121): tools/reg_liveness.py's whole-program
+# liveness with the vector registers: a real call's hand-over leaves out the registers the callee does not read before
+# writing them and nothing reads after the call; a return leaves out the vector write-backs no caller reads (and the
+# guard does not compare those). SASRT_LOCALIZE_CALL_LIVENESS=0: as before.
+CALL_LIVENESS = os.environ.get('SASRT_LOCALIZE_CALL_LIVENESS', '1') != '0'
+REG_LIVENESS_JSON = os.path.join(ROOT, 'out', 'reg_liveness.json')
+REG_ALL = (1 << 192) - 1
+_reg_liveness = None
+CALL_SKIPPED = [0, 0, 0, 0]  # (call sites with a store left out, stores left out; the same at indirect calls)
+
+
+def reg_liveness():
+    """{'live_out': {address: mask}, 'sites': {address: {instruction index: (callee address, mask)}}} of this tree."""
+    global _reg_liveness
+    if _reg_liveness is None:
+        _reg_liveness = {'live_out': {}, 'sites': {}, 'indirect': {}}
+        if CALL_LIVENESS:
+            try:
+                data = json.load(open(REG_LIVENESS_JSON))
+                if os.path.normcase(os.path.abspath(data.get('gen', ''))) != os.path.normcase(os.path.abspath(GEN)):
+                    raise ValueError('another tree')
+                if data.get('stamp') != reg_liveness_mod.tree_stamp(GEN):
+                    raise ValueError('the tree changed since the analysis')
+                _reg_liveness = {
+                    'live_out': {int(k, 16): int(v, 16) for k, v in data['live_out'].items()},
+                    'sites': {int(k, 16): {row[0]: (int(row[1], 16), int(row[2], 16)) for row in rows}
+                              for k, rows in data['sites'].items()},
+                    'indirect': {int(k, 16): {row[0]: int(row[1], 16) for row in rows}
+                                 for k, rows in data.get('indirect', {}).items()}}
+            except (OSError, ValueError, KeyError, AttributeError, TypeError):
+                _reg_liveness = {'live_out': {}, 'sites': {}, 'indirect': {}}
+    return _reg_liveness
+
+
+def reg_bit(reg):
+    """The bit of a register name in tools/reg_liveness.py's masks (None: not a general, float or vector register)."""
+    k = re.match(r'^([rfv])(\d+)$', reg)
+    if not k:
+        return None
+    n = int(k.group(2))
+    return n if k.group(1) == 'r' else 32 + n if k.group(1) == 'f' else 64 + n
 
 
 def live_out_keep(name):
@@ -97,28 +141,40 @@ def live_out_keep(name):
             _live_out = {}
     m = re.match(r'^(?:__imp__)?sub_([0-9A-F]{8})$', name)
     mask = _live_out.get(int(m.group(1), 16)) if m else None
-    if mask is None or mask == (1 << 64) - 1:
+    # sasrt-nx (2026-11-12, stage 1; port 121): the vector registers' LiveOut (tools/reg_liveness.py)
+    vmask = reg_liveness()['live_out'].get(int(m.group(1), 16)) if m else None
+    if vmask == REG_ALL:
+        vmask = None
+    if mask == (1 << 64) - 1:
+        mask = None
+    if mask is None and vmask is None:
         return None
 
     def keep(reg):
+        if reg.startswith('v') and reg[1:].isdigit():
+            return True if vmask is None else bool(vmask >> (64 + int(reg[1:])) & 1)
         k = re.match(r'^([rf])(\d+)$', reg)
         if not k:
             return True
         n = int(k.group(2))
+        # sasrt-nx (2026-11-12, stage 1c; port 121): a general / float register is left out when either analysis finds
+        # it dead after the return: leaf_dead_stores.py's LiveOut, or tools/reg_liveness.py's, which also bounds a
+        # function entered through a pointer by the convention (its per-call-site hand-overs use the same LiveOut, so
+        # the two agree; the guard's skip set takes this predicate).
         if k.group(1) == 'r':
             if n in (1, 2, 3, 13) or n > 12:
                 return True
-            return bool(mask >> n & 1)
+            return (mask is None or bool(mask >> n & 1)) and (vmask is None or bool(vmask >> n & 1))
         if n == 1 or n > 13:
             return True
-        return bool(mask >> (32 + n) & 1)
+        return (mask is None or bool(mask >> (32 + n) & 1)) and (vmask is None or bool(vmask >> (32 + n) & 1))
     return keep
 
 
 BULK_SLOT = 9999  # past PPCContext::host_counters: the guard's countdown is the hook's own (banjo_hot_guest.h)
 HAND = os.path.join(APP, 'src', 'cpu', 'hot', 'hand.txt')
 IMAGE_BASE = 0x82000000
-INDEX_FORMAT = 10  # raise when summarise() changes: the cached index is rebuilt (5: carded vector stores; 6, 7: inline leaves; 8: r1 mirror, 2026-10-23; 9: atomics, sasrt-nx 2026-11-10; 10: promoted fallbacks counted, blur-nx 2026-11-13)
+INDEX_FORMAT = 12  # raise when summarise() changes: the cached index is rebuilt (5: carded vector stores; 6, 7: inline leaves; 8: r1 mirror, 2026-10-23; 9: atomics, sasrt-nx 2026-11-10; 10: promoted fallbacks counted, blur-nx 2026-11-13; 12: rex::ppc::exact:: helpers and rex_spin_hint known, port 144)
 # blur-nx (2026-11-13, M-25 of docs/cpu-moonshots-50-1113.md and its audit): a promoted indirect call (tools/
 # indirect_calls.py: `if (REX_PROMOTED_IS(ctr, T)) { sub_T(ctx, base); } else { REX_CALL_INDIRECT_FUNC_AT(..); }`) no
 # longer keeps a function out of a closure: its fallback is an open call like any other (the copy's running form
@@ -148,10 +204,12 @@ GOTO = re.compile(r'\bgoto loc_[0-9A-F]{8};')
 # Every name the generator writes in front of a parenthesis (tools/loop_locals.py's list): anything else is a
 # port's own host function (a mid-asm hook), which a copy cannot contain.
 NAME = re.compile(r'([A-Za-z_][A-Za-z0-9_:]*(?:<[A-Za-z0-9_ ]+>)?)\s*\(')
-KNOWN = re.compile(r'^(?:REX_\w+|simde_\w+|__builtin_\w+|rex::ppc::\w+|std::fma|std::bit_cast<\w+>|double|float|sqrt|'
+KNOWN = re.compile(r'^(?:REX_\w+|simde_\w+|__builtin_\w+|rex::ppc::\w+|rex::ppc::exact::\w+|std::fma|std::bit_cast<\w+>|double|float|sqrt|'
                    r'memset|if|for|switch|sizeof|u?int(?:8|16|32|64)_t|u(?:8|16|32|64)|size_t|int|short|char|'
                    r'static_cast<[A-Za-z0-9_ ]+>|compare(?:<\w+>)?|setFromMask|(?:en|dis)ableFlushMode(?:Unconditional)?|'
-                   r'flushModeIs(?:On|Off)|ppc_trap|simde__m128i?)$')
+                   r'flushModeIs(?:On|Off)|ppc_trap|simde__m128i?|'
+                   # renut-ultimate (port 144): the spin-wait hints' yield (spin_hint_yield; no guest state)
+                   r'rex_spin_hint)$')
 # Forms that make a function unfit for a copy and for a closure (see the docstring).
 SPECIAL = re.compile(r'\b(REX_GUEST_CAS|reserved|REX_MM_(?:STORE|LOAD)_\w+|ppc_setjmp|ppc_longjmp|REX_ENTER_GLOBAL_LOCK|'
                      r'REX_LEAVE_GLOBAL_LOCK|REX_CHECK_GLOBAL_LOCK|REX_QUERY_TIMEBASE|REX_UNIMPLEMENTED|'
@@ -664,13 +722,19 @@ def strip_windows_only(text):
 
 
 class Hooks:
-    """What an app or SDK hook may replace: every 82xxxxxx address and every identifier their sources' code mentions
+    """What an app or SDK hook may replace: every 82xxxxxx (83xxxxxx: port 144) address and every identifier their sources' code mentions
     (comments and __imp__ references left out, as in sa2-nx's tool: a comment hooks nothing and __imp__sub_X is the
     original). The functions of localized.txt are not in it: a copy touches no more than its original."""
 
     def __init__(self, natives):
         self.addresses = set()
         self.words = set()
+        # renut-ultimate (2026-11-16, port 144; tw2de_nx's): 83xxxxxx too when the game's code runs there (its function
+        # table has entries at 0x83000000 and above: TW2's sub_833C2518 ...); a tree without them reads as before.
+        addr_re = r'(?<![0-9A-Fa-f])(82[0-9A-Fa-f]{6})(?![0-9A-Fa-f])'
+        for p in glob.glob(os.path.join(GEN, '*_init.cpp')):
+            if re.search(r'\{ 0x83[0-9A-Fa-f]{6},', open(p, encoding='utf-8', errors='ignore').read()):
+                addr_re = r'(?<![0-9A-Fa-f])(8[23][0-9A-Fa-f]{6})(?![0-9A-Fa-f])'
         roots = [os.path.join(APP, 'src'), os.path.join(ROOT, 'sdk', 'src'), os.path.join(ROOT, 'sdk', 'include')]
         # sasrt-nx (2026-11-11, port 74; its idea 29): not app/config/renut_gpu_funcs.toml any more. It is a game's map of
         # Direct3D's names (a reference: no code hooks through it; this base's Renut hooks Direct3D by address,
@@ -697,7 +761,7 @@ class Hooks:
             if not toml:
                 text = strip_windows_only(text)  # blur-nx (2026-11-13, M-28)
             text = re.sub(r'__imp__\w+', ' ', text)
-            self.addresses.update(m.upper() for m in re.findall(r'(?<![0-9A-Fa-f])(82[0-9A-Fa-f]{6})(?![0-9A-Fa-f])', text))
+            self.addresses.update(m.upper() for m in re.findall(addr_re, text))
             if not toml:
                 self.words.update(re.findall(r'\b[A-Za-z_]\w{5,}\b', text))
         self.natives = set(natives)
@@ -1189,8 +1253,9 @@ def localize(index, hooks, reach, root, what, opts, out_dir, quiet=False, hand=N
         sync_memo[b] = result
         return result
 
-    def call_text(m, me, my_regs, my_written, localized):
-        """The replacement of one call statement. my_written: the registers that can be dirty here."""
+    def call_text(m, me, my_regs, my_written, localized, site=None):
+        """The replacement of one call statement. my_written: the registers that can be dirty here. site: the guest
+        instruction index of the statement in its function (tools/reg_liveness.py's call sites), when known."""
         written_name = m.group(1)
         b = base_name(written_name) if written_name else None
         mention, change, closed = call_reach(m)
@@ -1201,6 +1266,29 @@ def localize(index, hooks, reach, root, what, opts, out_dir, quiet=False, hand=N
                 return '{ o_%s(ctx, base, s); if (s.Stopped()) return; }' % b
             return '{ s.Open(); return; }'
         out_regs = my_written if mention is ALL else [r for r in my_written if r in mention]
+        # sasrt-nx (2026-11-12, stage 1; port 121): a real call's hand-over without what the callee does not read before
+        # writing it and nothing reads after the call (tools/reg_liveness.py; the callee must be the one it saw).
+        if not closed and site is not None and written_name:
+            mm = re.match(r'^(?:__imp__)?sub_([0-9A-F]{8})$', written_name)
+            fm = re.match(r'^(?:__imp__)?sub_([0-9A-F]{8})$', me)
+            row = reg_liveness()['sites'].get(int(fm.group(1), 16), {}).get(site) if (mm and fm) else None
+            if row and row[0] == int(mm.group(1), 16):
+                kept = [r for r in out_regs if reg_bit(r) is None or not (row[1] >> reg_bit(r) & 1)]
+                if len(kept) < len(out_regs):
+                    CALL_SKIPPED[0] += 1
+                    CALL_SKIPPED[1] += len(out_regs) - len(kept)
+                    out_regs = kept
+        # sasrt-nx (2026-11-12, stage 1d; port 121): an indirect call (or a promoted call's fallback) without the scratch
+        # vector registers dead after it (a function reached through a pointer reads none of them on entry).
+        if not closed and site is not None and not written_name and m.group(0).startswith('REX_CALL_INDIRECT'):
+            fm = re.match(r'^(?:__imp__)?sub_([0-9A-F]{8})$', me)
+            mask = reg_liveness()['indirect'].get(int(fm.group(1), 16), {}).get(site) if fm else None
+            if mask:
+                kept = [r for r in out_regs if reg_bit(r) is None or not (mask >> reg_bit(r) & 1)]
+                if len(kept) < len(out_regs):
+                    CALL_SKIPPED[2] += 1
+                    CALL_SKIPPED[3] += len(out_regs) - len(kept)
+                    out_regs = kept
         in_regs = my_regs if change is ALL else [r for r in my_regs if r in change]
         before = ''.join(f'ctx.{r} = l_{r}; ' for r in out_regs)
         after = ''.join(f' l_{r} = ctx.{r};' for r in in_regs)
@@ -1311,6 +1399,10 @@ def localize(index, hooks, reach, root, what, opts, out_dir, quiet=False, hand=N
                 sys.exit(f'localize_native: {name}: prefetch_rules.txt names {", ".join(gone)}, which its code no '
                          f'longer has (the guest code under the rule changed: check the rule)')
         dirty, writes, dirty_end = dirty_sets(name, lines, lambda l: [call_reach(m)[0] for m in CALL.finditer(l)])
+        # sasrt-nx (2026-11-12, stage 1; port 121): the guest instruction index of each generated line (reg_liveness.py)
+        raw = index.files.get(funcs[name]['file']) or []
+        a0 = funcs[name]['at'][0]
+        node_at = reg_liveness_mod.node_of_lines(raw[a0:funcs[name]['at'][1]]) if CALL_LIVENESS and raw else []
         in_loop, counted_barriers = loop_info(lines)  # port 74, its ideas 52 and 60
         file_lines = original_lines.setdefault(funcs[name]['file'], {})
         for localized in (True, False):
@@ -1365,7 +1457,8 @@ def localize(index, hooks, reach, root, what, opts, out_dir, quiet=False, hand=N
                     continue
                 l, stores = store_line(l)
                 l = atomic_stop(l)  # sasrt-nx (2026-11-10): see ATOMICS
-                l = CALL.sub(lambda m: call_text(m, name, regs, here, localized), l)
+                site = node_at[number - 1 - a0] if 0 <= number - 1 - a0 < len(node_at) else None  # port 121
+                l = CALL.sub(lambda m: call_text(m, name, regs, here, localized, site), l)
                 if localized and (sync_ret or CARD_FLUSH):
                     # Braces: the generated code also writes a return as the body of a one-line `if`. (Port 74: only
                     # the live write-backs, its idea 37, and the pending card run flushed, its idea 39.)
@@ -1645,6 +1738,9 @@ def main():
                 skipped.append(f'{root} ({str(e).replace("localize_native: ", "")[:90]})')
         write_list(entries, a.out, made)
         print(f'localize_native: {LIVE_OUT_DROPPED[0]} return write-backs left out by LiveOut (idea 37)')
+        print(f'localize_native: {CALL_SKIPPED[1]} register stores left out of {CALL_SKIPPED[0]} real calls (their '
+              f'hand-overs) (stage 1, tools/reg_liveness.py; data {"used" if reg_liveness()["sites"] else "NOT available"}); '
+              f'{CALL_SKIPPED[3]} scratch vector stores left out of {CALL_SKIPPED[2]} indirect calls (stage 1d)')
         print(f'localize_native: {LOOP_STATS[0]} pointer-chase prefetches (idea 52), {LOOP_STATS[1]} counted loops\' '
               f'barriers left out (idea 60), {LOOP_STATS[2]} hand-named prefetches (M-19, prefetch_rules.txt)')
         print(f'localize_native: {CONST_ARG_FORCED[0]} members with a constant argument forced inline (idea 34)')

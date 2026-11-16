@@ -37,6 +37,15 @@
 #include <threading_switch.h>  // sasrt-nx (2026-11-09; port 58): RexSwitchReleaseSpareStacks (the governor)
 #endif
 
+// renut-ultimate (2026-11-16, port 145; tw2de_nx's of 2026-10-22, ON at the user's word: "port the speed ups as on by default").
+REXCVAR_DEFINE_BOOL(banjo_renut_keep_unused_targets, true, "Banjo/Renut",
+                    "tw2de_nx: a render target no surface uses any more is kept for 250 ms for a surface that takes the "
+                    "same EDRAM view again, instead of being destroyed and made anew (a game that switches one surface "
+                    "between two views every frame: tw2de_nx made 8 images a frame, 4 % of a core in the kernel's "
+                    "mapping calls). false: retired at once, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_INT32(banjo_renut_kept_targets, 24, "Banjo/Renut",
+                     "With banjo_renut_keep_unused_targets: how many unused targets are kept at most (the oldest goes)");
 REXCVAR_DEFINE_STRING(renut_resolution, "720p", "Nuts&Bolts/Graphics",
                       "Internal render resolution, by its height: 480p, 720p (the game's own), "
                       "1080p, 1440p or 4K (2160 lines). Applies from the next frame.")
@@ -133,6 +142,12 @@ std::unordered_map<uint64_t, std::unique_ptr<HostSurface>> g_targets;
 // Surface VA -> its target's key, and how many surfaces use each target.
 std::unordered_map<u32, uint64_t> g_surface_keys;
 std::unordered_map<uint64_t, uint32_t> g_target_users;
+// renut-ultimate (2026-11-16, port 145; tw2de_nx's of 2026-10-22, banjo_renut_keep_unused_targets, on by default):
+// targets no surface uses any more, kept (by key, with when the last user left) for a surface that takes the same
+// view again. tw2de_nx's game rewrote one surface object between two views every frame: each switch retired one
+// target and made the other anew, about 8 image creations a frame (250 GPU mappings a second, 4 % of a core in the
+// kernel's mapping calls). The console's EDRAM keeps what each view held, so a kept target is also closer to it.
+std::unordered_map<uint64_t, int64_t> g_unused_targets;
 std::vector<CachedFramebuffer> g_framebuffers;
 // banjo-nx (2026-10-19, render-thread proposal 8): the last framebuffers looked up, checked before the search of every
 // framebuffer made (a linear search with an 80-byte compare at every draw's BindTargets); emptied whenever a cached
@@ -592,8 +607,9 @@ void LatchResolutionScaleLocked() {
           g_dynamic_steps[m][n++] = low;
 #if defined(PLUME_DEKO3D)
           const int between = DynamicSteps();
+          const int32_t grid = DynamicStepLines(docked_mode);  // sasrt-nx (2026-11-09): each mode's grid, 36 before
           for (int i = 1; i <= between && n < kMaxDynamicSteps - 1; ++i) {
-            const int32_t h = (low + (high - low) * i / (between + 1) + 18) / 36 * 36;
+            const int32_t h = (low + (high - low) * i / (between + 1) + grid / 2) / grid * grid;
             if (h > g_dynamic_steps[m][n - 1] && h < high)
               g_dynamic_steps[m][n++] = h;
           }
@@ -809,6 +825,26 @@ REXCVAR_DEFINE_BOOL(sasrt_dynamic_cpu_aware, true, "Nuts&Bolts/Graphics",
                     "when the GPU's time is above both, and up while the next step is predicted under 85 % of the larger "
                     "(from sasrt-nx). Off: the budget alone, as before")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// sasrt-nx (2026-11-09, the user: "raise it if there's 1.0 ms of room for 1 second"): the next step is taken when its
+// predicted time is at least this far under the budget for banjo_renut_dynamic_up_s in a row (in place of "under 85 %
+// of the budget": 29.3 ms at 34.5, which held the handheld race at 612 lines with the GPU at 27-30 ms there). 0: the
+// 85 % rule. The prediction (the time now times the pixel ratio) is an overestimate, so a step taken by it fits.
+// vivapinata-nx (2026-11-12, the owner: "copy sonic racing it fixed the issue"): run c28 held 576 lines at 26.96 ms GPU
+// against a 32 ms budget (612 predicted 30.4 ms, over the 85 % rule's 27.2; under this rule's 31.0).
+REXCVAR_DEFINE_DOUBLE(sasrt_dynamic_up_room_ms, 1.0, "Nuts&Bolts/Graphics",
+                      "banjo_renut_dynamic_resolution: step up when the next height's predicted GPU time a frame has "
+                      "been this many ms under the budget for banjo_renut_dynamic_up_s (0: under 85 % of the budget; "
+                      "from sasrt-nx)");
+
+// sasrt-nx (2026-11-09, the user: "more steps, especially in docked"; console run steps_race, handheld 540-720 every
+// 18 lines): a step up went to the highest step predicted with room, often two at once (666 -> 702), onto a height
+// neither settable code held: 14 targets made again each time (17 such changes in the race against 2 with 6 steps).
+// One step at a time, the moves stay between the heights the codes hold (and 720, code 0) unless the band moves.
+REXCVAR_DEFINE_BOOL(sasrt_dynamic_up_one_step, true, "Nuts&Bolts/Graphics",
+                    "banjo_renut_dynamic_resolution: a step up goes one step (when the next has the room), not to the "
+                    "highest step with room: fewer changes of a settable code's height (each makes its targets again; "
+                    "from sasrt-nx)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 // sasrt-nx (2026-11-09 night, SASRT's run mem12; port 58): see the step-up branch below.
 REXCVAR_DEFINE_BOOL(sasrt_dynamic_up_memory, true, "SASRT/Graphics",
@@ -850,6 +886,9 @@ void NoteGpuFrameForDynamicResolution(double gpu_ms) {
       cpu_average = cpu_average > 0.0 ? cpu_average * 0.94 + cpu_side * 0.06 : cpu_side;
     budget = std::max(budget, cpu_average);
   }
+  // sasrt-nx (2026-11-09, sasrt_dynamic_up_room_ms): the predicted time a step up must stay at or under.
+  static const double up_room = REXCVAR_GET(sasrt_dynamic_up_room_ms);
+  const double up_limit = up_room > 0.0 ? budget - up_room : budget * 0.85;
   // The time a step is predicted to take: the average times the pixel ratio.
   const auto predicted = [&](int s) {
     const double r = double(heights[s]) / current;
@@ -887,16 +926,17 @@ void NoteGpuFrameForDynamicResolution(double gpu_ms) {
       const double need_mb = double(g_current_set_mb.load(std::memory_order_relaxed)) * r * r;
       memory_ok = free_mb == UINT32_MAX || double(free_mb) >= double(banjo::renut_gpu::MemoryLowMarkMb()) + need_mb;
       static uint32_t held_logged = 0;
-      if (!memory_ok && predicted(step + 1) < budget * 0.85 && held_logged++ < 16)
+      if (!memory_ok && predicted(step + 1) <= up_limit && held_logged++ < 16)
         RGPU_INFO("[renut] dynamic resolution: {} lines held back: {} MB free, the next set ~{:.0f} MB and the low mark "
                   "{} MB (sasrt_dynamic_up_memory)", heights[step + 1], free_mb, need_mb,
                   banjo::renut_gpu::MemoryLowMarkMb());
     }
-    if (predicted(step + 1) >= budget * 0.85 || banjo::renut_gpu::MemoryLow() || !memory_ok)  // port 58: the governor
+    if (predicted(step + 1) > up_limit || banjo::renut_gpu::MemoryLow() || !memory_ok)  // port 58: the governor
       fits_since = now;
     if (since >= up_seconds && std::chrono::duration<double>(now - fits_since).count() >= up_seconds) {
       next = step + 1;
-      while (next + 1 < count && predicted(next + 1) < budget * 0.85)
+      static const bool one_step = REXCVAR_GET(sasrt_dynamic_up_one_step);  // sasrt-nx (2026-11-09)
+      while (!one_step && next + 1 < count && predicted(next + 1) <= up_limit)
         ++next;
     }
   }
@@ -919,8 +959,50 @@ void SetTilingExtentLocked(uint32_t width, uint32_t height) {
   g_tiling_height = height;
 }
 
+void DropTarget(uint64_t key) {
+  if (auto it = g_targets.find(key); it != g_targets.end()) {
+    RetireTarget(*it->second);
+    g_targets.erase(it);
+  }
+}
+
+// Port 148 (banjo_renut_keep_unused_targets): kept targets unused for kUnusedTargetMs, and the oldest beyond
+// banjo_renut_kept_targets, go (tw2de_nx: 250 ms and 24; the views a game switches between come back within a frame,
+// and nothing is kept long enough to matter for memory). Swept every frame too (SweepUnusedTargetsLocked).
+constexpr int64_t kUnusedTargetMs = 250;
+int64_t TargetNowMs() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+void SweepUnusedTargets() {
+  if (g_unused_targets.empty())
+    return;
+  const int64_t now = TargetNowMs();
+  for (auto it = g_unused_targets.begin(); it != g_unused_targets.end();) {
+    if (now - it->second > kUnusedTargetMs) {
+      DropTarget(it->first);
+      it = g_unused_targets.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  const size_t kept_max = size_t(std::max(1, int(REXCVAR_GET(banjo_renut_kept_targets))));
+  while (g_unused_targets.size() > kept_max) {
+    auto oldest = std::min_element(g_unused_targets.begin(), g_unused_targets.end(),
+                                   [](const auto &a, const auto &b) { return a.second < b.second; });
+    DropTarget(oldest->first);
+    g_unused_targets.erase(oldest);
+  }
+}
+
+// A target gets a user again: no longer a kept one.
+void UseTarget(uint64_t key) {
+  if (++g_target_users[key] == 1 && !g_unused_targets.empty())
+    g_unused_targets.erase(key);
+}
+
 // A surface stops using its target (destroyed, or its header now describes
-// another view); the last user retires it.
+// another view); the last user retires it (port 145: or keeps it, banjo_renut_keep_unused_targets).
 void UnuseTarget(uint64_t key) {
   auto users = g_target_users.find(key);
   if (users == g_target_users.end() || --users->second)
@@ -928,11 +1010,16 @@ void UnuseTarget(uint64_t key) {
   g_target_users.erase(users);
   ++g_surface_epoch;
   ++g_sasrt_table_epoch;  // sasrt-nx (2026-11-09, sasrt_rt_restore_candidates; port 54)
-  if (auto it = g_targets.find(key); it != g_targets.end()) {
-    RetireTarget(*it->second);
-    g_targets.erase(it);
+  static const bool keep = REXCVAR_GET(banjo_renut_keep_unused_targets);
+  if (keep && g_targets.count(key)) {
+    g_unused_targets[key] = TargetNowMs();
+    SweepUnusedTargets();
+    return;
   }
+  DropTarget(key);
 }
+
+void SweepUnusedTargetsLocked() { SweepUnusedTargets(); }
 
 HostSurface *FindHostSurfaceLocked(u32 surface_va) {
   auto key = g_surface_keys.find(surface_va);
@@ -1433,7 +1520,7 @@ HostSurface *GetHostSurfaceSlow(u32 surface_va, const d3d::SurfaceDesc *desc) {
   const uint64_t key = TargetKey(*desc, depth, format, scale);
   auto [bound, first_use] = g_surface_keys.try_emplace(surface_va, key);
   if (first_use) {
-    ++g_target_users[key];
+    UseTarget(key);  // port 145: a kept target taken again
     ++g_surface_epoch;
   } else if (bound->second != key) {
     ++g_surface_epoch;
@@ -1441,7 +1528,7 @@ HostSurface *GetHostSurfaceSlow(u32 surface_va, const d3d::SurfaceDesc *desc) {
     // us): the surface is a view of other EDRAM now.
     UnuseTarget(bound->second);
     bound->second = key;
-    ++g_target_users[key];
+    UseTarget(key);  // port 145
   }
 
   auto &slot = g_targets[key];

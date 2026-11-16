@@ -244,9 +244,11 @@ REXCVAR_DEFINE_INT32(banjo_renut_portrait_fur_shells_percent, 100, "Banjo/Enhanc
                      "targets of 128 x 128 or less (the dialogue portrait, 96 x 96): 50 draws every other shell (11 of "
                      "21, the first always). 100: the same share as the rest of the fur")
     .range(25, 100);
-REXCVAR_DEFINE_INT32(msaa_level, 4, "Katamari/Graphics",
-                     "Samples per pixel of the game's MSAA targets: 4 (the game's own), 2 or 1 (off). Fewer: rougher "
-                     "edges, less GPU work")
+// renut-ultimate (2026-11-12, port 118, the user's choice): MSAA off by default in the base (1), SMAA on
+// (banjo_renut_smaa) smooths the edges instead. A game sets 4 (its own) or 2 in its toml.
+REXCVAR_DEFINE_INT32(msaa_level, 1, "Katamari/Graphics",
+                     "Samples per pixel of the game's MSAA targets: 1 (off, the base's default: SMAA smooths the edges "
+                     "instead), 2 or 4 (the game's own). Fewer: rougher edges, less GPU work")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 // blur-nx (2026-11-12): the player's blur.toml option, defined in app/src/blur_keys.cpp (MsaaLevel reads it).
 REXCVAR_DECLARE(bool, disable_msaa);
@@ -267,13 +269,18 @@ REXCVAR_DEFINE_BOOL(banjo_deko3d_uam_wide_rows, true, "Banjo/Enhancements",
                     "32-bit loads, with a DKSH cache of its own (deko3d_shaders_f447.bin)");
 REXCVAR_DEFINE_BOOL(banjo_renut_diag_null_ps, false, "Banjo/Diagnostics",
                     "Diagnostic (2026-10-20): the fur family's pixel shaders (tools/nullps_shaders.txt) discard at once, so the GPU profile shows their draws' vertex and rasterisation cost alone. The fur vanishes: a measurement, not a picture (configs/banjo_renut_diag_fur_vertex_only.toml)");
-REXCVAR_DEFINE_BOOL(banjo_renut_smaa, false, "Banjo/Enhancements",
+// renut-ultimate (2026-11-12, port 118, the user's choice): on by default in the base. It acts only in a game whose
+// final composite pixel shader is in banjo_renut_smaa_after_ps (N&B's by default): a game that has not set its own runs
+// SMAA on no frame (the 10 s "SMAA ... frames" line says 0), and while SMAA is on the colour hand-over is off unless
+// sasrt_gpu_handover_with_smaa is on.
+REXCVAR_DEFINE_BOOL(banjo_renut_smaa, true, "Banjo/Enhancements",
                     "SMAA 1x (2026-10-21, the user's request; Jimenez et al.'s SMAA, MIT: app/thirdparty/smaa): "
                     "anti-aliasing of the game's 3D image right after its final composite (a draw with one of the pixel "
                     "shaders of banjo_renut_smaa_after_ps), before the HUD is drawn over it, so the HUD and its text stay "
                     "as they are. A copy and three full-screen passes at the target's size (luma edges, blending "
                     "weights, neighbourhood blending; render/smaa.cpp); the in-run A/B target 19 measures its GPU time. "
-                    "It smooths the 3D image's edges: not the game's own picture");
+                    "It smooths the 3D image's edges: not the game's own picture. On by default in the base; a game "
+                    "lists its own composite in banjo_renut_smaa_after_ps, or SMAA runs on no frame");
 REXCVAR_DEFINE_INT32(banjo_renut_smaa_quality, 1, "Banjo/Enhancements",
                      "banjo_renut_smaa's preset: 1 = SMAA's medium (8 search steps, no diagonal or corner detection), "
                      "2 = high (16 search steps, diagonal search of 8, corner rounding 25: smoother diagonals, more GPU "
@@ -359,6 +366,13 @@ REXCVAR_DEFINE_BOOL(banjo_renut_depth_words_lazy, true, "Banjo/Enhancements",
                     "the emulator route: the depth of field's, 1 of 5 resolves a frame; the shadow maps' never), and "
                     "in the first 300 resolves of each. A read of words not written is served by writing them then "
                     "from the unchanged source; the 10 s depth resolve line counts both. Same pixels");
+REXCVAR_DEFINE_BOOL(vivapinata_depth_resolve_skip_unread, false, "Banjo/Enhancements",
+                    "vivapinata-nx (2026-11-12, NOT exact in principle, off; A/B 156): a depth resolve of a "
+                    "multisampled target into a destination nothing has read yet is not drawn. The first time anything "
+                    "reads such a destination (sampled, or through its words) its resolve is drawn then (from the "
+                    "target's newer content if it has changed since: that once not the same pixels) and every later "
+                    "one. For a game that leaves depth resolves unread (Viva Pinata samples its copies: nothing to skip)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(banjo_deko3d_depth_handover, true, "Banjo/Enhancements",
                     "deko3d renderer (2026-10-19, GPU): a depth resolve of a whole depth target into a texture of its "
                     "size that needs no words is not drawn: the texture is sampled from the target's image until the "
@@ -417,6 +431,13 @@ REXCVAR_DEFINE_BOOL(banjo_deko3d_push_constants_verify, false, "Banjo/Diagnostic
                     "banjo_deko3d_push_constants: after every draw's updates, checks that the model of the uniform "
                     "buffers holds the guest's value of every register the shaders read (and their literals), and "
                     "logs a draw where it does not (a test: slower)");
+// renut-ultimate (2026-11-16, port 145; tw2de_nx's tw2de_async_present of 2026-11-13, ON at the user's word: "port the
+// speed ups as on by default"). Read by name in sdk/src/ui/switch_perf.cpp at the first present.
+REXCVAR_DEFINE_BOOL(banjo_async_present, true, "Banjo/Enhancements",
+                    "Switch (tw2de_nx): the window's two binder calls of a present (queue the image, dequeue the next "
+                    "one: 2.7 ms a frame in tw2de_nx's heaviest stretch) are made by a helper thread, so the renderer's "
+                    "feed thread records the next frame instead of waiting for the compositor's answers. The same calls "
+                    "in the same order. false: on the presenting thread, as before");
 REXCVAR_DEFINE_BOOL(banjo_deko3d_kick_submit, true, "Banjo/Enhancements",
                     "deko3d renderer (2026-10-19, input latency): at the game's kicks (several a frame) the command "
                     "list recorded so far is ended and handed to the GPU at the next kick, instead of the whole frame "
@@ -900,6 +921,7 @@ std::atomic<uint64_t> g_kick_submit[4];      // lists submitted at a kick, range
 std::atomic<uint64_t> g_pushed[4];      // banjo_deko3d_push_constants: float bytes, shared bytes, draws, verify misses
 std::atomic<uint64_t> g_depth_float_sampled{0};  // 2026-10-18 census
 std::atomic<uint64_t> g_words_viewed{0}, g_words_copied{0};  // banjo_gpu_depth_words_view (package 28)
+std::atomic<uint64_t> g_depth_resolve_skip[3]{};  // vivapinata-nx (2026-11-12, vivapinata_depth_resolve_skip_unread)
 // banjo_gpu_bool_spec's: draws with specialised bools, of them drawn with the generic pipeline, specialised built.
 std::atomic<uint64_t> g_bool_draws{0}, g_bool_generic{0}, g_bool_built{0};
 // banjo_gpu_tess_grid's: the corners the per-corner form would shade, and the grid's vertices.
@@ -1104,6 +1126,8 @@ const char *AbName(int target) {
   // vivapinata-nx (2026-11-12, port 94; its number since its commit 7502c604: 90-145 are sasrt::gpu_round's items,
   // kAbBase + item, so 90's off half also switched sasrt_gpu_skip_inert_draws off).
   case 150: return "the shader round's GLSL passes in the pixel shaders, constant 975 (vivapinata_shader_round; off half: 975 = 0, the code as before them)";
+  // vivapinata-nx (2026-11-12, port 115; its number).
+  case 156: return "depth resolves nothing has read left out until something does (vivapinata_depth_resolve_skip_unread; NOT exact in principle; off half: drawn)";
   case 152: return "the pixel shaders' alpha test moved up ahead of the colour arithmetic, constant 977 = 1 (vivapinata_shader_earlykill; off half: the test last)";
   case 151: return "the pixel shaders without Renut's early alpha test, constant 976 = 0 (vivapinata_shader_noearly; off half: the test as before)";
   // blur-nx (2026-11-10/11, port 76; its keys, the same numbers; 210 and 214 not ported).
@@ -1430,6 +1454,16 @@ void StatsGameFrame() {
               g_words_lazy[0].exchange(0, std::memory_order_relaxed),
               g_words_lazy[1].exchange(0, std::memory_order_relaxed),
               g_words_lazy[2].exchange(0, std::memory_order_relaxed));
+  // renut-ultimate (2026-11-13, sasrt-nx's resolve project R1): while sasrt_gpu_diag_depth_words is on.
+  if (const std::string words = ::renut::gpu::DepthWordsCensusReport(); !words.empty())
+    REXLOG_INFO("{}", words);
+  // vivapinata-nx (2026-11-12, port 115): while vivapinata_depth_resolve_skip_unread is on.
+  if (REXCVAR_GET(vivapinata_depth_resolve_skip_unread))
+    REXLOG_INFO("[renut] depth resolves nothing had read (vivapinata_depth_resolve_skip_unread): {} left out; read "
+                "later: {} drawn then from an unchanged source, {} from newer content or not at all",
+                g_depth_resolve_skip[0].exchange(0, std::memory_order_relaxed),
+                g_depth_resolve_skip[1].exchange(0, std::memory_order_relaxed),
+                g_depth_resolve_skip[2].exchange(0, std::memory_order_relaxed));
   // banjo-nx (2026-10-21): how many frames had SMAA (banjo_renut_smaa), against the game frames of the line above.
   if (REXCVAR_GET(banjo_renut_smaa))
     REXLOG_INFO("[renut] SMAA (banjo_renut_smaa, quality {}, threshold {:.3f}): {} frames", SmaaQuality(),
@@ -1930,6 +1964,16 @@ void CountDepthWords(bool viewed) {
 }
 
 
+
+// vivapinata-nx (2026-11-12, port 115): vivapinata_depth_resolve_skip_unread, but in A/B 156's off half.
+bool DepthResolveSkipUnreadOn() {
+  static const bool on = REXCVAR_GET(vivapinata_depth_resolve_skip_unread);
+  return on && g_ab_off.load(std::memory_order_relaxed) != 156;
+}
+
+void CountDepthResolveSkip(int what) {
+  Bump(g_depth_resolve_skip[what], 1);
+}
 
 void CountDepthOnly() {
   Bump(g_depth_only_draws, 1);

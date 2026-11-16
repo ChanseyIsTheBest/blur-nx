@@ -242,6 +242,9 @@ uint64_t FramebufferEpochLocked();
 
 // Only if one exists already.
 HostSurface *FindHostSurfaceLocked(u32 surface_va);
+// renut-ultimate (2026-11-16, port 145; tw2de_nx's): kept unused targets past their time released (once a frame;
+// banjo_renut_keep_unused_targets).
+void SweepUnusedTargetsLocked();
 
 // The other color targets over the same EDRAM view as 'surface' (base tile,
 // pitch, samples and scale), in another host format: on the console one

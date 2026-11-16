@@ -76,49 +76,74 @@ option(BLUR_FMADDS_SINGLE "Scalar fmadds and kin rounded once in single precisio
 if(NOT BLUR_FMADDS_SINGLE)
     add_compile_definitions(REX_FMADDS_DOUBLE_ROUNDING)
 endif()
+# renut-ultimate (2026-11-16, port 144; tw2de_nx's fix, off by default at the user's word): fnmadd / fnmsub and their
+# single forms with the PowerPC's sign of zero and NaN (sdk/include/rex/ppc/fpu_fma.h, tools/fnm_sign.py's
+# REX_FNEG_FUSED). GCC folds the generated -std::fma(...) into FNMADD / FMSUB, which give +0 where the 360 gives -0 and
+# negate a NaN result (Xenia's hardware-recorded tests: 160 cases). ON: the fused result kept by an empty asm, then
+# negated unless NaN (an instruction or two more a site; Katamari: 272 sites). A compile-time switch: retrain the PGO
+# profile.
+option(TW2DE_FNMADD_SIGN "fnmadd / fnmsub with the PowerPC's sign of zero and NaN (exact; off by default)" OFF)
+if(TW2DE_FNMADD_SIGN)
+    add_compile_definitions(REX_FNMADD_SIGN_EXACT)
+endif()
+# renut-ultimate (2026-11-16, port 144; tw2de_nx's, off by default at the user's word): vsl / vsr with a count per byte,
+# as the hardware shifts (rex/ppc/intrinsics.h REX_VSHIFT_PER_BYTE; Xenia's hardware-recorded tests: 453 of 475 vsl
+# cases with counts that differ between bytes). The same as before for the ISA's uniform counts; on AArch64 five NEON
+# instructions each (the default vsl goes through memory). Katamari: 112 vsr sites. Retrain the PGO profile.
+option(TW2DE_VSHIFT_PER_BYTE "vsl / vsr with each byte's own shift count, as the hardware (off by default)" OFF)
+if(TW2DE_VSHIFT_PER_BYTE)
+    add_compile_definitions(REX_VSHIFT_PER_BYTE)
+endif()
 # blur-nx (2026-11-12, codegen-ideas-3 CG-13; the user: "build CG 13 ... it probably should be off by default"): all guest
 # float code with the host's flush mode on (rex/ppc/context.h, rex/ppc/diet_ops.h): no `msr fpcr` switch in the game code
 # after a thread's first, and the any-mode float helpers as the plain operations. NOT bit-exact: the Xenon's scalar FPU
 # keeps denormals (values below FLT_MIN / DBL_MIN), which this flushes to zero as its VMX unit does. The PC census
 # (banjo_diag_runtime_census: "[census] CG-13" lines, tools/census_sites.py --denormal) counts the results it changes.
 # A compile-time switch: every generated file, the copies and the SDK runtime change with it (retrain the PGO profile).
-# 2026-11-13 (the user: "I want CG-13 to be on by default in this port, off by default in the base"): ON for Blur
-# (console ABBA +4.6 %: 22.10 against 21.13 fps); the base keeps it OFF (sent to RR6 so). A build folder configured
-# before this keeps its cached OFF: configure with -DBLUR_FPCR_ONE_MODE=ON (the build scripts pass it).
-option(BLUR_FPCR_ONE_MODE "All guest float code in the flush mode (no FPCR switches; not bit-exact for scalar denormals)" ON)
+# renut-ultimate (2026-11-13, port 133; the user: "turn it on by default in the base ... because it's universal big CPU
+# benefit"): ON by default in the Switch build (each switch is an `msr fpcr` on the console: Katamari's game code does
+# about 1.2 million a second on the PC; blur-nx's console +4.6 % fps). OFF by default in the PC build, which stays
+# exact: the census counts what the Switch build changes only where the mode still switches
+# (tools/cg13_census.ps1). An existing build folder keeps its cached value: -DBLUR_FPCR_ONE_MODE=ON / OFF changes it.
+if(REXGLUE_PLATFORM_SWITCH)
+    set(_blur_fpcr_one_mode_default ON)
+else()
+    set(_blur_fpcr_one_mode_default OFF)
+endif()
+option(BLUR_FPCR_ONE_MODE "All guest float code in the flush mode (no FPCR switches; not bit-exact for scalar denormals)"
+       ${_blur_fpcr_one_mode_default})
 if(BLUR_FPCR_ONE_MODE)
     add_compile_definitions(REX_FPCR_ONE_MODE)
 endif()
-# blur-nx (2026-11-13, docs/cpu-near-exact-50-1113.md; the user chose the near-exact ideas to do): the compile-time
-# near-exact switches (rex/ppc/diet_ops.h, context.h, tools/near_exact.py, tools/store_cards.py), each the code before
-# when off. NOT bit-exact in rare cases (the doc's census counts each one): #1 REX_NX_SNAN_PASS, #2 REX_NX_FCTI_NO_NAN,
-# #17 REX_NX_DIV_NO_CHECK, #41 REX_NX_FCMP_NO_UN, #42 REX_NX_VMINMAX_FAST, #5 REX_NX_XER_SO_ZERO, #19 REX_NX_NO_TRAPS
-# (a trap only logs), and the generated tree's card marks by the copies' rule (REX_CARD_VIEWS_ONLY, exact). Like
-# CG-13 every generated file, the copies and the SDK change with them (retrain the PGO profile). #8 is
-# SASRT_HOT_LR_ELIDE (below), the run-time ones are keys (switch_yield_*, audio_nx_*, banjo_xma_frame_cache_hash_only).
-option(BLUR_NEAR_EXACT "Blur's near-exact compile-time switches (docs/cpu-near-exact-50-1113.md; not bit-exact in rare cases)" OFF)
+# renut-ultimate (2026-11-14, port 140; blur-nx's docs/cpu-near-exact-50-1113.md): the compile-time near-exact switches
+# (rex/ppc/diet_ops.h, context.h, tools/near_exact.py), each the code before when off. NOT bit-exact in rare cases:
+# #1 REX_NX_SNAN_PASS, #2 REX_NX_FCTI_NO_NAN, #17 REX_NX_DIV_NO_CHECK, #41 REX_NX_FCMP_NO_UN, #42 REX_NX_VMINMAX_FAST,
+# #5 REX_NX_XER_SO_ZERO, #19 REX_NX_NO_TRAPS (a trap only logs). OFF in the base: each game runs the PC census
+# (banjo_diag_runtime_census, the "[census] near-exact" lines) before turning them on. blur-nx's census took #2 (NaN
+# conversions not rare: 80 a second) and #42 (4 % of vector max/min lanes differ) out of the set; BLUR_NX_ONLY names
+# switches to use alone (a ;-list, for a bisect; #2 and #42 only this way), BLUR_NX_SKIP leaves some out. Every
+# generated file, the copies and the SDK change with them: retrain the PGO profile.
+option(BLUR_NEAR_EXACT "blur-nx's near-exact compile-time switches (not bit-exact in rare cases)" OFF)
 set(BLUR_NX_ONLY "" CACHE STRING "With BLUR_NEAR_EXACT: only these switches (a ;-list, for a bisect; empty: all)")
 set(BLUR_NX_SKIP "" CACHE STRING "With BLUR_NEAR_EXACT: every switch but these (a ;-list)")
-# The PC census (2026-11-13 16:05, the doc) took two out: #2 (39,972 NaN conversions in a race: not rare) and #42 (4.1 %
-# of the vector max/min lanes differ). #41 stays: no read of a float compare's unordered bit exists (2,148 reads, all
-# reached only by vector compares: the doc). Either of the two can still be named in BLUR_NX_ONLY for a test.
 set(_blur_nx_switches REX_NX_SNAN_PASS REX_NX_DIV_NO_CHECK REX_NX_FCMP_NO_UN REX_NX_XER_SO_ZERO REX_NX_NO_TRAPS)
 if(BLUR_NEAR_EXACT AND NOT BLUR_NX_ONLY STREQUAL "")
     list(APPEND _blur_nx_switches REX_NX_FCTI_NO_NAN REX_NX_VMINMAX_FAST)
-endif()
-# blur-nx (2026-11-13, #66 of the doc's second wave; exact): the generated tree's card marks by the copies' rule in
-# every build (only the pages whose cards Renut reads, a card written only when not zero yet; tools/store_cards.py).
-option(BLUR_CARD_VIEWS_ONLY "The generated tree's store cards only for Renut's views, written only when set (exact)" ON)
-if(BLUR_CARD_VIEWS_ONLY)
-    add_compile_definitions(REX_CARD_VIEWS_ONLY)
 endif()
 if(BLUR_NEAR_EXACT)
     foreach(_s ${_blur_nx_switches})
         if((BLUR_NX_ONLY STREQUAL "" OR _s IN_LIST BLUR_NX_ONLY) AND NOT _s IN_LIST BLUR_NX_SKIP)
             add_compile_definitions(${_s})
-            message(STATUS "blur-nx near-exact: ${_s}")
+            message(STATUS "near-exact: ${_s}")
         endif()
     endforeach()
+endif()
+# renut-ultimate (2026-11-14, port 140; blur-nx's #66, exact): the generated tree's store cards by the copies' rule
+# (tools/store_cards.py: only the pages whose cards Renut reads, a card written only when not set yet). ON, as in
+# blur-nx's every build; OFF: every store marks its card as before.
+option(BLUR_CARD_VIEWS_ONLY "The generated tree's store cards only for Renut's views, written only when set (exact)" ON)
+if(BLUR_CARD_VIEWS_ONLY)
+    add_compile_definitions(REX_CARD_VIEWS_ONLY)
 endif()
 include(generated/rexglue.cmake)
 
@@ -540,6 +565,13 @@ if(NOT BANJO_GEN_COLD_TRAPS)
 endif()
 if(NOT BANJO_GEN_PROMOTED_CALLS)
     list(APPEND _banjo_round_definitions REX_PROMOTED_CALLS_OFF)
+endif()
+# sasrt-nx (2026-11-12, its idea 2; port 121): the hooked builds (the guard's: the PC, Ryujinx, tools/build_switch_guard.bat)
+# check each forwarded stack load against the real one (tools/stack_forward.py, REX_STACK_FWD_VERIFY): the guard compares
+# copies with the original statements, which forward the same way, so it cannot see a wrong forward. The in-place
+# console builds forward only.
+if(NOT SASRT_HOT_IN_PLACE)
+    list(APPEND _banjo_round_definitions REX_STACK_FWD_VERIFY)
 endif()
 if(NOT BANJO_GEN_NARROW_LOOP_BARRIER)
     list(APPEND _banjo_round_definitions REX_LOOP_BARRIER_FULL)

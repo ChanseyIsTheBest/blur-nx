@@ -287,6 +287,10 @@ namespace plume {
         // sasrt-nx (2026-11-11, port 75; its formats batch, rows 6, 8, 10, 74, 93 and 7, 66, 73, 95, 96)
         case RenderFormat::R10G10B10A2_UNORM: return DkImageFormat_RGB10A2_Unorm;
         case RenderFormat::R11G11B10_FLOAT: return DkImageFormat_RG11B10_Float;
+        // renut-ultimate (2026-11-16, port 145; tw2de_nx's of 2026-10-25): banjo_deko3d_native_16bit.
+        case RenderFormat::R5G6B5_UNORM: return DkImageFormat_RGB565_Unorm;
+        case RenderFormat::R5G5B5A1_UNORM: return DkImageFormat_RGB5A1_Unorm;
+        case RenderFormat::R4G4B4A4_UNORM: return DkImageFormat_RGBA4_Unorm;
         case RenderFormat::R32_UINT: return DkImageFormat_R32_Uint;
         case RenderFormat::R32_SINT: return DkImageFormat_R32_Sint;
         case RenderFormat::R8G8_TYPELESS:

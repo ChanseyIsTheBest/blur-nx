@@ -105,8 +105,11 @@ REXCVAR_DEFINE_BOOL(audio_xma_output_done_when_drained, false, "Audio",
                     "every sample) clears output_buffer_valid, as Xenia clears it whenever the ring is empty after a "
                     "pass: the sound is done. false = only a pass that wrote PCM and filled the ring clears it "
                     "(banjo-nx's rule)");
-// blur-nx (2026-11-12): up to 512 (was 256): Blur's console race filled 256 MB in about 90 s of racing (65 % of the
-// frames answered) with ~600 MB of the heap's room left; the user asked about 320.
+// blur-nx (2026-11-12, CPU batch 3; port 111): 24 filled in Blur's first race minute and answered 26 % of the frames; 256
+// answered 65 % (the XMA Decoder 15.2 -> 10.9 ms a frame, 23.84 -> 24.77 fps on the console, 0 differences in the sampled
+// verify). It is heap: the heap's room at the race's end was 834 MB with 24 and about 600 MB with 256 (Blur's texture
+// reserve is 384 MB). The default stays 24: a game with many short repeated sounds sets more in its toml, carefully
+// when it is near its texture limit.
 // blur-nx (2026-11-13, #12 of Blur's docs/cpu-near-exact-50-1113.md, the user's choice of near-exact ideas): a node
 // matches on its 64-bit key (two CRC32C streams of the packet with the previous packet's mixed in), the format and the
 // sizes, without comparing the two packets' bytes. NOT exact: a key collision (about 2^-64 a lookup for compressed
@@ -117,8 +120,9 @@ REXCVAR_DEFINE_BOOL(banjo_xma_frame_cache_hash_only, false, "Banjo/Audio",
 
 REXCVAR_DEFINE_INT32(banjo_xma_frame_cache_mb, 24, "Banjo/Audio",
                      "XMA frame cache: memory for the decoded frames (about 2 KB each); full, the frames least "
-                     "answered make room (a clock)")
-    .range(1, 512);
+                     "answered make room (a clock). A game with many short repeated sounds may want more (Blur's "
+                     "first cache: 256, 26 -> 65 % of the frames answered)")
+    .range(1, 512);  // blur-nx (2026-11-12; port 120): up to 512, was 256 (Blur filled 256 MB in about 90 s of racing)
 
 
 namespace {

@@ -111,6 +111,22 @@ REXCVAR_DEFINE_BOOL(thread_signal_skip_idle, true, "Threading",
                     "condition variable's notify (on Horizon always a syscall, svcSignalProcessWideKey, even with "
                     "nobody waiting): the waiters of each condition are counted under its own mutex. false = notify "
                     "on every signal, as before");
+// renut-ultimate (2026-11-16, port 146; tw2de_nx's of 2026-10-25, ON at the user's word: "port the speed ups as on by default").
+REXCVAR_DEFINE_BOOL(thread_mutant_release_lockfree, true, "Threading",
+                    "tw2de_nx (exact): a mutant's release takes its condition's mutex only when a thread is blocked on "
+                    "it (the count and the blocked-waiter count read and written as sequentially consistent atomics: "
+                    "either the waiter sees the mutant free, or the release sees the waiter and notifies it). "
+                    "tw2de_nx: 1.2-1.4 us a release saved, 1,450 releases a frame. false = the mutex at every "
+                    "release, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+namespace {
+// Port 146 (thread_mutant_release_lockfree), read once.
+bool MutantLockfree() {
+  static const bool on = REXCVAR_GET(thread_mutant_release_lockfree);
+  return on;
+}
+}  // namespace
 
 REXCVAR_DEFINE_INT32(thread_alertable_slice_ms, 8, "Threading",
                      "With thread_wait_blocking: longest an alertable wait sleeps before it re-checks the "
@@ -536,7 +552,12 @@ class PosixConditionBase {
       // thread_signal_skip_idle: counted while blocked (under mutex_, which the wait releases only once this thread
       // is queued on the condition), so a signaller that changes the state under the same mutex sees every thread
       // its notify could wake. A thread that arrives later finds the state already changed and does not block.
-      ++cond_waiters_;
+      // Port 146 (thread_mutant_release_lockfree): a sequentially consistent increment, before the predicate's last
+      // test in the wait below, so a mutant's release without the mutex either is seen by that test or sees this.
+      if (MutantLockfree())
+        __atomic_fetch_add(&cond_waiters_, 1u, __ATOMIC_SEQ_CST);
+      else
+        ++cond_waiters_;
       if (timeout == std::chrono::milliseconds::max()) {
         cond_.wait(lock, predicate);
         executed = true;  // Did not time out;
@@ -548,7 +569,10 @@ class PosixConditionBase {
         executed = cond_.wait_for(lock, timeout, predicate);
 #endif
       }
-      --cond_waiters_;
+      if (MutantLockfree())  // port 146: read without the mutex by a mutant's release
+        __atomic_fetch_sub(&cond_waiters_, 1u, __ATOMIC_SEQ_CST);
+      else
+        --cond_waiters_;
     }
     if (executed) {
       if (interrupt && !signaled()) {
@@ -959,6 +983,29 @@ class PosixCondition<Mutant> : public PosixConditionBase {
   bool Signal() override { return Release(); }
 
   bool Release() {
+    // renut-ultimate (2026-11-16, port 146; tw2de_nx's of 2026-10-25; thread_mutant_release_lockfree, on by default):
+    // released without mutex_ unless a thread is blocked on it. The count is lowered, then the blocked-waiter count
+    // read, both sequentially consistent. A waiter raises that count (under mutex_) before it tests the predicate a
+    // last time and blocks (std::condition_variable::wait(lock, pred)), so either the waiter sees the count at 0 and
+    // takes the mutant, or the release sees the waiter: it then takes mutex_ (the waiter is either before its test or
+    // blocked: mutex_ is released only by the wait itself) and notifies. The owner's id is read by its own thread only
+    // before the count goes to 0, and written by the next owner only after it saw 0.
+    if (MutantLockfree()) {
+      if (owner_ == std::this_thread::get_id() && __atomic_load_n(&count_, __ATOMIC_RELAXED) > 0) {
+        if (__atomic_fetch_sub(&count_, 1u, __ATOMIC_SEQ_CST) == 1) {
+          static const bool skip_idle = REXCVAR_GET(thread_signal_skip_idle);
+          if (__atomic_load_n(&cond_waiters_, __ATOMIC_SEQ_CST) != 0 || !skip_idle) {
+            { std::lock_guard<std::mutex> lock(mutex_); }
+            cond_.notify_all();
+          } else {
+            REX_SYS_COUNT(rex::syscount::kSignalIdle, 1);
+          }
+          NotifyMulti();
+        }
+        return true;
+      }
+      return false;
+    }
     if (owner_ == std::this_thread::get_id() && count_ > 0) {
       bool released = false;
       {
@@ -980,10 +1027,15 @@ class PosixCondition<Mutant> : public PosixConditionBase {
 
  private:
   inline bool signaled() const override {
+    if (MutantLockfree())  // port 146
+      return __atomic_load_n(&count_, __ATOMIC_SEQ_CST) == 0 || owner_ == std::this_thread::get_id();
     return count_ == 0 || owner_ == std::this_thread::get_id();
   }
   inline void post_execution() override {
-    count_++;
+    if (MutantLockfree())  // port 146
+      __atomic_fetch_add(&count_, 1u, __ATOMIC_SEQ_CST);
+    else
+      count_++;
     owner_ = std::this_thread::get_id();
   }
   uint32_t count_;
@@ -1126,11 +1178,11 @@ bool g_joining = false;             // Loop has taken an item and not joined it 
  * comes back here instead of to the heap. At most PoolBlocks() blocks and PoolMaxBytes() are kept; any other block
  * goes back to the heap.
  */
-// Only the guest threads' 16 MB stacks. The SDK's own threads (4 MB by default, long-lived) stay with libnx as
-// before, and their blocks never take the pool's places.
+// Only the guest threads' stacks (switch_guest_stack_mb: 8 MB by default since port 112, 16 before). The SDK's own
+// threads (4 MB by default, long-lived) stay with libnx as before, and their blocks never take the pool's places.
 constexpr size_t kPoolMinStack = size_t(8) << 20;
-// sa2-nx (2026-10-20; port 58): switch_thread_stack_pool blocks, each a guest stack with its TLS (16 MB unless
-// switch_guest_stack_mb says less).
+// sa2-nx (2026-10-20; port 58): switch_thread_stack_pool blocks, each a guest stack with its TLS (switch_guest_stack_mb:
+// 8 MB by default since port 112).
 constexpr size_t kPoolMaxBlocks = 64;
 size_t PoolBlocks() {
   static const size_t blocks = size_t(std::clamp<int32_t>(REXCVAR_GET(switch_thread_stack_pool), 4, 64));

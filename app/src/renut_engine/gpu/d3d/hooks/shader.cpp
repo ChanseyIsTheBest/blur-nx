@@ -652,6 +652,7 @@ u32 CreateShaderRecord(const be_u32 *function, bool pixel) {
   shader->entry = FindShaderEntry(shader->hash);
   shader->fetch_3d_mask = Fetch3DMask(container);  // kameo-nx (2026-11-03)
   shader->export_only = !pixel && ContainerIsExportOnly(container);  // vivapinata-nx (2026-11-03)
+  shader->fetch_filters = ScanFetchFilters(container);  // port 145 (tw2de_nx's, 2026-10-31)
   if (!shader->entry)
     CaptureMissingShader(container, pixel, shader->hash);
   NoteShaderSortKey(shader->self_va, shader->hash, ShaderSortableByHash(shader->hash, shader->entry, pixel));  // 2026-10-27
@@ -693,7 +694,9 @@ void RegisterGuestShader(u32 shader_va, u32 physical_va, bool pixel) {
   NoteShaderSortKey(shader_va, hash, ShaderSortableByHash(hash, sort_entry, pixel));  // banjo-nx (2026-10-27)
 
   // In order with the draws that use it (render thread).
-  render_thread::Queue([shader_va, pixel, hash, kind, fetch_3d_mask = Fetch3DMask(container.data()), export_only] {
+  const FetchFilterOverrides fetch_filters = ScanFetchFilters(container.data());  // port 145 (tw2de_nx's)
+  render_thread::Queue([shader_va, pixel, hash, kind, fetch_3d_mask = Fetch3DMask(container.data()), export_only,
+                        fetch_filters] {
     auto &shader = g_guest_shaders[shader_va];
     if (shader && shader->hash == hash && shader->kind == kind)
       return;
@@ -712,6 +715,7 @@ void RegisterGuestShader(u32 shader_va, u32 physical_va, bool pixel) {
     shader->entry = FindShaderEntry(hash);
     shader->fetch_3d_mask = fetch_3d_mask;  // kameo-nx (2026-11-03)
     shader->export_only = export_only;  // vivapinata-nx (2026-11-03)
+    shader->fetch_filters = fetch_filters;  // port 145
     PipelineShaderLoaded(shader->entry);
   });
   NoteInPlaceShader(shader_va, kind, sort_entry);  // blur-nx (2026-11-13, #13's fix): after the item above is queued

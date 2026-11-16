@@ -85,6 +85,7 @@ Result __real_nvioctlNvhostAsGpu_MapBufferEx(u32 fd, u32 flags, u32 kind, u32 nv
                                              u64 buffer_offset, u64 mapping_size, u64 input_offset, u64* offset);
 void __real_armDCacheClean(void* addr, size_t size);
 Result __real_nwindowQueueBuffer(NWindow* nw, s32 slot, const NvMultiFence* fence);
+Result __real_nwindowDequeueBuffer(NWindow* nw, s32* out_slot, NvMultiFence* out_fence);  // port 145: async present
 Result __real_bqDequeueBuffer(Binder* b, bool async, u32 width, u32 height, s32 format, u32 usage, s32* buf,
                               NvMultiFence* fence);
 void __real_svcSleepThread(s64 nano);
@@ -1032,8 +1033,13 @@ struct TicOverlay {
 // generator's fp_moves_modeless, fp_mode_lookahead and fp_copy_pairs) hangs on that cost, which had never been
 // measured on the A57. Four loops of the same shape, the best of five runs each: empty, a read, a write of the
 // value already there, a write that toggles FZ (what a real switch does). Run once, for the report's header.
+// renut-ultimate (2026-11-13, from sasrt-nx's handoff of 2026-11-13): also FPSR's read and clear, and one exclusive
+// increment of a cache-resident word, relaxed (ldxr/stxr) and acquire/release (ldaxr/stlxr): what a guest lwarx/stwcx.
+// pair costs in each form (sasrt-nx's A57, handheld: 17.6 and 26.4 ns).
 struct FpcrCost {
   double read_ns, write_same_ns, write_toggle_ns;
+  double fpsr_read_ns = 0, fpsr_clear_ns = 0;
+  double llsc_relaxed_ns = 0, llsc_acqrel_ns = 0;
 };
 FpcrCost MeasureFpcrCost(u64 tick_freq) {
   constexpr int kCount = 200000;
@@ -1052,6 +1058,19 @@ FpcrCost MeasureFpcrCost(u64 tick_freq) {
         } else if (kind == 3) {
           v ^= u64(1) << 24;  // FZ
           asm volatile("msr fpcr, %0" : : "r"(v));
+        } else if (kind == 4) {
+          asm volatile("mrs %0, fpsr" : "=r"(v));
+        } else if (kind == 5) {
+          asm volatile("msr fpsr, %0" : : "r"(u64(0)));
+        } else if (kind == 6 || kind == 7) {  // an exclusive increment, as a guest lwarx/stwcx.
+          static u32 word = 0;
+          u32 t, fail;
+          if (kind == 6)
+            asm volatile("1: ldxr %w0, [%2]\n add %w0, %w0, #1\n stxr %w1, %w0, [%2]\n cbnz %w1, 1b"
+                         : "=&r"(t), "=&r"(fail) : "r"(&word) : "memory");
+          else
+            asm volatile("1: ldaxr %w0, [%2]\n add %w0, %w0, #1\n stlxr %w1, %w0, [%2]\n cbnz %w1, 1b"
+                         : "=&r"(t), "=&r"(fail) : "r"(&word) : "memory");
         } else {
           asm volatile("" : "+r"(v));
         }
@@ -1063,7 +1082,15 @@ FpcrCost MeasureFpcrCost(u64 tick_freq) {
     return double(best) * 1e9 / double(tick_freq) / double(kCount);
   };
   const double empty = loop(0);
-  return {loop(1) - empty, loop(2) - empty, loop(3) - empty};
+  u64 fpsr_saved;
+  asm volatile("mrs %0, fpsr" : "=r"(fpsr_saved));
+  FpcrCost out{loop(1) - empty, loop(2) - empty, loop(3) - empty};
+  out.fpsr_read_ns = loop(4) - empty;
+  out.fpsr_clear_ns = loop(5) - empty;
+  out.llsc_relaxed_ns = loop(6) - empty;
+  out.llsc_acqrel_ns = loop(7) - empty;
+  asm volatile("msr fpsr, %0" : : "r"(fpsr_saved));
+  return out;
 }
 
 void ProfilerMain(void*) {
@@ -1121,8 +1148,11 @@ void ProfilerMain(void*) {
     const FpcrCost fpcr = MeasureFpcrCost(tick_freq);
     std::fprintf(f,
                  "FPCR on this CPU (per access, loop overhead taken off): read %.1f ns, write of the same value "
-                 "%.1f ns, write that toggles the flush mode %.1f ns (one cycle is 0.98 ns at 1020 MHz)\n",
-                 fpcr.read_ns, fpcr.write_same_ns, fpcr.write_toggle_ns);
+                 "%.1f ns, write that toggles the flush mode %.1f ns (one cycle is 0.98 ns at 1020 MHz); FPSR: read "
+                 "%.1f ns, write of zero %.1f ns; an exclusive increment: relaxed (ldxr/stxr) %.1f ns, acquire/release "
+                 "(ldaxr/stlxr) %.1f ns\n",
+                 fpcr.read_ns, fpcr.write_same_ns, fpcr.write_toggle_ns, fpcr.fpsr_read_ns, fpcr.fpsr_clear_ns,
+                 fpcr.llsc_relaxed_ns, fpcr.llsc_acqrel_ns);
     std::fclose(f);
   }
 
@@ -1342,12 +1372,145 @@ void __wrap_armDCacheClean(void* addr, size_t size) {
  */
 std::atomic<unsigned> g_interval_swap{0};
 
+/*
+ * renut-ultimate (2026-11-16, port 145; tw2de_nx's tw2de_async_present of 2026-11-13, ON at the user's word: "port the
+ * speed ups as on by default"; the key banjo_async_present, app/src/renut_engine/gpu/banjo_renut_tuning.cpp): the
+ * window's two binder calls off the presenting thread.
+ *
+ * nwindowQueueBuffer and the bqDequeueBuffer inside nwindowDequeueBuffer are binder transactions answered by the
+ * compositor's process: tw2de_nx measured 1.40 and 1.33 ms a call in its heaviest 10 s, 2.7 ms a frame in which the
+ * renderer's feed thread only waits. With the key on, a helper thread makes them: the queue call returns at once, the
+ * helper queues the buffer and right away dequeues the next one, which the next nwindowDequeueBuffer call takes
+ * (waiting for the helper if it is not there yet). The same calls on the window in the same order (queue N, dequeue,
+ * queue N+1, ...), so the same buffers at the same vblanks; only the caller no longer waits for the answers. A dequeue
+ * that finds no free buffer blocks the helper as it blocked the caller, and the caller then waits at its next dequeue:
+ * the pacing at the frame cap is the same. RexSwitchPerfPresentQuiesce: before a swapchain lets go of the window
+ * (libnx refuses to release its buffers while one is dequeued), the buffer dequeued ahead is cancelled (plume).
+ */
+struct AsyncPresent {
+  Mutex mutex = 0;
+  CondVar work = 0, done = 0;
+  Thread thread{};
+  std::atomic<int> state{0};   // 0 not asked yet, 1 on (the helper runs), -1 off
+  bool queue_pending = false;  // a queue call the helper has not finished (the dequeue after it included)
+  NWindow* nw = nullptr;
+  s32 queue_slot = -1;
+  bool queue_has_fence = false;
+  NvMultiFence queue_fence{};
+  bool held = false;           // the dequeue made ahead, not yet taken by a caller
+  Result held_rc = 0;
+  s32 held_slot = -1;
+  NvMultiFence held_fence{};
+};
+static AsyncPresent g_async;
+
+static void AsyncPresentMain(void*) {
+  AsyncPresent& a = g_async;
+  mutexLock(&a.mutex);
+  for (;;) {
+    while (!a.queue_pending) condvarWait(&a.work, &a.mutex);
+    NWindow* const nw = a.nw;
+    const s32 slot = a.queue_slot;
+    const bool has_fence = a.queue_has_fence;
+    const NvMultiFence fence = a.queue_fence;
+    mutexUnlock(&a.mutex);
+    const u64 from = armGetSystemTick();
+    __real_nwindowQueueBuffer(nw, slot, has_fence ? &fence : nullptr);
+    Note(kQueueBuffer, from);
+    s32 next = -1;
+    NvMultiFence next_fence{};
+    const Result rc = __real_nwindowDequeueBuffer(nw, &next, &next_fence);
+    mutexLock(&a.mutex);
+    a.held = true;
+    a.held_rc = rc;
+    a.held_slot = next;
+    a.held_fence = next_fence;
+    a.queue_pending = false;
+    condvarWakeAll(&a.done);
+  }
+}
+
+// Whether the helper makes the calls (decided at the first queue call: the config is read by then).
+static bool AsyncPresentOn() {
+  AsyncPresent& a = g_async;
+  int state = a.state.load(std::memory_order_acquire);
+  if (state == 0) [[unlikely]] {
+    const std::string value = rex::cvar::GetFlagByName("banjo_async_present");
+    state = -1;
+    if (value == "true" || value == "1") {
+      // Cores 0 and 2 (not the feed thread's core 1), at the top priority the process may use: it runs for
+      // microseconds between its waits.
+      if (R_SUCCEEDED(threadCreate(&a.thread, AsyncPresentMain, nullptr, nullptr, 0x10000, 0x2C, 2))) {
+        svcSetThreadCoreMask(a.thread.handle, 2, 0x5);
+        if (R_SUCCEEDED(threadStart(&a.thread))) state = 1;
+      }
+    }
+    a.state.store(state, std::memory_order_release);
+  }
+  return state > 0;
+}
+
+// The queue call handed to the helper. False: not handed (the caller makes it).
+static bool AsyncPresentQueue(NWindow* nw, s32 slot, const NvMultiFence* fence) {
+  AsyncPresent& a = g_async;
+  mutexLock(&a.mutex);
+  while (a.queue_pending) condvarWait(&a.done, &a.mutex);
+  if (a.held) {
+    // A buffer dequeued ahead that no caller took: this slot did not come from it. Not expected (a caller dequeues
+    // before it queues); the caller makes this call itself.
+    mutexUnlock(&a.mutex);
+    return false;
+  }
+  a.nw = nw;
+  a.queue_slot = slot;
+  a.queue_has_fence = fence != nullptr;
+  if (fence) a.queue_fence = *fence;
+  a.queue_pending = true;
+  condvarWakeOne(&a.work);
+  mutexUnlock(&a.mutex);
+  return true;
+}
+
+Result __wrap_nwindowDequeueBuffer(NWindow* nw, s32* out_slot, NvMultiFence* out_fence) {
+  AsyncPresent& a = g_async;
+  if (a.state.load(std::memory_order_acquire) <= 0) return __real_nwindowDequeueBuffer(nw, out_slot, out_fence);
+  mutexLock(&a.mutex);
+  while (a.queue_pending) condvarWait(&a.done, &a.mutex);
+  if (a.held && a.nw == nw) {
+    a.held = false;
+    const Result rc = a.held_rc;
+    if (R_SUCCEEDED(rc)) {
+      if (out_slot) *out_slot = a.held_slot;
+      if (out_fence) *out_fence = a.held_fence;
+    }
+    mutexUnlock(&a.mutex);
+    return rc;
+  }
+  mutexUnlock(&a.mutex);
+  return __real_nwindowDequeueBuffer(nw, out_slot, out_fence);
+}
+
+void RexSwitchPerfPresentQuiesce(NWindow* nw) {
+  AsyncPresent& a = g_async;
+  if (a.state.load(std::memory_order_acquire) <= 0) return;
+  mutexLock(&a.mutex);
+  while (a.queue_pending) condvarWait(&a.done, &a.mutex);
+  if (a.held && a.nw == nw) {
+    a.held = false;
+    if (R_SUCCEEDED(a.held_rc)) nwindowCancelBuffer(nw, a.held_slot, &a.held_fence);
+  }
+  mutexUnlock(&a.mutex);
+}
+
 Result __wrap_nwindowQueueBuffer(NWindow* nw, s32 slot, const NvMultiFence* fence) {
   const u64 from = armGetSystemTick();
   const unsigned request = g_interval_swap.load(std::memory_order_relaxed);
   if (request != 0 && nw != nullptr && nw->swap_interval != request) {
     nwindowSetSwapInterval(nw, request);
   }
+  // Port 148 (banjo_async_present): handed to the helper when it runs.
+  if (AsyncPresentOn() && AsyncPresentQueue(nw, slot, fence))
+    return 0;
   const Result rc = __real_nwindowQueueBuffer(nw, slot, fence);
   Note(kQueueBuffer, from);
   return rc;

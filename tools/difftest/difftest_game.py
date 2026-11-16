@@ -19,7 +19,20 @@ ORIG = os.getcwd()
 # difftest_ps compiles through dp.frag / dp.dksh / dp.bin in the working directory: one folder of its own per process,
 # so runs in parallel do not read each other's files.
 import tempfile  # noqa: E402
-os.chdir(tempfile.mkdtemp(prefix='difftest_'))
+import atexit  # noqa: E402
+import shutil  # noqa: E402
+_WORK = tempfile.mkdtemp(prefix='difftest_')
+os.chdir(_WORK)
+
+
+def _remove_work():
+    """renut-ultimate (2026-11-12, port 113): the run's folder removed when it ends (4,380 of them had piled up in
+    %TEMP% since 2026-10-20). A run killed from outside (a timeout) still leaves its own."""
+    os.chdir(ORIG)
+    shutil.rmtree(_WORK, ignore_errors=True)
+
+
+atexit.register(_remove_work)
 _argv, sys.argv = sys.argv, sys.argv[:1]
 import difftest_ps as d  # noqa: E402
 sys.argv = _argv
@@ -119,14 +132,27 @@ def UINT(x):
     return int(x) & 0xFFFFFFFF
 
 
+TEX_ALIAS = {}  # vivapinata-nx (2026-11-12): --texalias B=A, binding B (a suffix of its name, e.g. 1A5) reads binding A's texels
+TEX_COPY = {}   # vivapinata-nx (2026-11-12): --texcopy B:y=x, binding B's component y is its component x
+
+
 def TEX(name, coords, swz):
     """A texel as a fixed function of the binding and the coordinates (their bits)."""
+    base = name.split('@')[0]
+    for b, a in TEX_ALIAS.items():
+        if base.endswith(b):
+            name = name.replace(base, base[:-len(b)] + a)
+            base = name.split('@')[0]
+            break
     key = name.encode() + b''.join(struct.pack('<I', d.bits(f32(float(c)))) for c in coords)
     h = zlib.crc32(key)
     vals = []
     for k in range(4):
         h = zlib.crc32(struct.pack('<I', h) + bytes([k]))
         vals.append(f32((h & 0xFFFF) / 65535.0))
+    for b, (dst, src) in TEX_COPY.items():
+        if base.endswith(b):
+            vals['xyzw'.index(dst)] = vals['xyzw'.index(src)]
     out = tuple(vals['xyzw'.index(c) if c in 'xyzw' else 'rgba'.index(c)] for c in swz)
     return out[0] if len(out) == 1 else out
 
@@ -340,6 +366,23 @@ def main():
     while '--cbmask' in args:
         i = args.index('--cbmask')
         parse_cbmask(args[i + 1])
+        del args[i:i + 2]
+    # vivapinata-nx (2026-11-12): --cbset C:I:comp:VALUE (parse_cbset was there, the option was not read here: pinned
+    # constant words did nothing; difftest_vs.py reads it itself)
+    while '--cbset' in args:
+        i = args.index('--cbset')
+        parse_cbset(args[i + 1])
+        del args[i:i + 2]
+    while '--texalias' in args:  # vivapinata-nx (2026-11-12): --texalias B=A (binding name suffixes)
+        i = args.index('--texalias')
+        b, a = args[i + 1].split('=')
+        TEX_ALIAS[b] = a
+        del args[i:i + 2]
+    while '--texcopy' in args:  # vivapinata-nx (2026-11-12): --texcopy B:y=x
+        i = args.index('--texcopy')
+        b, comp = args[i + 1].split(':')
+        dst, src = comp.split('=')
+        TEX_COPY[b] = (dst, src)
         del args[i:i + 2]
     sys.argv[1:] = args
     a, b = sys.argv[1], sys.argv[2]
