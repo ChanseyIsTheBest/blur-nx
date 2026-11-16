@@ -56,6 +56,13 @@ extern "C" char *fake_heap_end;  // libnx: the end of the malloc heap
 // that changed since the device's previous op (the op's 'changed', which the replay relies on as well). Exact:
 // set_words only accumulates, and a chunk that did not change still differs from the Begin image where it did at the
 // previous op, already noted; a buffer's first op scans everything.
+// blur-nx (2026-11-17, the 24-hour run): RunCommandBuffer's runs from a pool (QueueRunCommandBuffer, NewRun).
+REXCVAR_DEFINE_BOOL(blur_renut_run_pool, true, "Banjo/Enhancements",
+                    "Each D3DDevice_RunCommandBuffer's run (its 12.9 KB copy of the running device and its buffers) "
+                    "taken from a pool of up to 64 the render thread gives back, instead of a new allocation under "
+                    "the one malloc lock (Game Master spent 0.8 % of its racing time in memalign there). Off: a new "
+                    "one each time, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 // blur-nx (2026-11-17, the 24-hour run): every hook's first steps (FlushRecordedVertices here, FlushDeferredVertices in
 // backend/queued.cpp) take their locks only when their own device has something waiting.
 REXCVAR_DEFINE_BOOL(blur_renut_flush_fast_local, true, "Banjo/Enhancements",
@@ -3764,6 +3771,40 @@ struct Run {
   BufferSet buffers;
 };
 
+// blur-nx (2026-11-17, blur_renut_run_pool): the runs given back (the render thread's replay done, or a held tile run
+// dropped). A run's buffers are let go when it is given back, as when it was deleted; its device copy keeps its
+// storage, so the next run's copy is not an allocation.
+constexpr size_t kRunPoolMax = 64;
+std::mutex g_run_pool_mutex;
+std::vector<Run *> g_run_pool;
+
+void GiveRun(Run *run) {
+  run->buffers.clear();
+  {
+    std::lock_guard lock(g_run_pool_mutex);
+    if (g_run_pool.size() < kRunPoolMax) {
+      g_run_pool.push_back(run);
+      return;
+    }
+  }
+  delete run;
+}
+
+std::shared_ptr<Run> NewRun() {
+  static const bool pool = REXCVAR_GET(blur_renut_run_pool);
+  if (!pool)
+    return std::make_shared<Run>();
+  Run *run = nullptr;
+  {
+    std::lock_guard lock(g_run_pool_mutex);
+    if (!g_run_pool.empty()) {
+      run = g_run_pool.back();
+      g_run_pool.pop_back();
+    }
+  }
+  return std::shared_ptr<Run>(run ? run : new Run, GiveRun);
+}
+
 void QueueReplay(std::shared_ptr<Run> run, u32 command_buffer_va, u32 predication) {
   render_thread::Queue([run, command_buffer_va, predication] {
     Replay(run->running.data(), run->buffers, command_buffer_va, 0, predication);
@@ -3976,7 +4017,7 @@ void QueueRunCommandBuffer(u32 device_va, u32 command_buffer_va) {
   const u8 *device = GuestPtr<const u8>(device_va);
   if (!device)
     return;
-  auto run = std::make_shared<Run>();
+  auto run = NewRun();  // blur-nx (2026-11-17, blur_renut_run_pool)
   run->running.assign(device, device + d3d::kDeviceSnapshotSize);
   {
     std::lock_guard lock(g_record_mutex);

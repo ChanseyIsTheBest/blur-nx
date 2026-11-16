@@ -13,6 +13,7 @@
  * container hash.
  */
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <deque>
 #include <memory>
@@ -51,6 +52,12 @@ REXCVAR_DEFINE_BOOL(banjo_renut_shared_host_shaders, true, "Banjo/Enhancements",
                     "shader (N&B makes a shader object per mesh, many alive at once with the same shader: each unpacked "
                     "and parsed its GLSL on the render thread, kept its own copy of it and compiled its own variants). "
                     "false: one host shader an object, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(blur_renut_in_place_memo, true, "Banjo/Enhancements",
+                    "blur-nx (2026-11-17, the 24-hour run): the narrowed captures' shader lookups (InPlaceShaderEntry, "
+                    "two a Begin*Vertices draw) answered from a small per-thread memo while no shader was registered or "
+                    "destroyed since, instead of a shared lock each (Game Master spent 1.2 % of its racing time in that "
+                    "lock's unlock). Off: the lock every time, as before")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(banjo_renut_recorded_binds, true, "Banjo/Renut",
                     "halo3-nx (2026-11-03, from sasrt-nx's sasrt_renut_recorded_binds): each draw keeps the "
@@ -299,25 +306,55 @@ struct InPlaceShader {
 };
 std::shared_mutex g_in_place_mutex;
 std::unordered_map<u32, InPlaceShader> g_in_place;
+// blur-nx (2026-11-17, blur_renut_in_place_memo): bumped under the lock at every change of g_in_place; a thread's memo
+// answers while the generation it was made at is still the current one: the map then gives the same answer. A change
+// made on another thread at the same moment is ordered with the lookup by nothing, with or without the lock (the
+// header's comment: the change's render-thread item is queued before it), so the memo answers as the lock would have.
+std::atomic<uint64_t> g_in_place_generation{1};
+struct InPlaceMemo {
+  uint64_t generation = 0;
+  u32 shader_va = 0;
+  RecordKind kind{};
+  bool found = false;
+  const ShaderCacheEntry *entry = nullptr;
+};
+constexpr u32 kInPlaceMemoSlots = 16;
+thread_local InPlaceMemo t_in_place_memo[kInPlaceMemoSlots];
 }  // namespace
 
 bool InPlaceShaderEntry(u32 shader_va, RecordKind kind, const ShaderCacheEntry **entry) {
+  static const bool memo_on = REXCVAR_GET(blur_renut_in_place_memo);
+  uint64_t generation = 0;
+  InPlaceMemo *memo = nullptr;
+  if (memo_on) {
+    generation = g_in_place_generation.load(std::memory_order_acquire);
+    memo = &t_in_place_memo[(shader_va * 2654435761u) >> 28];
+    if (memo->generation == generation && memo->shader_va == shader_va && memo->kind == kind) {
+      if (memo->found)
+        *entry = memo->entry;
+      return memo->found;
+    }
+  }
   std::shared_lock lock(g_in_place_mutex);
   const auto it = g_in_place.find(shader_va);
-  if (it == g_in_place.end() || it->second.kind != kind)
-    return false;
-  *entry = it->second.entry;
-  return true;
+  const bool found = it != g_in_place.end() && it->second.kind == kind;
+  if (found)
+    *entry = it->second.entry;
+  if (memo)
+    *memo = {generation, shader_va, kind, found, found ? it->second.entry : nullptr};
+  return found;
 }
 
 void ForgetInPlaceShader(u32 shader_va) {
   std::unique_lock lock(g_in_place_mutex);
   g_in_place.erase(shader_va);
+  g_in_place_generation.fetch_add(1, std::memory_order_acq_rel);  // blur-nx (2026-11-17)
 }
 
 void NoteInPlaceShader(u32 shader_va, RecordKind kind, const ShaderCacheEntry *entry) {
   std::unique_lock lock(g_in_place_mutex);
   g_in_place[shader_va] = {kind, entry};
+  g_in_place_generation.fetch_add(1, std::memory_order_acq_rel);  // blur-nx (2026-11-17)
 }
 
 ShaderRecord *FindShaderLocked(u32 shader_va, RecordKind kind) {
