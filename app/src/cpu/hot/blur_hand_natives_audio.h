@@ -861,3 +861,142 @@ inline bool Native(PPCContext& __restrict ctx, uint8_t* base, S& s) {
   return true;
 }
 }  // namespace n_822BEDD0
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 822E98B0 - the audio graph's convolution reverb (an effect: r3 = its state, r4 = the row it processes in place).
+// Read from its generated statements. Nothing (r3 = 1) when its +10 is 0 or the byte at 0x82C9E1E5 is set. With +212
+// set, a first call lays out its buffers (vector set-up, the 82262368 table): the native declines that call (before
+// anything is written) and the copy does it. Every other call, in order:
+//   - the shared index at 0x82C9E1EC (on the first ever call, from 0x82C9E1F0's bit 0: +164 - 256) advanced by 256
+//     modulo the length N (+164); the row copied into the input ring (+60 + +264 * 4, 822EA3C0); the index advanced
+//     by 256 modulo N again;
+//   - for each of the +124 partitions k: 822EA170 (r3 = +64 + 1024 k, r4 = +60 + ((+264 + 256 k) mod N) * 4,
+//     r5 = +80 + 1024 k); 822D84C8 (+64, N); 822E9198 (the state, +64, N, the words +116..+148 and +156 on the stack at
+//     sp + 88); 822D8918 (+64, N);
+//   - for each partition again: 822EA170 (in place, +80's), the gain +48 * the image's 0x8202E764 (822E4810), and
+//     822E9F20 adding it into the output ring at +68 + ((+264 + 256 k) mod N) * 4;
+//   - the output ring's block at +264 copied to the row (822EA3C0) and zeroed (eight dcbzl), +264 = (+264 + 256) mod N.
+// Console profile (the nx race): 131 samples, 1.2 ms a frame (with its inlined callees) on JQ Worker 3 / 4. The
+// native: the same calls through the header's struct (C) without the copy's context traffic, the index arithmetic in
+// registers; the caller's parameter word at sp + 28 and the stack argument written as the original writes them, the
+// registers r4-r10 its callers may read left as the original's tail leaves them. Declines too when N is 0 or above 2^31
+// (the original's trap and divide forms). Exact; flagged inexact (it calls guest code: it declines under the guard).
+// ---------------------------------------------------------------------------------------------------------------------
+namespace n_822E98B0 {
+template <class C, class S>
+inline bool Native(PPCContext& __restrict ctx, uint8_t* base, S& s) {
+  using namespace blur_audio;
+  if (!On(kN822E98B0) || !Runs<S>()) [[unlikely]] return false;
+  const uint32_t p = ctx.r3.u32, row = ctx.r4.u32, sp0 = ctx.r1.u32, frame = sp0 - 368u;
+  if (!detail::Straight(p, 272) || !detail::Straight(frame + 80, 300)) [[unlikely]] return false;
+  if (LdB(base, p + 10) == 0 || LdB(base, 0x82C9E1E5u) != 0) {
+    ctx.r3.u64 = 1;
+    return true;
+  }
+  const uint32_t n = LdW(base, p + 164);
+  if (LdB(base, p + 212) != 0 || n == 0 || n > 0x7FFFFFFFu) [[unlikely]] return false;
+  const auto StStack = [&](uint32_t a, uint32_t v) {
+    v = __builtin_bswap32(v);
+    std::memcpy(::banjo::hot::Raw(base, a), &v, 4);
+  };
+  const auto LdD = [&](uint32_t a) {
+    uint64_t v;
+    std::memcpy(&v, ::banjo::hot::Raw(base, a), 8);
+    return __builtin_bswap64(v);
+  };
+  const auto Mod = [](uint32_t a, uint32_t m) { return uint32_t(int32_t(a) - (int32_t(a) / int32_t(m)) * int32_t(m)); };
+  StStack(sp0 + 28, row);  // stw r4,396(r1): the caller's parameter word
+  ctx.r1.u64 = frame;
+  constexpr uint32_t kIndex = 0x82C9E1ECu, kFirst = 0x82C9E1F0u;
+  uint32_t idx;
+  const uint32_t first = LdW(base, kFirst);
+  if ((first & 1u) == 0) {
+    StW(base, kFirst, first | 1u);
+    idx = LdW(base, p + 164) - 256u;
+  } else {
+    idx = LdW(base, kIndex);
+  }
+  StW(base, kIndex, Mod(idx + 256u, n));
+  ctx.r3.u64 = (LdW(base, p + 264) << 2) + LdW(base, p + 60);
+  ctx.r4.u64 = row;
+  C::sub_822EA3C0(ctx, base, s);
+  StW(base, kIndex, Mod(LdW(base, kIndex) + 256u, LdW(base, p + 164)));
+  const int32_t parts = int32_t(LdW(base, p + 124));
+  for (int32_t k = 0; k < int32_t(LdW(base, p + 124)); ++k) {
+    const uint32_t at = LdW(base, p + 264) + 256u * uint32_t(k);
+    const uint32_t m = LdW(base, p + 164);
+    ctx.r3.u64 = LdW(base, p + 64) + 1024u * uint32_t(k);
+    ctx.r4.u64 = ((at - (at / m) * m) << 2) + LdW(base, p + 60);  // divwu
+    ctx.r5.u64 = 1024u * uint32_t(k) + LdW(base, p + 80);
+    C::sub_822EA170(ctx, base, s);
+  }
+  (void)parts;
+  ctx.r4.u64 = LdW(base, p + 164);
+  ctx.r3.u64 = LdW(base, p + 64);
+  C::sub_822D84C8(ctx, base, s);
+  {
+    const uint64_t a156 = LdD(p + 156);
+    uint64_t be = __builtin_bswap64(a156);
+    std::memcpy(::banjo::hot::Raw(base, frame + 88), &be, 8);  // std r11,88(r1): the ninth argument
+    ctx.r3.u64 = p;
+    ctx.r5.u64 = LdW(base, p + 164);
+    ctx.r4.u64 = LdW(base, p + 64);
+    ctx.r6.u64 = LdD(p + 116);
+    ctx.r7.u64 = LdD(p + 124);
+    ctx.r8.u64 = LdD(p + 132);
+    ctx.r9.u64 = LdD(p + 140);
+    ctx.r10.u64 = LdD(p + 148);
+    C::sub_822E9198(ctx, base, s);
+  }
+  ctx.r4.u64 = LdW(base, p + 164);
+  ctx.r3.u64 = LdW(base, p + 64);
+  C::sub_822D8918(ctx, base, s);
+  const double f31 = double(Bits(LdW(base, 0x8202E764u)));
+  for (int32_t k = 0; k < int32_t(LdW(base, p + 124)); ++k) {
+    const uint32_t w = LdW(base, p + 64) + 1024u * uint32_t(k);
+    ctx.r4.u64 = w;
+    ctx.r5.u64 = 1024u * uint32_t(k) + LdW(base, p + 80);
+    ctx.r3.u64 = w;
+    C::sub_822EA170(ctx, base, s);
+    ctx.r4.u64 = LdW(base, p + 64) + 1024u * uint32_t(k);
+    ctx.f1.f64 = REX_FMULS(double(Bits(LdW(base, p + 48))), f31);
+    ctx.r3.u64 = ctx.r4.u64;
+    C::sub_822E4810(ctx, base, s);
+    const uint32_t at = LdW(base, p + 264) + 256u * uint32_t(k);
+    const uint32_t m = LdW(base, p + 164);
+    ctx.r5.u64 = LdW(base, p + 64) + 1024u * uint32_t(k);
+    ctx.r4.u64 = ((at - (at / m) * m) << 2) + LdW(base, p + 68);
+    ctx.r3.u64 = ctx.r4.u64;
+    C::sub_822E9F20(ctx, base, s);
+  }
+  ctx.r3.u64 = row;
+  ctx.r4.u64 = (LdW(base, p + 264) << 2) + LdW(base, p + 68);
+  C::sub_822EA3C0(ctx, base, s);
+  {
+    const uint32_t z = (LdW(base, p + 264) << 2) + LdW(base, p + 68);
+    for (uint32_t b = 0; b < 1024; b += 128) {
+      const uint32_t at = (z + b) & ~127u;
+      ::banjo::hot::Card(base, at, 128);
+      std::memset(::banjo::hot::Raw(base, at), 0, 128);
+    }
+  }
+  // The tail: +264 = (+264 + 256) mod N, the registers as the original leaves them.
+  const uint64_t r8 = uint64_t(LdW(base, p + 264)) + 256u;
+  const uint32_t r9 = LdW(base, p + 164);
+  const int32_t q = int32_t(uint32_t(r8)) / int32_t(r9);
+  const uint32_t rot = (uint32_t(r8) << 1) | (uint32_t(r8) >> 31);
+  const int64_t r6 = int64_t(q) * int64_t(int32_t(r9));
+  const uint64_t r4 = r8 - uint64_t(r6);
+  StW(base, p + 264, uint32_t(r4));
+  ctx.r10.s64 = 896;
+  ctx.r3.s64 = 1;
+  ctx.r8.u64 = r8;
+  ctx.r9.u64 = r9;
+  ctx.r7.s64 = q;
+  ctx.r5.u64 = uint64_t(rot) - 1u;
+  ctx.r6.s64 = r6;  // mullw as the generated code writes it: the product of the two sign-extended words
+  ctx.r4.u64 = r4;
+  ctx.r1.u64 = sp0;
+  return true;
+}
+}  // namespace n_822E98B0
