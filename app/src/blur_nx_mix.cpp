@@ -19,11 +19,11 @@
 
 REXCVAR_DEFINE_DOUBLE(audio_nx_ramp_eps, 0.0, "Audio",
                       "Blur near-exact #24: a mixer gain whose target differs from its current value by less than this "
-                      "mixes as the constant target instead of a ramp to it (0: off, as before; at most 2^-15)")
+                      "mixes as the constant target instead of a ramp to it (0: off, as before; at most 0.001 since 2026-11-17)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_DOUBLE(audio_nx_unity_eps, 0.0, "Audio",
                       "Blur near-exact #23: a constant mixer gain within this of 1.0 mixes as 1.0 (the unity kernel) "
-                      "(0: off, as before; at most 2^-15)")
+                      "(0: off, as before; at most 0.001 since 2026-11-17)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_DOUBLE(audio_nx_silent_eps, 0.0, "Audio",
@@ -59,8 +59,11 @@ namespace blur::nx_mix {
 
 void Latch() {
   constexpr double kMax = 1.0 / 32768.0;
-  blur_nx_ramp_eps = float(std::clamp(REXCVAR_GET(audio_nx_ramp_eps), 0.0, kMax));
-  blur_nx_unity_eps = float(std::clamp(REXCVAR_GET(audio_nx_unity_eps), 0.0, kMax));
+  // 2026-11-17 (the user: "more non-exact audio"): up to 1e-3 (-60 dB: a gain step of 0.009 dB, a ramp's end within
+  // 0.1 % of its start); kMax (2^-15) was the near-exact run's bound.
+  blur_nx_ramp_eps = float(std::clamp(REXCVAR_GET(audio_nx_ramp_eps), 0.0, 0.001));
+  blur_nx_unity_eps = float(std::clamp(REXCVAR_GET(audio_nx_unity_eps), 0.0, 0.001));
+  (void)kMax;
   // 2026-11-17: the silent gain may go to -60 dB (the user: "more non-exact audio"); the others stay at 2^-15.
   blur_nx_silent_eps = float(std::clamp(REXCVAR_GET(audio_nx_silent_eps), 0.0, 0.001));
   blur_nx_voice_floor = float(std::clamp(REXCVAR_GET(audio_nx_voice_floor), 0.0, 0.01));
