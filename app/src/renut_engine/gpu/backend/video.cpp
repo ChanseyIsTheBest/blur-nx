@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <system_error>
 #include <vector>
+#include <algorithm>  // blur-nx (2026-11-17, audit #4): std::max
 #include <atomic>
 #include <chrono>  // banjo-nx (2026-10-20): banjo_deko3d_latency_trim
 #include <string>
@@ -578,6 +579,29 @@ void DrainSlot(VideoState &s, uint32_t slot) {
   s.retired_framebuffers[slot].clear();
   s.retired_views[slot].clear();
   s.retired_textures[slot].clear();
+  // blur-nx (2026-11-17, audit #4, blur_renut_texture_pool): the slot's frame is done with its given-back images: into
+  // the pool (after the views above, which name them), the oldest dropped past kTexturePoolBytes or kTexturePoolCount.
+  if (!s.retired_pool[slot].empty()) {
+    constexpr uint64_t kTexturePoolBytes = 96ull << 20;
+    constexpr size_t kTexturePoolCount = 48;
+    for (VideoState::PooledTexture &p : s.retired_pool[slot]) {
+      s.texture_pool_bytes += p.bytes;
+      s.texture_pool.push_back(std::move(p));
+    }
+    s.retired_pool[slot].clear();
+    size_t drop = 0;
+    while (drop < s.texture_pool.size() &&
+           (s.texture_pool_bytes > kTexturePoolBytes || s.texture_pool.size() - drop > kTexturePoolCount)) {
+      s.texture_pool_bytes -= s.texture_pool[drop].bytes;
+      ++drop;
+    }
+    if (drop) {
+      s.texture_pool.erase(s.texture_pool.begin(), s.texture_pool.begin() + ptrdiff_t(drop));
+      s.texture_pool_dropped.fetch_add(drop, std::memory_order_relaxed);
+    }
+    s.texture_pool_kept.store(s.texture_pool.size(), std::memory_order_relaxed);
+    s.texture_pool_kept_bytes.store(s.texture_pool_bytes, std::memory_order_relaxed);
+  }
   s.retired_buffers[slot].clear();
   s.retired_sets[slot].clear();
   ReleaseCacheCopiesLocked(slot);
@@ -1343,6 +1367,63 @@ void Video::RetireLocked(std::unique_ptr<plume::RenderTexture> texture) {
     auto &s = State();
     s.retired_textures[s.frame].push_back(std::move(texture));
   }
+}
+
+// blur-nx (2026-11-17, audit #4, blur_renut_texture_pool).
+namespace {
+bool SamePoolDesc(const plume::RenderTextureDesc &a, const plume::RenderTextureDesc &b) {
+  return a.dimension == b.dimension && a.width == b.width && a.height == b.height && a.depth == b.depth &&
+         a.mipLevels == b.mipLevels && a.arraySize == b.arraySize && a.format == b.format &&
+         a.multisampling.sampleCount == b.multisampling.sampleCount && !a.multisampling.sampleLocationsEnabled &&
+         !b.multisampling.sampleLocationsEnabled && a.textureArrangement == b.textureArrangement &&
+         a.optimizedClearValue == nullptr && b.optimizedClearValue == nullptr && a.flags == b.flags &&
+         a.committed == b.committed;
+}
+uint64_t PoolBytes(const plume::RenderTextureDesc &d) {
+  // An estimate for the pool's cap: 8 bytes a texel at most, the levels' third more.
+  const uint64_t texels = uint64_t(d.width) * d.height * std::max(d.depth, 1u) * std::max(d.arraySize, 1u) *
+                          std::max<uint64_t>(uint64_t(d.multisampling.sampleCount), 1);
+  return texels * 8 * (d.mipLevels > 1 ? 4 : 3) / 3;
+}
+}  // namespace
+
+void Video::RetirePooledLocked(std::unique_ptr<plume::RenderTexture> texture, const plume::RenderTextureDesc &desc) {
+  if (!texture)
+    return;
+  auto &s = State();
+  s.retired_pool[s.frame].push_back({desc, std::move(texture), PoolBytes(desc)});
+}
+
+std::unique_ptr<plume::RenderTexture> Video::TakePooledLocked(const plume::RenderTextureDesc &desc) {
+  auto &s = State();
+  // Newest first: the image the same destination gave back a frame or two ago.
+  for (size_t i = s.texture_pool.size(); i-- > 0;) {
+    if (SamePoolDesc(s.texture_pool[i].desc, desc)) {
+      std::unique_ptr<plume::RenderTexture> t = std::move(s.texture_pool[i].texture);
+      s.texture_pool_bytes -= s.texture_pool[i].bytes;
+      s.texture_pool.erase(s.texture_pool.begin() + ptrdiff_t(i));
+      s.texture_pool_hits.fetch_add(1, std::memory_order_relaxed);
+      s.texture_pool_kept.store(s.texture_pool.size(), std::memory_order_relaxed);
+      s.texture_pool_kept_bytes.store(s.texture_pool_bytes, std::memory_order_relaxed);
+      return t;
+    }
+  }
+  s.texture_pool_misses.fetch_add(1, std::memory_order_relaxed);
+  return nullptr;
+}
+
+std::string Video::TexturePoolReportLocked() {
+  // (Called by the 10 s report on the game thread: only the atomics.)
+  auto &s = State();
+  const uint64_t hits = s.texture_pool_hits.exchange(0, std::memory_order_relaxed);
+  const uint64_t misses = s.texture_pool_misses.exchange(0, std::memory_order_relaxed);
+  const uint64_t dropped = s.texture_pool_dropped.exchange(0, std::memory_order_relaxed);
+  if (!hits && !misses)
+    return {};
+  return fmt::format("texture pool (blur_renut_texture_pool): {} images reused, {} made new, {} dropped; {} kept "
+                     "({:.1f} MB)",
+                     hits, misses, dropped, s.texture_pool_kept.load(std::memory_order_relaxed),
+                     double(s.texture_pool_kept_bytes.load(std::memory_order_relaxed)) / (1024.0 * 1024.0));
 }
 
 void Video::RetireLocked(std::unique_ptr<plume::RenderTextureView> view) {

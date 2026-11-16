@@ -18,6 +18,10 @@
 #include <vector>
 #include <string>
 #include <tuple>
+#include <atomic>
+#include <condition_variable>  // blur-nx (2026-11-17, audit #6): the rumble thread
+#include <mutex>
+#include <thread>
 
 #include <rex/chrono/clock.h>
 #include <rex/cvar.h>
@@ -423,6 +427,126 @@ struct SwitchInputDriver::Slot {
   uint16_t vibration_right = 0;
 };
 
+// blur-nx (2026-11-17, the Renut audit's #6, input_switch_rumble_thread): hidSendVibrationValues is an IPC request to
+// the HID service that blocks its caller; Blur's race had it at 0.46 % of the Game Master (the frame's critical thread),
+// the game changing the rumble every few frames. With the key on, SetDeviceVibration hands the latest values of each
+// pad to this thread, which sends them: the same values in the same order per pad, a little later (well within a
+// frame). A send that fails is retried by the game thread's next call, as before (TakeFailed).
+REXCVAR_DEFINE_BOOL(input_switch_rumble_thread, true, "Input",
+                    "blur-nx (the Renut audit's #6): rumble values go to the controller from a background thread, not "
+                    "from the game thread that set them (an IPC request that blocks: 0.46 % of Blur's Game Master). "
+                    "false: sent on the game thread, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+namespace {
+class RumbleSender {
+ public:
+  static constexpr size_t kKeys = 9;  // npads No1-No8, then handheld
+  static size_t KeyOf(HidNpadIdType id) { return id == HidNpadIdType_Handheld ? 8 : size_t(id) & 7; }
+
+  void Post(HidNpadIdType id, const HidVibrationDeviceHandle* handles, int count,
+            const std::array<HidVibrationValue, 2>& values) {
+    const size_t k = KeyOf(id);
+    bool wake;
+    {
+      std::lock_guard<std::mutex> lock(m_);
+      if (stopped_) return;
+      if (!started_) {
+        started_ = true;
+        std::thread([this] { Main(); }).detach();
+      }
+      Request& r = req_[k];
+      std::copy(handles, handles + count, r.handles.begin());
+      r.count = count;
+      r.values = values;
+      r.pending = true;
+      wake = waiting_;
+    }
+    if (wake) cv_.notify_one();
+  }
+
+  // The last send for this pad failed: the game thread sends its next value even if unchanged.
+  bool TakeFailed(HidNpadIdType id) { return failed_[KeyOf(id)].exchange(false, std::memory_order_relaxed); }
+
+  // Nothing is sent after this returns (the driver's teardown stops the pads itself).
+  void Stop() {
+    std::unique_lock<std::mutex> lock(m_);
+    stopped_ = true;
+    for (Request& r : req_) r.pending = false;
+    idle_cv_.wait(lock, [this] { return !sending_; });
+  }
+
+ private:
+  struct Request {
+    std::array<HidVibrationDeviceHandle, 2> handles{};
+    int count = 0;
+    std::array<HidVibrationValue, 2> values{};
+    bool pending = false;
+  };
+
+  void Main() {
+    // Below the game threads (0x3B): a send waits on the HID service anyway.
+    svcSetThreadPriority(threadGetCurHandle(), 0x3C);
+    std::array<Request, kKeys> todo;
+    for (;;) {
+      size_t n = 0;
+      {
+        std::unique_lock<std::mutex> lock(m_);
+        waiting_ = true;
+        cv_.wait(lock, [this] {
+          if (stopped_) return true;
+          for (const Request& r : req_)
+            if (r.pending) return true;
+          return false;
+        });
+        waiting_ = false;
+        if (stopped_) return;
+        for (size_t k = 0; k < kKeys; ++k) {
+          if (req_[k].pending) {
+            todo[k] = req_[k];
+            req_[k].pending = false;
+            ++n;
+          } else {
+            todo[k].pending = false;
+          }
+        }
+        sending_ = true;
+      }
+      for (size_t k = 0; k < kKeys; ++k) {
+        if (!todo[k].pending) continue;
+        if (R_FAILED(hidSendVibrationValues(todo[k].handles.data(), todo[k].values.data(), todo[k].count))) {
+          failed_[k].store(true, std::memory_order_relaxed);
+          static uint32_t failures = 0;
+          if (failures++ < 4) REXLOG_WARN("input: rumble send failed on the rumble thread (pad key {})", k);
+        }
+      }
+      {
+        std::lock_guard<std::mutex> lock(m_);
+        sending_ = false;
+      }
+      idle_cv_.notify_all();
+      (void)n;
+    }
+  }
+
+  std::mutex m_;
+  std::condition_variable cv_, idle_cv_;
+  std::array<Request, kKeys> req_{};
+  std::array<std::atomic<bool>, kKeys> failed_{};
+  bool started_ = false, waiting_ = false, sending_ = false, stopped_ = false;
+};
+
+RumbleSender& Rumble() {
+  static RumbleSender* sender = new RumbleSender;  // never destroyed: its thread is detached
+  return *sender;
+}
+
+bool RumbleThreadOn() {
+  static const bool on = REXCVAR_GET(input_switch_rumble_thread);
+  return on;
+}
+}  // namespace
+
 SwitchInputDriver::SwitchInputDriver(rex::ui::Window* window, size_t window_z_order)
     : InputDriver(window, window_z_order) {}
 
@@ -432,6 +556,8 @@ SwitchInputDriver::~SwitchInputDriver() {
   }
   // XInput vibration holds until changed, so a pad left rumbling would keep
   // rumbling after the process exits.
+  if (RumbleThreadOn())
+    Rumble().Stop();  // blur-nx (2026-11-17, audit #6): nothing of the thread's after the stops below
   std::lock_guard<std::mutex> lock(mutex_);
   for (auto& slot : slots_) {
     if (slot && slot->vibration_count) {
@@ -984,6 +1110,9 @@ X_RESULT SwitchInputDriver::SetDeviceVibration(DeviceId id, X_INPUT_VIBRATION* v
   // See the vibration_sent comment in Slot: same value as the last one sent, nothing to do.
   const uint16_t left = uint16_t(vibration->left_motor_speed);
   const uint16_t right = uint16_t(vibration->right_motor_speed);
+  // blur-nx (2026-11-17, audit #6): a send the rumble thread could not make is made again.
+  if (RumbleThreadOn() && Rumble().TakeFailed(npad_id))
+    slot->vibration_sent = false;
   if (slot->vibration_sent && slot->vibration_left == left &&
       slot->vibration_right == right) {
     return X_ERROR_SUCCESS;
@@ -997,7 +1126,9 @@ X_RESULT SwitchInputDriver::SetDeviceVibration(DeviceId id, X_INPUT_VIBRATION* v
   value.amp_high = float(uint16_t(vibration->right_motor_speed)) / 65535.0f;
   value.freq_high = 320.0f;
   std::array<HidVibrationValue, 2> values = {value, value};
-  if (const Result rc = hidSendVibrationValues(slot->vibration_handles.data(), values.data(), slot->vibration_count);
+  if (RumbleThreadOn()) {  // blur-nx (2026-11-17, audit #6): sent by the rumble thread
+    Rumble().Post(npad_id, slot->vibration_handles.data(), slot->vibration_count, values);
+  } else if (const Result rc = hidSendVibrationValues(slot->vibration_handles.data(), values.data(), slot->vibration_count);
       R_FAILED(rc)) {
     slot->vibration_sent = false;  // retried on the next call
     static uint32_t send_failures = 0;  // renut-ultimate (2026-11-10)

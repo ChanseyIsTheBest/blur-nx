@@ -2,6 +2,7 @@
  * @file    gpu/guest/command_buffers.cpp
  */
 #include "renut_engine/gpu/guest/command_buffers.h"
+#include "renut_engine/gpu/stage_census.h"  // blur-nx (2026-11-17, the Renut audit's census)
 
 #include <algorithm>
 #include <array>
@@ -72,6 +73,11 @@ REXCVAR_DEFINE_BOOL(blur_renut_run_pool, true, "Banjo/Enhancements",
                     "taken from a pool of up to 64 the render thread gives back, instead of a new allocation under "
                     "the one malloc lock (Game Master spent 0.8 % of its racing time in memalign there). Off: a new "
                     "one each time, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(blur_renut_replay_pool, true, "Banjo/Renut",
+                    "blur-nx (the Renut audit's #25/#26, exact): a run's shared_ptr control block comes from a free "
+                    "list and its replay's closure is a pooled job (one pointer, kept in the std::function itself), "
+                    "not two heap allocations under the malloc lock each RunCommandBuffer. false: as before")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 // blur-nx (2026-11-17, the 24-hour run): every hook's first steps (FlushRecordedVertices here, FlushDeferredVertices in
 // backend/queued.cpp) take their locks only when their own device has something waiting.
@@ -2207,6 +2213,7 @@ const StackHeaderSet *StackHeadersOf(const HostCommandBuffer &buffer, size_t op_
 }
 
 Op *NewOp(u32 device_va, OpKind kind, HostCommandBuffer **out_buffer) {
+  ::renut::gpu::census::Scope census_scope(::renut::gpu::census::kNewOp);  // blur-nx (2026-11-17)
   const u32 command_buffer = RecordingBuffer(device_va);
   auto *device = GuestPtr<d3d::Device>(device_va);
   if (!command_buffer || !device)
@@ -3880,6 +3887,85 @@ void GiveRun(Run *run) {
   delete run;
 }
 
+// blur-nx (2026-11-17, the Renut audit's #25 and #26, blur_renut_replay_pool): a run's shared_ptr control block from a
+// free list (shared_ptr's allocator form: one block size, that of the control block of a Run with GiveRun), and the
+// replay's closure a pooled job, so the render thread's std::function holds one pointer (stored in place, no heap) and
+// not a shared_ptr and two words (24 bytes, a heap allocation each replay).
+bool ReplayPoolOn() {
+  static const bool on = REXCVAR_GET(blur_renut_replay_pool);
+  return on;
+}
+template <typename T>
+struct RunBlockAlloc {
+  using value_type = T;
+  RunBlockAlloc() = default;
+  template <typename U>
+  RunBlockAlloc(const RunBlockAlloc<U> &) {}
+  static std::mutex &Mutex() {
+    static std::mutex m;
+    return m;
+  }
+  static std::vector<void *> &Free() {
+    static std::vector<void *> v;
+    return v;
+  }
+  T *allocate(size_t n) {
+    if (n == 1) {
+      std::lock_guard lock(Mutex());
+      if (!Free().empty()) {
+        void *p = Free().back();
+        Free().pop_back();
+        return static_cast<T *>(p);
+      }
+    }
+    return static_cast<T *>(::operator new(n * sizeof(T)));
+  }
+  void deallocate(T *p, size_t n) {
+    if (n == 1) {
+      std::lock_guard lock(Mutex());
+      if (Free().size() < 256) {
+        Free().push_back(p);
+        return;
+      }
+    }
+    ::operator delete(p);
+  }
+  template <typename U>
+  bool operator==(const RunBlockAlloc<U> &) const { return true; }
+  template <typename U>
+  bool operator!=(const RunBlockAlloc<U> &) const { return false; }
+};
+
+struct ReplayJob {
+  std::shared_ptr<Run> run;
+  u32 command_buffer_va = 0;
+  u32 predication = 0;
+};
+std::mutex g_replay_jobs_mutex;
+std::vector<ReplayJob *> g_replay_jobs;
+ReplayJob *TakeReplayJob() {
+  {
+    std::lock_guard lock(g_replay_jobs_mutex);
+    if (!g_replay_jobs.empty()) {
+      ReplayJob *job = g_replay_jobs.back();
+      g_replay_jobs.pop_back();
+      return job;
+    }
+  }
+  return new ReplayJob;
+}
+void GiveReplayJob(ReplayJob *job) {
+  job->run.reset();  // the run back to its pool now, as the closure's copy went when it was destroyed
+  {
+    std::lock_guard lock(g_replay_jobs_mutex);
+    if (g_replay_jobs.size() < 256) {
+      g_replay_jobs.push_back(job);
+      return;
+    }
+  }
+  delete job;
+}
+
 std::shared_ptr<Run> NewRun() {
   static const bool pool = REXCVAR_GET(blur_renut_run_pool);
   if (!pool)
@@ -3892,10 +3978,23 @@ std::shared_ptr<Run> NewRun() {
       g_run_pool.pop_back();
     }
   }
+  if (ReplayPoolOn())  // blur-nx (2026-11-17, audit #26)
+    return std::shared_ptr<Run>(run ? run : new Run, GiveRun, RunBlockAlloc<Run>{});
   return std::shared_ptr<Run>(run ? run : new Run, GiveRun);
 }
 
 void QueueReplay(std::shared_ptr<Run> run, u32 command_buffer_va, u32 predication) {
+  if (ReplayPoolOn()) {  // blur-nx (2026-11-17, audit #25)
+    ReplayJob *job = TakeReplayJob();
+    job->run = std::move(run);
+    job->command_buffer_va = command_buffer_va;
+    job->predication = predication;
+    render_thread::Queue([job] {
+      Replay(job->run->running.data(), job->run->buffers, job->command_buffer_va, 0, job->predication);
+      GiveReplayJob(job);
+    });
+    return;
+  }
   render_thread::Queue([run, command_buffer_va, predication] {
     Replay(run->running.data(), run->buffers, command_buffer_va, 0, predication);
   });

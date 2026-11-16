@@ -106,6 +106,12 @@ REXCVAR_DEFINE_BOOL(thread_event_address_wait, true, "Threading",
                     "directly, a manual-reset Set every blocked thread (the 360's semantics). false = the condition "
                     "variable, as before")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_INT32(thread_event_spin, 0, "Threading",
+                     "blur-nx (the Renut audit's #13; the Switch, with thread_event_address_wait): a wait on an "
+                     "unsignalled event watches it this many CPU yields (about 10 ns each) before it blocks, so a Set "
+                     "soon after costs no sleep and wake. 0: block at once, as before (an A/B: it trades CPU time)")
+    .range(0, 100000)
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(thread_signal_skip_idle, true, "Threading",
                     "Setting an event or releasing a semaphore that no thread is blocked on does not call the "
                     "condition variable's notify (on Horizon always a syscall, svcSignalProcessWideKey, even with "
@@ -854,6 +860,18 @@ class PosixCondition<Event> : public PosixConditionBase {
   WaitResult Wait(std::chrono::milliseconds timeout, const std::atomic<bool>* interrupt = nullptr) override {
     if (!AddressWaitOn()) {
       return PosixConditionBase::Wait(timeout, interrupt);
+    }
+    // blur-nx (2026-11-17, the Renut audit's #13, thread_event_spin): an unsignalled event is watched this many CPU
+    // yields before the wait takes the mutex and blocks: a Set within that time costs the waiter no sleep and wake
+    // (the job threads of Blur's race are woken at each job the Game Master posts). The result is the same as without
+    // it: the locked path below takes the signal as before. Read without the mutex (a byte, single-copy atomic).
+    static const int32_t spin = REXCVAR_GET(thread_event_spin);
+    if (spin > 0 && timeout.count() != 0) {
+      for (int32_t i = 0; i < spin && !__atomic_load_n(&signal_, __ATOMIC_ACQUIRE); ++i) {
+#if defined(__aarch64__)
+        asm volatile("yield" ::: "memory");
+#endif
+      }
     }
     const bool infinite = timeout == std::chrono::milliseconds::max();
     const auto deadline = infinite ? std::chrono::steady_clock::time_point::max()

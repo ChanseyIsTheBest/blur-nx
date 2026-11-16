@@ -2,6 +2,7 @@
  * @file    gpu/render/textures.cpp
  */
 #include "renut_engine/gpu/render/textures.h"
+#include "renut_engine/gpu/stage_census.h"  // blur-nx (2026-11-17, the Renut audit's census)
 
 #include <algorithm>
 #include <bit>
@@ -118,6 +119,20 @@ REXCVAR_DEFINE_BOOL(banjo_renut_dynamic_texture_rows, true, "Banjo/Renut",
                     "pages were written since its last upload (the store cards), not whole every frame (tw2de_nx: two "
                     "768x256 RGBA32F textures written in turn, 3 MB a frame read, swapped and uploaded). Same texels. "
                     "false: the whole texture every frame, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// blur-nx (2026-11-17, the Renut audit's #28): NoteCpuLockOfResolve.
+REXCVAR_DEFINE_BOOL(blur_renut_diag_cpu_lock_resolve, false, "Banjo/Diagnostics",
+                    "blur-nx (2026-11-10 diagnostic): warns when the CPU locks a texture a resolve wrote (Renut's "
+                    "resolves stay on the GPU). Off since the Renut audit's #28: it took a lock at every resolve and "
+                    "every CPU lock of a texture")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// blur-nx (2026-11-17, the Renut audit's #4): Create / Retire.
+REXCVAR_DEFINE_BOOL(blur_renut_texture_pool, true, "Banjo/Renut",
+                    "blur-nx (audit #4, exact): a render-target image Retire gives back (a resolve destination made "
+                    "again) is kept, once the in-flight frames are done with it, and Create takes one of the same "
+                    "description instead of making a new image (Blur's race: 65 new images a second, each a GPU "
+                    "address mapping, 24 ms of the render thread a second). A new render target's content is undefined "
+                    "either way (ResolveTarget discards it). false: every image made new and destroyed, as before")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 // renut-ultimate (2026-11-13, sasrt-nx's resolve project R2): ResolveTarget.
 REXCVAR_DEFINE_BOOL(sasrt_gpu_words_probe_kept, true, "SASRT/GPU",
@@ -456,6 +471,7 @@ uint64_t g_zero_rechecks = 0, g_zero_reuploads = 0, g_zero_marked = 0;
 // Records the copies of every level into 't'. The guest data is read now, or
 // when the command list is submitted if 'defer_read'.
 bool Upload(HostTexture &t, const TextureFetch &fetch, bool defer_read) {
+  ::renut::gpu::census::Scope census_scope(::renut::gpu::census::kUpload);  // blur-nx (2026-11-17)
   FlushResolveMipsLocked(t);  // banjo-nx (2026-10-28, banjo_renut_lazy_resolve_mips): from the level 0 the resolves left
   // banjo-nx (2026-10-19, render-thread proposal 1): the interval the guest bytes are read in: now, or at the next
   // kick's flush (FlushTextureFillsLocked, right after FlushVertexFillsLocked starts a new interval; a later one is
@@ -703,13 +719,25 @@ bool Create(HostTexture &t, const TextureFetch &fetch, bool render_target,
   const uint32_t max_size = scale.Factor() > 1.0f ? kMaxTextureSize * 2 : kMaxTextureSize;
   if (w > max_size || h > max_size || t.depth > kMaxTextureSize)
     return false;
-  t.texture = device->createTexture(desc);
+  // blur-nx (2026-11-17, audit #4, blur_renut_texture_pool): a render target's image from the pool when one matches.
+  static const bool pool = REXCVAR_GET(blur_renut_texture_pool);
+  t.pool_texture = nullptr;
+  if (pool && render_target)
+    t.texture = Video::TakePooledLocked(desc);
+  const bool pooled = t.texture != nullptr;
+  if (!pooled)
+    t.texture = device->createTexture(desc);
   if (!TextureCreated(t.texture.get())) {
     t.texture.reset();
     ReportDeviceLost(device);
     return false;
   }
-  t.texture->setName("renut texture");
+  if (pool && render_target) {
+    t.pool_desc = desc;
+    t.pool_texture = t.texture.get();
+  }
+  if (!pooled)
+    t.texture->setName("renut texture");
 
   view_desc.mipLevels = t.mip_levels;
   view_desc.componentMapping = SwizzleMapping(fetch.Swizzle(), swap_red_blue, format);
@@ -751,7 +779,12 @@ void Retire(HostTexture &t) {
   Video::RetireLocked(std::move(t.level0_view));
   Video::RetireLocked(std::move(t.copy_framebuffer));  // banjo-nx (2026-10-18)
   Video::RetireLocked(std::move(t.view));
-  Video::RetireLocked(std::move(t.texture));
+  // blur-nx (2026-11-17, audit #4, blur_renut_texture_pool): the image Create made for it, back to the pool.
+  if (t.texture && t.pool_texture == t.texture.get())
+    Video::RetirePooledLocked(std::move(t.texture), t.pool_desc);
+  else
+    Video::RetireLocked(std::move(t.texture));
+  t.pool_texture = nullptr;
   if (t.words) {
     for (HostTexture::WordsView &v : t.words_views) {  // banjo-nx (banjo_gpu_depth_words_view)
       if (v.slot != UINT32_MAX && v.slot != kInvalidDescriptor)
@@ -929,6 +962,21 @@ bool ConvertibleResolveFormat(plume::RenderFormat f) {
 // for NoteCpuLockOfResolve; its own mutex, the Lock hooks run on game threads.
 std::mutex g_resolved_mutex;
 std::unordered_map<u32, u32> g_resolved_sizes;
+// blur-nx (2026-11-17, the Renut audit's #28): the diagnostic above only when asked for; it took g_resolved_mutex at
+// every resolve (the render thread) and at every CPU lock of a texture (the game threads).
+bool CpuLockDiagOn() {
+  static const bool on = REXCVAR_GET(blur_renut_diag_cpu_lock_resolve);
+  return on;
+}
+// blur-nx (2026-11-17, the Renut audit's #5): why ResolveTarget made a destination (ResolveRemakeReport): 1 none at the
+// address, 2 a texture there, not a target, 3 another fetch description, 4 no image, 5 another host format, 6 another
+// scale, 7 another allocated size; and render-target host textures released (by memory freed, idle, cold).
+std::atomic<uint64_t> g_rt_made[8];
+std::atomic<uint64_t> g_rt_released_memory{0}, g_rt_released_idle{0}, g_rt_released_cold{0};
+void CountRtRelease(const HostTexture *t, std::atomic<uint64_t> &n) {
+  if (t && t->render_target)
+    n.fetch_add(1, std::memory_order_relaxed);
+}
 
 // GetResolveTextureLocked; 'fetch' receives the header's fetch constant.
 HostTexture *ResolveTarget(u32 texture_va, plume::RenderFormat format, RenderScale scale,
@@ -987,6 +1035,27 @@ HostTexture *ResolveTarget(u32 texture_va, plume::RenderFormat format, RenderSca
   static const bool probe_kept = REXCVAR_GET(sasrt_gpu_words_probe_kept);
   bool carry_words = false, carried_wanted = false;
   uint32_t carried_probe = 0;
+  {  // blur-nx (2026-11-17, audit #5): the reason a destination is made (ResolveRemakeReport)
+    uint32_t why = 0;
+    if (!slot)
+      why = 1;
+    else if (!keep_other_format) {
+      if (!slot->render_target)
+        why = 2;
+      else if (std::memcmp(slot->desc, desc, sizeof(desc)) != 0)
+        why = 3;
+      else if (!slot->texture)
+        why = 4;
+      else if (slot->host_format != format)
+        why = 5;
+      else if (slot->scale != scale)
+        why = 6;
+      else if (slot->alloc_width != scale.Size(slot->width) || slot->alloc_height != scale.Size(slot->height))
+        why = 7;
+    }
+    if (why)
+      g_rt_made[why].fetch_add(1, std::memory_order_relaxed);
+  }
   if (slot && !keep_other_format && (!slot->render_target || std::memcmp(slot->desc, desc, sizeof(desc)) != 0 ||
                !slot->texture || slot->host_format != format || slot->scale != scale ||
                slot->alloc_width != scale.Size(slot->width) || slot->alloc_height != scale.Size(slot->height))) {
@@ -1027,8 +1096,8 @@ HostTexture *ResolveTarget(u32 texture_va, plume::RenderFormat format, RenderSca
   slot->gpu_written = true;
   slot->uploaded = true;
   slot->used_frame = g_frame;
-  {
-    std::lock_guard resolved_lock(g_resolved_mutex);  // blur-nx (2026-11-10, diagnostic)
+  if (CpuLockDiagOn()) {  // blur-nx (2026-11-10, diagnostic; behind its key since the audit's #28)
+    std::lock_guard resolved_lock(g_resolved_mutex);
     g_resolved_sizes[texture_va] = slot->width | slot->height << 16;
   }
   HostTexture *&entry = g_resolve_targets[fetch.BasePage()];
@@ -1265,8 +1334,11 @@ void EvictIdleTexturesLocked() {
     if (!t || g_frame - t->used_frame >= limit)
       idle.push_back(va);
   }
-  for (u32 va : idle)
+  for (u32 va : idle) {
+    if (auto it = g_textures.find(va); it != g_textures.end())
+      CountRtRelease(it->second.get(), g_rt_released_idle);  // blur-nx (2026-11-17, audit #5)
     ReleaseHostTextureLocked(va);
+  }
   if (long_only) {
     static uint32_t long_logged = 0;
     if (!idle.empty() && long_logged++ < 32)
@@ -1332,8 +1404,11 @@ void EvictColdTexturesLocked(uint64_t reserve) {
     if (!t || g_frame - t->used_frame >= limit)
       cold.push_back(va);
   }
-  for (u32 va : cold)
+  for (u32 va : cold) {
+    if (auto it = g_textures.find(va); it != g_textures.end())
+      CountRtRelease(it->second.get(), g_rt_released_cold);  // blur-nx (2026-11-17, audit #5)
     ReleaseHostTextureLocked(va);
+  }
   banjo::renut_gpu::CountReserveEviction(cold.size());
   static uint32_t logged = 0;
   if (!cold.empty() && logged++ < 32) {
@@ -1396,8 +1471,30 @@ void ReleaseHostTexturesInMemoryLocked(u32 physical, u32 size) {
     if (inside(base_page) || (mip_page && inside(mip_page)))
       gone.push_back(va);
   }
-  for (u32 va : gone)
+  for (u32 va : gone) {
+    if (auto it = g_textures.find(va); it != g_textures.end())
+      CountRtRelease(it->second.get(), g_rt_released_memory);  // blur-nx (2026-11-17, audit #5)
     ReleaseHostTextureLocked(va);
+  }
+}
+
+// blur-nx (2026-11-17, the Renut audit's #4 and #5): the 10 s line (banjo_renut_tuning.cpp); atomics only.
+std::string ResolveRemakeReport() {
+  uint64_t made[8];
+  uint64_t total = 0;
+  for (int i = 1; i < 8; ++i)
+    total += made[i] = g_rt_made[i].exchange(0, std::memory_order_relaxed);
+  const uint64_t by_memory = g_rt_released_memory.exchange(0, std::memory_order_relaxed);
+  const uint64_t by_idle = g_rt_released_idle.exchange(0, std::memory_order_relaxed);
+  const uint64_t by_cold = g_rt_released_cold.exchange(0, std::memory_order_relaxed);
+  std::string pool = Video::TexturePoolReportLocked();
+  if (!total && pool.empty())
+    return {};
+  return fmt::format("resolve destinations made: {} (none at the address {}, a texture there {}, another fetch "
+                     "description {}, no image {}, another host format {}, another scale {}, another size {}); target "
+                     "textures released: {} with their memory, {} idle, {} cold{}{}",
+                     total, made[1], made[2], made[3], made[4], made[5], made[6], made[7], by_memory, by_idle, by_cold,
+                     pool.empty() ? "" : "; ", pool);
 }
 
 void NoteTextureUnlocked(u32 resource_va) {
@@ -1844,6 +1941,7 @@ uint64_t g_texture_bind_gen = 1;  // banjo-nx (2026-10-27, Phase A): textures.h
 uint32_t g_texture_va_epochs[kTextureEpochBuckets] = {};
 
 bool RefreshBindingLocked(u32 texture_va, const TextureFetch &device_fetch, const BindEffects &fx) {
+  ::renut::gpu::census::Scope census_scope(::renut::gpu::census::kRefreshBinding);  // blur-nx (2026-11-17)
   HostTexture *t = fx.transition[0];
   if (!t || fx.depth_source || fx.words_viewed || fx.handover_surface || fx.handover_image || fx.transition[1])
     return false;
@@ -2113,6 +2211,8 @@ HostTexture *ResolveStagingLocked(const HostTexture *dest) {
 
 // blur-nx (2026-11-10, diagnostic; not in the base): see textures.h.
 void NoteCpuLockOfResolve(u32 texture_va, u32 level, u32 guest_format) {
+  if (!CpuLockDiagOn())  // blur-nx (2026-11-17, audit #28): a lock and a map look-up at every CPU lock otherwise
+    return;
   u32 size = 0;
   {
     std::lock_guard resolved_lock(g_resolved_mutex);

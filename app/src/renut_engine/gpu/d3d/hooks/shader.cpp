@@ -35,6 +35,7 @@
 #include "renut_engine/gpu/log.h"
 #include "renut_engine/gpu/backend/render_thread.h"
 #include "renut_engine/gpu/guest/resources.h"
+#include "renut_engine/gpu/lean_mutex.h"  // blur-nx (2026-11-17, audit #8)
 #include "renut_engine/gpu/render/pipeline.h"
 #include "renut_engine/gpu/render/shader_library.h"
 #include "renut_engine/gpu/backend/video.h"
@@ -310,7 +311,7 @@ struct InPlaceShader {
   RecordKind kind;
   const ShaderCacheEntry *entry;
 };
-std::shared_mutex g_in_place_mutex;
+LeanSharedMutex g_in_place_mutex;  // blur-nx (2026-11-17, audit #8, blur_renut_lean_rwlock): was std::shared_mutex
 std::unordered_map<u32, InPlaceShader> g_in_place;
 // blur-nx (2026-11-17, blur_renut_in_place_memo): bumped under the lock at every change of g_in_place; a thread's memo
 // answers while the generation it was made at is still the current one: the map then gives the same answer. A change

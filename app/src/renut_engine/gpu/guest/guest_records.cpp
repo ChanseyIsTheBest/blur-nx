@@ -2,6 +2,7 @@
  * @file    gpu/guest/guest_records.cpp
  */
 #include "renut_engine/gpu/guest/guest_records.h"
+#include "renut_engine/gpu/lean_mutex.h"  // blur-nx (2026-11-17, audit #7)
 
 #include <atomic>
 #include <mutex>
@@ -9,6 +10,7 @@
 #include <unordered_map>
 
 #include <o1heap.h>
+#include <rex/cvar.h>  // blur-nx (2026-11-17, audit #7)
 #include <rex/system/xmemory.h>
 
 #include "renut_engine/gpu/log.h"
@@ -25,7 +27,7 @@ std::mutex g_heap_mutex;  // o1heap is not internally synchronised
 O1HeapInstance *g_heap = nullptr;
 bool g_oom_logged = false;
 
-std::shared_mutex g_registry_mutex;
+LeanSharedMutex g_registry_mutex;  // blur-nx (2026-11-17, audit #7, blur_renut_lean_rwlock): was std::shared_mutex
 std::unordered_map<u32, RecordKind> g_registry;
 std::atomic<uint64_t> g_generation{0};
 
@@ -214,3 +216,19 @@ int OursFast(u32 guest_va) {
 }
 
 } // namespace renut::gpu::records
+
+// blur-nx (2026-11-17, the Renut audit's #7 and #8): gpu/lean_mutex.h.
+REXCVAR_DEFINE_BOOL(blur_renut_lean_rwlock, true, "Banjo/Renut",
+                    "blur-nx (audit #7/#8, exact): the guest-record registry's lock and the in-place shaders' lock are "
+                    "one plain mutex each, not a reader-writer lock (libnx's rwlock: an inner mutex at every lock and "
+                    "unlock, condition-variable wakes; 0.5-0.7 % of Blur's Game Master). Their readers are rare (the "
+                    "registry is read without a lock, the shaders through a memo). false: std::shared_mutex, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+namespace renut::gpu {
+bool LeanRwlockOn() {
+  static const bool on = REXCVAR_GET(blur_renut_lean_rwlock);
+  return on;
+}
+}  // namespace renut::gpu
+

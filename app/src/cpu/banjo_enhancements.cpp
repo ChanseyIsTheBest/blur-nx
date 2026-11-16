@@ -231,6 +231,12 @@ REXCVAR_DEFINE_BOOL(switch_profile_stacks, false, "Banjo/Enhancements",
 REXCVAR_DEFINE_INT32(switch_profile_stacks_ms, 1, "Banjo/Enhancements",
                      "Switch: the SDK sampler's interval in milliseconds (1-100; each sample pauses one game thread)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// blur-nx (2026-11-17, the Renut audit's #29): read by name by the SDK's profiler thread (switch_perf.cpp).
+REXCVAR_DEFINE_BOOL(switch_perf_count_calls, true, "Banjo/Enhancements",
+                    "Switch: the wrapped libnx calls (kicks, GPU mappings, cache cleans, yields and sleeps) counted for "
+                    "the 10 s report's libnx line, a clock read and two atomics each. false skips that (a shipping "
+                    "config that reads no reports)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 // The native copies of hot game functions (src/cpu/banjo_hot_guest.cpp, from sa2-nx): one key per function
 // (banjo_cpu_native_<function>, CPU group), defined by the list tools/localize_native.py writes. Calls `row` for each.

@@ -241,7 +241,13 @@ inline Calls& CallsOf(unsigned id) {
   return g_call_shards[(tls >> 9) % kCallShards].calls[id];
 }
 
+// blur-nx (2026-11-17, the Renut audit's #29): the wrapped libnx calls' counters (the "libnx per second" line), off
+// with the title's switch_perf_count_calls = false (read by ProfilerMain after its warm-up; counted until then): a
+// shipping config that reads no reports skips a clock read and two atomics per kick, mapping, cache clean and yield.
+std::atomic<bool> g_count_calls{true};
+
 inline void Note(unsigned id, u64 from, u64 bytes = 0) {
+  if (!g_count_calls.load(std::memory_order_relaxed)) return;
   const u64 ticks = armGetSystemTick() - from;
   Calls& l = CallsOf(id);
   l.n.fetch_add(1, std::memory_order_relaxed);
@@ -1112,6 +1118,11 @@ void ProfilerMain(void*) {
     overlay.Step(armGetSystemTick(), tick_freq, false);
   }
 
+  // blur-nx (2026-11-17, audit #29): switch_perf_count_calls (the title's cvar; true when it has none).
+  {
+    const std::string value = rex::cvar::GetFlagByName("switch_perf_count_calls");
+    if (value == "false" || value == "0") g_count_calls.store(false, std::memory_order_relaxed);
+  }
   // Invasive sampling is only enabled explicitly, for diagnostics.
   // The normal mode keeps FPS, CPU and counters, without stopping the game.
   bool sample_stacks = false;
@@ -1545,6 +1556,10 @@ void AddOwn(std::atomic<u64>& counter, u64 value) {  // one writer: a load and a
 }
 
 void __wrap_svcSleepThread(s64 nano) {
+  if (!g_count_calls.load(std::memory_order_relaxed)) {  // blur-nx (2026-11-17, audit #29)
+    __real_svcSleepThread(nano);
+    return;
+  }
   const u64 from = armGetSystemTick();
   __real_svcSleepThread(nano);
   Note(nano == 0 ? kSleep0 : nano < 0 ? kSleepYield : nano <= 1000000 ? kSleepShort : kSleepLong, from);
