@@ -54,6 +54,7 @@ extern "C" const bool g_banjo_store_cards = false;
 #include "banjo_hot_guest.h"
 
 #include <algorithm>
+#include <cctype>  // blur-nx (2026-11-16): banjo_hot_guard_keep
 #include <atomic>
 #include <chrono>
 #include <cmath>    // port 72: the VMX fuzz's absolute error
@@ -114,6 +115,14 @@ REXCVAR_DEFINE_INT32(sasrt_test_vmx_fuzz, 0, "Banjo/Enhancements",
                      "Test: compare the fast VMX estimate and multiply-add forms with the exact ones over N million "
                      "lanes on the console (\"[vmxfuzz]\" lines; 0 off)")
     .range(0, 1000)
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// blur-nx (2026-11-16, the user: "make it so you can turn off certain functions from the guard switch off"): the
+// functions whose hook the guard never switches off. It still compares them and logs a repeated difference (the first
+// few per hook), but the hook stays on and no settle wait is made (an inexact native differs every time). A list of
+// guest addresses or names, comma separated ("8230AD50,822DA210" or "sub_8230AD50"); empty: the guard as before.
+REXCVAR_DEFINE_STRING(banjo_hot_guard_keep, "", "Banjo/Enhancements",
+                      "The guard: functions (comma-separated guest addresses or sub_ names) whose native copy it never "
+                      "switches off; a difference is logged and the copy stays on")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_INT32(banjo_hot_guard_calls, 64, "Banjo/Enhancements",
                      "Native copies of hot game functions: the first N guarded calls of each thread come one after "
@@ -821,6 +830,38 @@ Outcome Attempt(Hook& h, PPCContext& ctx, uint8_t* base, Scratch& t, std::string
 // outside the comparisons.
 bool GuardBusy() noexcept { return Thread().depth != 0; }
 
+namespace {
+// banjo_hot_guard_keep: is this hook's function on the list? (The list read once; a hook's answer cached in a small
+// table by its address, so a guarded call pays one lookup.)
+bool KeptByGuard(const Hook& h) {
+  static const std::vector<std::string> list = [] {
+    std::vector<std::string> out;
+    const std::string text = REXCVAR_GET(banjo_hot_guard_keep);
+    size_t at = 0;
+    while (at <= text.size()) {
+      size_t comma = text.find(',', at);
+      if (comma == std::string::npos) comma = text.size();
+      std::string item = text.substr(at, comma - at);
+      while (!item.empty() && (item.front() == ' ' || item.front() == '\t')) item.erase(item.begin());
+      while (!item.empty() && (item.back() == ' ' || item.back() == '\t')) item.pop_back();
+      if (item.rfind("sub_", 0) == 0) item = item.substr(4);
+      for (char& c : item) c = char(std::toupper(static_cast<unsigned char>(c)));
+      if (!item.empty()) out.push_back(item);
+      at = comma + 1;
+    }
+    if (!out.empty()) REXLOG_INFO("[hot] banjo_hot_guard_keep: {} function(s) the guard never switches off", out.size());
+    return out;
+  }();
+  if (list.empty() || !h.name) return false;
+  std::string name = h.name;
+  if (name.rfind("sub_", 0) == 0) name = name.substr(4);
+  for (char& c : name) c = char(std::toupper(static_cast<unsigned char>(c)));
+  for (const std::string& item : list)
+    if (item == name) return true;
+  return false;
+}
+}  // namespace
+
 void Check(Hook& h, PPCContext& ctx, uint8_t* base, uint32_t& counter) {
   // The next guarded call of this thread: at once while it is still in its first guard_calls (or in verify mode),
   // else after `period` calls. The counter word: banjo_hot_guest.h.
@@ -885,7 +926,8 @@ void Check(Hook& h, PPCContext& ctx, uint8_t* base, uint32_t& counter) {
     // milliseconds (Ryujinx, machine under load: three audio functions, r5 an output ring). So the same pass again after
     // waiting, up to kSettleAttempts times, 1 ms apart: a wrong copy differs every time, a race stops when the writer does.
     constexpr int kSettleAttempts = 200;
-    if (outcome == Outcome::kDifferent && attempt < kAttempts + kSettleAttempts) {
+    const bool kept = KeptByGuard(h);  // blur-nx (2026-11-16): banjo_hot_guard_keep, no settle wait
+    if (!kept && outcome == Outcome::kDifferent && attempt < kAttempts + kSettleAttempts) {
       ctx = t.in;
       size_t off = 0;
       for (const Region& r : t.ranges) {
@@ -900,7 +942,14 @@ void Check(Hook& h, PPCContext& ctx, uint8_t* base, uint32_t& counter) {
     // It repeated.
     h.compared.fetch_add(1, std::memory_order_relaxed);
     ::me::native::g_verify_native_checks.fetch_add(1, std::memory_order_relaxed);
-    h.differences.fetch_add(1, std::memory_order_relaxed);
+    const uint64_t nth = h.differences.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (kept) {
+      // blur-nx (2026-11-16): on banjo_hot_guard_keep: logged (the first three of this hook), the copy stays on.
+      if (nth <= 3)
+        REXLOG_WARN("[hot] difference in {} ({}), kept on (banjo_hot_guard_keep): {}", h.name, h.key, diff);
+      if (outcome == Outcome::kPathsDiffer) h.orig(ctx, base);  // nothing has run for real yet
+      return;
+    }
     h.state.store(kOff, std::memory_order_relaxed);
     ::me::native::VerifyDifference();
     const PPCContext& in = t.in;
