@@ -71,7 +71,7 @@ volatile unsigned long long g_rex_stack_fwd_checked = 0;
 // compares, arithmetic, cold paths, float copy loads and stores).
 volatile unsigned long long g_rex_diet_census[6] = {};
 // blur-nx (2026-11-13, docs/cpu-near-exact-50-1113.md): the near-exact ideas' census (rex/ppc/diet_ops.h REX_NX_CENSUS).
-volatile unsigned long long g_rex_nx_census[48] = {};
+volatile unsigned long long g_rex_nx_census[48] = {};  // slots: sdk/include/rex/ppc/diet_ops.h; 40 the node loop native's children checked for silent rows (#197), 41 of them all zero (not mixed)
 }
 
 #if !defined(__SWITCH__)
