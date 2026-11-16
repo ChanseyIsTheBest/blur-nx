@@ -602,3 +602,204 @@ inline bool Native(PPCContext& __restrict ctx, uint8_t* base, S& s) {
   return true;
 }
 }  // namespace n_822E17C8
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 822D2378 - the sound system's update (its XThread; r3 = the system). Read from its generated statements:
+//   - for each voice of the list at +12 (next at +68): its four flags at +52..+55 from its bytes +78..+81, its timing
+//     (+20 += 1.0 and +14 + 1 wrapping at the source's u16 count, 0.0 then; +28 = 1 / +24; +24 = the source's +12, +36
+//     = +28 * +20, the words +32, +36, +40 from +88, the global at 0x82C8DE84 and +92; +8 = the word at
+//     [0x82C8DE90] + 0x27BD8), and, when it has something to do, its job entry {voice, its +4 word} added to the current
+//     array of 8-byte entries; a full array (the word at 0x82C8E034 entries) is posted as jobs (8227C078) and a new one
+//     taken (822F1390 from the system's pool when the byte at 0x82C8E00C is set, else 8217C648, its pointer kept in a
+//     growing vector on the stack at +88 / +92 / +96, 824C6888 growing it by half);
+//   - the last array posted, the jobs waited for (822862B0) when any voice was posted, the arrays freed (822F0E48, or
+//     8217C750 each); the voice count stored at the system's +0x1E05C; 822ED708 on the list's lock at 0x82C9E220;
+//   - for each voice again: +32 / +36 / +40 refreshed, its node list walked (822CBAD0), and for each of its +128
+//     sub-entries (36 bytes at +120 + +88) with +39 set, at most [+120 + +88] of them, 822E4028; then 822EE948 and
+//     822ED788 on the lock, and the vector's own storage freed.
+// Console profile (the nx race): 105 samples, 1.0 ms a frame on its XThread: spread over the voice list's loads. The
+// native: the same steps without the copy's context traffic, the job vector in the guest frame the callees read
+// (sp - 272 + 80..96, as the original). Exact; flagged inexact (natives that call guest code decline under the guard).
+// ---------------------------------------------------------------------------------------------------------------------
+namespace n_822D2378 {
+template <class C, class S>
+inline bool Native(PPCContext& __restrict ctx, uint8_t* base, S& s) {
+  using namespace blur_audio;
+  if (!On(kN822D2378) || !Runs<S>()) [[unlikely]] return false;
+  const uint32_t sys = ctx.r3.u32, sp0 = ctx.r1.u32, frame = sp0 - 272u;
+  if (!detail::Straight(frame + 80, 20) || !detail::Straight(sys, 16)) [[unlikely]] return false;
+  const auto StB = [&](uint32_t a, uint32_t v) {
+    *::banjo::hot::Raw(base, a) = uint8_t(v);
+    ::banjo::hot::Card(base, a, 1);
+  };
+  const auto StH = [&](uint32_t a, uint32_t v) {
+    const uint16_t b = __builtin_bswap16(uint16_t(v));
+    std::memcpy(::banjo::hot::Raw(base, a), &b, 2);
+    ::banjo::hot::Card(base, a, 2);
+  };
+  const auto StStack = [&](uint32_t a, uint32_t v) {  // a stack word (no card: the copies mark none for the stack)
+    v = __builtin_bswap32(v);
+    std::memcpy(::banjo::hot::Raw(base, a), &v, 4);
+  };
+  const uint32_t r23 = LdW(base, LdW(base, 0x82C8DE90u) + 0x27BD8u);
+  const bool pool = LdB(base, 0x82C8E00Cu) != 0;
+  const uint32_t batch = LdW(base, 0x82C8E034u);
+  StStack(frame + 80, 0);
+  StStack(frame + 84, 0x82C90000u);
+  StStack(frame + 88, 0);
+  StStack(frame + 92, 0);
+  StStack(frame + 96, 0);
+  ctx.r1.u64 = frame;
+  uint32_t r28 = 0, array = 0, voices = 0;
+  bool posted = false;
+  uint32_t pending = 0;
+  const auto post = [&] {
+    ctx.r3.u64 = 0x82B9D100u;
+    ctx.r7.u64 = LdW(base, sys + 0x1E054u);
+    ctx.r9.s64 = 4;
+    ctx.r6.u64 = LdW(base, sys + 0x1E050u);
+    ctx.r8.u64 = frame + 80;
+    ctx.r5.s64 = 0;
+    ctx.r4.u64 = array;
+    C::sub_8227C078(ctx, base, s);
+  };
+  for (uint32_t v = LdW(base, sys + 12); v != 0; v = LdW(base, v + 68)) {
+    const uint32_t b81 = LdB(base, v + 81), b80 = LdB(base, v + 80), b78 = LdB(base, v + 78), b79 = LdB(base, v + 79);
+    ++voices;
+    const uint32_t e = v + 8;
+    StB(e + 44, b81 && !b80);
+    StB(e + 45, !b81 && b80);
+    StB(e + 46, b79 && !b78);
+    StB(e + 47, !b79 && b78);
+    StB(v + 81, b80);
+    StB(v + 79, b78);
+    double f0 = double(float(double(Bits(LdW(base, e + 12))) + 1.0));
+    uint32_t r10 = LdH(base, e + 6) + 1u;
+    const double f12 = double(Bits(LdW(base, e + 8)));
+    const uint32_t src = LdW(base, v + 72);
+    const uint32_t r9 = LdW(base, src + 8) & 0xFFFFu;
+    const double f13 = double(Bits(LdW(base, src + 12)));
+    if (!(r10 < r9)) {
+      r10 = 0;
+      f0 = 0.0;
+    }
+    const double rec = double(float(1.0 / f12));
+    StW(base, e + 0, r23);
+    StH(e + 6, r10);
+    StW(base, e + 12, std::bit_cast<uint32_t>(float(f0)));
+    StW(base, e + 8, std::bit_cast<uint32_t>(float(f13)));
+    StH(e + 4, r9);
+    StW(base, e + 20, std::bit_cast<uint32_t>(float(rec)));
+    StW(base, e + 16, std::bit_cast<uint32_t>(float(double(float(rec * f0)))));
+    StW(base, e + 24, LdW(base, v + 88));
+    StW(base, e + 28, LdW(base, 0x82C8DE84u));
+    StW(base, e + 32, LdW(base, v + 92));
+    const uint32_t flag1 = b78 ? 0u : (r10 == 0 ? 1u : 0u);
+    const uint32_t flag2 = (b79 && b78) ? 0u : ((b81 == 0 || b80 == 0) ? 1u : 0u);
+    if (!flag1 && !flag2) {
+      pending = LdW(base, frame + 80);
+      continue;
+    }
+    StB(v + 5, flag2);
+    StB(v + 4, flag1);
+    StW(base, v + 0, v);
+    StB(v + 6, LdB(base, 0x82C8E074u));
+    if (LdW(base, frame + 80) == 0) {
+      if (pool) {
+        ctx.r3.u64 = sys + 0x1E070u;
+        ctx.r4.u64 = uint32_t((batch + 1u) << 3);
+        C::sub_822F1390(ctx, base, s);
+        array = ctx.r3.u32;
+      } else {
+        ctx.r3.u64 = batch > 0x1FFFFFFFu ? 0xFFFFFFFFFFFFFFFFull : uint64_t(uint32_t(batch << 3));
+        C::sub_8217C648(ctx, base, s);
+        array = ctx.r3.u32;
+        bool store = true;
+        const uint32_t cap = LdW(base, frame + 92);
+        if (int32_t(r28) == int32_t(cap)) {
+          const int32_t three = int32_t(cap + (cap << 1));
+          ctx.r5.u64 = r28;
+          ctx.r3.u64 = frame + 88;
+          ctx.r4.s64 = int64_t(three / 2) + 1;  // srawi + addze: halved toward zero
+          C::sub_824C6888(ctx, base, s);
+          store = (ctx.r3.u32 & 0xFFu) != 0;
+          r28 = LdW(base, frame + 96);
+        }
+        if (store) {
+          const uint32_t slot = (r28 << 2) + LdW(base, frame + 88);
+          if (slot != 0) StW(base, slot, array);
+        }
+        ++r28;
+        StStack(frame + 96, r28);
+      }
+    }
+    const uint32_t at = LdW(base, frame + 80) << 3;
+    StW(base, array + at, LdW(base, v + 0));
+    StW(base, array + at + 4, LdW(base, v + 4));
+    const uint32_t count = LdW(base, frame + 80) + 1u;
+    StStack(frame + 80, count);
+    pending = count;
+    if (!(count < batch)) {
+      post();
+      pending = 0;
+      StStack(frame + 80, 0);
+    }
+    posted = true;
+  }
+  if (pending != 0) {
+    post();
+    posted = true;
+  }
+  if (posted) {
+    ctx.r5.u64 = 0x0FFFFFFFu;
+    ctx.r3.u64 = LdW(base, sys + 0x1E050u);
+    ctx.r4.s64 = 0;
+    C::sub_822862B0(ctx, base, s);
+  }
+  if (pool) {
+    ctx.r3.u64 = sys + 0x1E070u;
+    C::sub_822F0E48(ctx, base, s);
+  } else if (int32_t(r28) > 0) {
+    const uint32_t data = LdW(base, frame + 88);
+    for (uint32_t k = 0; k < r28; ++k) {
+      ctx.r3.u64 = LdW(base, data + 4 * k);
+      C::sub_8217C750(ctx, base, s);
+    }
+  }
+  constexpr uint32_t kLock = 0x82C9E220u;
+  StW(base, sys + 0x1E05Cu, voices);
+  ctx.r3.u64 = kLock;
+  C::sub_822ED708(ctx, base, s);
+  for (uint32_t v = LdW(base, sys + 12); v != 0; v = LdW(base, v + 68)) {
+    StW(base, v + 32, LdW(base, v + 88));
+    StW(base, v + 40, LdW(base, v + 92));
+    StW(base, v + 36, LdW(base, LdW(base, frame + 84) - 8572u));
+    ctx.r4.u64 = v;
+    ctx.r3.u64 = LdW(base, v + 72);
+    C::sub_822CBAD0(ctx, base, s);
+    if (LdW(base, v + 128) == 0) continue;
+    const uint32_t most = LdW(base, LdW(base, v + 120) + LdW(base, v + 88));
+    if (most == 0) continue;
+    uint32_t done = 0;
+    for (uint32_t k = 0, off = 0; k < LdW(base, v + 128) && done < most; ++k, off += 36) {
+      const uint32_t r5 = LdW(base, v + 120) + LdW(base, v + 88);
+      const uint32_t ent = r5 + off;
+      if (LdB(base, ent + 39) != 0) {
+        ctx.r5.u64 = r5;
+        ctx.r4.u64 = ent + 4;
+        ctx.r3.u64 = LdW(base, 0x82C8DE90u) + 0x1E0E8u;
+        C::sub_822E4028(ctx, base, s);
+        ++done;
+      }
+    }
+  }
+  ctx.r3.u64 = kLock;
+  C::sub_822EE948(ctx, base, s);
+  ctx.r3.u64 = kLock;
+  C::sub_822ED788(ctx, base, s);
+  ctx.r3.u64 = LdW(base, frame + 88);
+  if (ctx.r3.u32 != 0) C::sub_8217C750(ctx, base, s);
+  ctx.r1.u64 = sp0;
+  return true;
+}
+}  // namespace n_822D2378
