@@ -53,6 +53,12 @@ REXCVAR_DEFINE_BOOL(banjo_renut_shared_host_shaders, true, "Banjo/Enhancements",
                     "and parsed its GLSL on the render thread, kept its own copy of it and compiled its own variants). "
                     "false: one host shader an object, as before")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(blur_renut_bindings_lockfree, true, "Banjo/Enhancements",
+                    "blur-nx (2026-11-17, the 24-hour run): every draw's recorded bind (banjo_renut_recorded_binds: "
+                    "LastBindingOf, on each recorded op and each queued draw) and the render thread's bind of it read "
+                    "from tables written under the binds' lock, not under the lock (the frame jobs waited 12 % of their "
+                    "racing time on a lock inside NewOp: this one, ~25,000 times a second). Off: the lock every time")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(blur_renut_in_place_memo, true, "Banjo/Enhancements",
                     "blur-nx (2026-11-17, the 24-hour run): the narrowed captures' shader lookups (InPlaceShaderEntry, "
                     "two a Begin*Vertices draw) answered from a small per-thread memo while no shader was registered or "
@@ -538,6 +544,39 @@ std::deque<RecordedBinding> g_bindings;
 std::unordered_map<u32, std::vector<u32>> g_shader_bindings;
 std::unordered_map<u32, u32> g_last_binding;
 
+// blur-nx (2026-11-17, blur_renut_bindings_lockfree): g_last_binding as an open-addressed table (a shader's address in
+// the high half of an entry, its last bind's id in the low half, one 64-bit word: never torn) and g_bindings' elements
+// by id, both written under g_bindings_mutex (the map and the deque stay the truth) and read without it. Entries are
+// only added or overwritten, never removed (the map is never erased), so a reader's probe ends at the shader's entry or
+// at an empty one. Release stores, acquire loads: a bind's id seen in the table has its element in g_binding_ptrs.
+// A full table (or an id past the pointer table) sends the readers back to the lock, as before.
+constexpr u32 kLastBindingSlots = 1u << 14;
+std::atomic<uint64_t> g_last_binding_fast[kLastBindingSlots];
+std::atomic<bool> g_last_binding_fast_full{false};
+constexpr u32 kBindingPtrs = 1u << 16;
+std::atomic<const RecordedBinding *> g_binding_ptrs[kBindingPtrs];
+
+bool BindingsLockFree() {
+  static const bool on = REXCVAR_GET(blur_renut_bindings_lockfree);
+  return on;
+}
+
+// Under g_bindings_mutex.
+void NoteLastBindingFast(u32 shader_va, u32 id) {
+  if (g_last_binding_fast_full.load(std::memory_order_relaxed))
+    return;
+  const uint64_t entry = (uint64_t(shader_va) << 32) | id;
+  for (u32 i = 0, slot = (shader_va * 2654435761u) >> 18; i < kLastBindingSlots; ++i, slot = (slot + 1) & (kLastBindingSlots - 1)) {
+    const uint64_t e = g_last_binding_fast[slot].load(std::memory_order_relaxed);
+    if (e == 0 || u32(e >> 32) == shader_va) {
+      if (e != entry)
+        g_last_binding_fast[slot].store(entry, std::memory_order_release);
+      return;
+    }
+  }
+  g_last_binding_fast_full.store(true, std::memory_order_release);
+}
+
 u32 InternBinding(u32 shader_va, const VertexDeclarationRecord &declaration, const u32 (&strides)[d3d::kMaxStreams]) {
   std::lock_guard lock(g_bindings_mutex);
   std::vector<u32> &ids = g_shader_bindings[shader_va];
@@ -548,6 +587,7 @@ u32 InternBinding(u32 shader_va, const VertexDeclarationRecord &declaration, con
         std::memcmp(b.declaration->elements.data(), declaration.elements.data(),
                     declaration.elements.size() * sizeof(GuestVertexElement)) == 0) {
       g_last_binding[shader_va] = id;
+      NoteLastBindingFast(shader_va, id);  // blur-nx (2026-11-17)
       return id;
     }
   }
@@ -556,8 +596,11 @@ u32 InternBinding(u32 shader_va, const VertexDeclarationRecord &declaration, con
   b.declaration = std::make_shared<VertexDeclarationRecord>(declaration);
   std::memcpy(b.strides, strides, sizeof(strides));
   const u32 id = u32(g_bindings.size());
+  if (id < kBindingPtrs)
+    g_binding_ptrs[id].store(&b, std::memory_order_release);  // blur-nx (2026-11-17): before the id is published
   ids.push_back(id);
   g_last_binding[shader_va] = id;
+  NoteLastBindingFast(shader_va, id);  // blur-nx (2026-11-17)
   static uint32_t rebinds = 0;
   if (ids.size() > 1 && (++rebinds <= 16 || rebinds % 1000 == 0))
     RGPU_INFO("Vertex shader {:08X} bound with layout {} of its own (declaration {:08X}, stride {}; {} such binds so far)",
@@ -570,14 +613,27 @@ u32 LastBindingOf(u32 shader_va) {
   static const bool on = REXCVAR_GET(banjo_renut_recorded_binds);
   if (!on || !shader_va)
     return 0;
+  // blur-nx (2026-11-17, blur_renut_bindings_lockfree): the table's answer, the map's as of the read.
+  if (BindingsLockFree() && !g_last_binding_fast_full.load(std::memory_order_acquire)) {
+    for (u32 i = 0, slot = (shader_va * 2654435761u) >> 18; i < kLastBindingSlots;
+         ++i, slot = (slot + 1) & (kLastBindingSlots - 1)) {
+      const uint64_t e = g_last_binding_fast[slot].load(std::memory_order_acquire);
+      if (e == 0)
+        return 0;
+      if (u32(e >> 32) == shader_va)
+        return u32(e);
+    }
+  }
   std::lock_guard lock(g_bindings_mutex);
   const auto it = g_last_binding.find(shader_va);
   return it != g_last_binding.end() ? it->second : 0;
 }
 
 void ApplyBindingLocked(u32 id) {
-  const RecordedBinding *b;
-  {
+  const RecordedBinding *b = nullptr;
+  if (BindingsLockFree() && id < kBindingPtrs)  // blur-nx (2026-11-17): stored before the id was handed out
+    b = g_binding_ptrs[id].load(std::memory_order_acquire);
+  if (!b) {
     std::lock_guard lock(g_bindings_mutex);
     b = &g_bindings[id - 1];  // (a deque: its elements stay where they are)
   }
