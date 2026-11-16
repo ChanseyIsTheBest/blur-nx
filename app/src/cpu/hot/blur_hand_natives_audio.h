@@ -171,7 +171,31 @@ inline bool Native(PPCContext& __restrict ctx, uint8_t* base, S& s) {
   const uint32_t pool = LdW(base, g + 24);
   const float one = Bits(0x3F800000u), nought = Bits(0x00000000u);  // the image's 1.0f / 0.0f (0x82000BA4 / BA0)
   const uint32_t frame = sp0 - 208u;
+  // blur-nx (2026-11-17, the 24-hour run): the voice step (822E17C8) spends ~47 % of its time on its source object's
+  // vtable slot, the end of a chain of misses (child node -> source object -> vtable). Fetched a few children ahead in
+  // three stages, each reading only lines the stage before asked for: the node three ahead; the source object of a voice
+  // two ahead (the node's +48 / +52, as 822E17C8 reads them); its vtable's line one ahead (slots +12 .. +24). Reads and
+  // prefetches only: the same results.
+  const auto pf = [&](uint32_t a) { __builtin_prefetch(::banjo::hot::Raw(base, a)); };
+  // A voice child's source object, under the conditions 822E17C8 reads it under (its buffer index not -1, +57 set, +48
+  // and +52 not -1; the object at the pool r4[+24] + its +52); 0 otherwise.
+  const auto source_of = [&](uint32_t kk) -> uint32_t {
+    const uint32_t e = kids + 8u * kk;
+    if (LdW(base, e) != 2) return 0;
+    const uint32_t ch = pool + LdW(base, e + 4);
+    if (LdW(base, ch + 4) == 0xFFFFFFFFu || LdB(base, ch + 57) == 0) return 0;
+    const uint32_t s52 = LdW(base, ch + 52);
+    return s52 != 0xFFFFFFFFu && LdW(base, ch + 48) != 0xFFFFFFFFu ? pool + s52 : 0;
+  };
+  for (uint32_t kk = 0; kk < 3 && kk < nkids; ++kk) pf(pool + LdW(base, kids + 8u * kk + 4));
   for (uint32_t k = 0; k < nkids; ++k) {
+    if (k + 3 < nkids) pf(pool + LdW(base, kids + 8u * (k + 3) + 4));
+    if (k + 2 < nkids) {
+      if (const uint32_t src2 = source_of(k + 2)) pf(src2);
+    }
+    if (k + 1 < nkids) {
+      if (const uint32_t src1 = source_of(k + 1)) pf(LdW(base, src1) + 12);
+    }
     const uint32_t entry = kids + 8u * k;
     const uint32_t type = LdW(base, entry);
     const uint32_t child = pool + LdW(base, entry + 4);
