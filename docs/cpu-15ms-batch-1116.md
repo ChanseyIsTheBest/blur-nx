@@ -182,7 +182,7 @@ output), then code and process. ms: CPU a frame, estimates.
 | 10 | CG-11: the card run flushed before a call only when the callee's tree can synchronise | exact | 0.1-0.3 | done (localize_native.py call_syncs) |
 | 11 | CG-28: the copies' functions at 32 bytes, loops and jump targets at 16 | exact | 0-0.2 | done (BLUR_SWITCH_ALIGN_HOT) |
 | 12 | inline-unit-growth 12 -> 20 with cold-block splitting | exact | 0-0.3 | done |
-| 13 | a longer PGO training race (more of the race's code with counts) | exact | 0-0.5 | in the Switch cycle |
+| 13 | ~~a longer PGO training race~~ | - | - | skipped (the user: "Skip longer pgo please"); the usual training race |
 | 14 | #26 switch_yield_spin: an A/B config | timing | 0-0.3 | config |
 | 15 | #196 three audio frames a tick: an A/B config (with the four-frame one) | timing | 0-0.5 | config |
 

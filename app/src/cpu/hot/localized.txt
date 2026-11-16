@@ -23,3 +23,7 @@
 82432918 hand-written native in front of its copy (hand.txt, batch 2/3)
 8251E438 hand-written native in front of its copy (hand.txt, batch 2/3)
 82526568 hand-written native in front of its copy (hand.txt, batch 2/3)
+8230AD50 member=2400 closure=12000 hand-written native in front of its copy (hand.txt, the 15 ms batch: audio, inexact)
+822DA210 hand-written native in front of its copy (hand.txt, the 15 ms batch: audio)
+8230B778 member=2400 closure=12000 hand-written native in front of its copy (hand.txt, the 15 ms batch: audio)
+822E17C8 member=2400 closure=12000 hand-written native in front of its copy (hand.txt, the 15 ms batch: audio)

@@ -408,3 +408,197 @@ template <class S>
   return true;
 }
 }  // namespace n_822DA210
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 8230B778 - the audio graph's output node (r3 = the node, r4 = the graph's frame context). Read from its generated
+// statements: unless its child's type (+36) is -1, it processes the child as the mixer does (the node r4[+24] + +40;
+// type 0 8230A4D8, 2 822E17C8, 3 8230AD50, 5 822BD548, else nothing), then copies the child's rows (r4[+28] or, for
+// type 5, r4[+32] + the child's index * 4; address 0 for types 1 and 4) into its own (r4[+32] + +60 * 4), u16 +22 rows
+// of 1 KB, each with 822EA3C0 (a 1 KB copy whose eight dcbz pieces at (dst + 128 k) & ~31 the copy overwrites).
+// Console profile (the nx race): 103 samples, 1.0 ms a frame on JQ Worker 3 / 4: its own code is the dispatch and the
+// copy loop's calls; the child's processing is the mixer's (its native).
+// The native: the child through the header's calls (C), then one copy of all the rows when both ranges are 16-aligned,
+// apart and plain (else each row through 822EA3C0, as the original), one card for them. The registers it leaves are
+// the original's: the copy native's r3-r10 after the last row (r3 96 ... r9 208, r10 the last row + 1056), or with no
+// rows the dispatch's r8-r10 (its LiveOut has them: it is reached through virtual calls).
+// ---------------------------------------------------------------------------------------------------------------------
+namespace n_8230B778 {
+constexpr uint32_t kMaxRows = 64;
+template <class C, class S>
+inline bool Native(PPCContext& __restrict ctx, uint8_t* base, S& s) {
+  using namespace blur_audio;
+  if (!On(kN8230B778) || !Runs<S>()) [[unlikely]] return false;
+  const uint32_t node = ctx.r3.u32, g = ctx.r4.u32, sp0 = ctx.r1.u32;
+  if (!detail::Straight(node, 64) || !detail::Straight(g, 48)) [[unlikely]] return false;
+  const uint32_t type = LdW(base, node + 36);
+  if (type == 0xFFFFFFFFu) return true;
+  if (LdH(base, node + 22) > kMaxRows) [[unlikely]] return false;
+  const uint32_t child = LdW(base, g + 24) + LdW(base, node + 40);
+  if (type == 0 || type == 2 || type == 3 || type == 5) {
+    ctx.r3.u64 = child;
+    ctx.r4.u64 = g;
+    ctx.r1.u64 = sp0 - 128u;
+    if (type == 0) C::sub_8230A4D8(ctx, base, s);
+    else if (type == 2) C::sub_822E17C8(ctx, base, s);
+    else if (type == 3) C::sub_8230AD50(ctx, base, s);
+    else C::sub_822BD548(ctx, base, s);
+    ctx.r1.u64 = sp0;
+  }
+  const uint32_t t2 = LdW(base, node + 36);
+  uint32_t src = 0;
+  if (t2 == 0 || t2 == 2 || t2 == 3 || t2 == 5) {
+    const uint32_t at = t2 == 5 ? LdW(base, g + 32) : LdW(base, g + 28);
+    src = (LdW(base, LdW(base, g + 24) + LdW(base, node + 40) + 4) << 2) + at;
+  }
+  const uint32_t r10 = LdW(base, node + 60) << 2;
+  const uint32_t r9 = LdW(base, g + 32);
+  const uint32_t dst = r10 + r9;
+  const uint32_t rows = LdH(base, node + 22);
+  if (!rows) {
+    ctx.r8.u64 = 0;
+    ctx.r9.u64 = r9;
+    ctx.r10.u64 = r10;
+    return true;
+  }
+  const uint32_t bytes = rows << 10;
+  const bool plain = (dst & 15u) == 0 && (src & 15u) == 0 && detail::Straight(dst, bytes) &&
+                     detail::Straight(src, bytes) && Apart(dst, bytes, src, bytes);
+  if (plain) {
+    ::banjo::hot::Card(base, dst, bytes);
+    std::memmove(::banjo::hot::Raw(base, dst), ::banjo::hot::Raw(base, src), bytes);
+    ctx.r3.s64 = 96;
+    ctx.r4.s64 = 112;
+    ctx.r5.s64 = 144;
+    ctx.r6.s64 = 160;
+    ctx.r7.s64 = 176;
+    ctx.r8.s64 = 192;
+    ctx.r9.s64 = 208;
+    ctx.r10.s64 = int64_t(uint64_t(dst + ((rows - 1) << 10))) + 1056;
+    return true;
+  }
+  ctx.r1.u64 = sp0 - 128u;
+  for (uint32_t k = 0; k < rows; ++k) {
+    ctx.r3.u64 = dst + (k << 10);
+    ctx.r4.u64 = src + (k << 10);
+    C::sub_822EA3C0(ctx, base, s);
+  }
+  ctx.r1.u64 = sp0;
+  return true;
+}
+}  // namespace n_8230B778
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 822E17C8 - the audio graph's voice node (r3 = the node, r4 = the graph's frame context). Read from its generated
+// statements:
+//   - returns at once when the node's stamp (+8) is the frame's;
+//   - its gain for this frame: with +59 set, start = (r4 u16 +6 == 0 ? +40 : +44), end = +44; else start = +36 and
+//     end = +40 + (r4[+20] + r4[+16]) * (+44 - +40) (fadds, fsubs, fmadds);
+//   - with its rows (index +4 not -1; r4[+28] + index * 4) and its source object (r4[+24] + +52, when +52 and +48 are
+//     not -1) and +57 (playing) set: when both gains are under the image's 0x8202E3FC (inaudible) or +31 is clear, its
+//     rows are zeroed (822E4698) and the source is only advanced (its virtual +24); else the source renders into the rows
+//     (virtual +20), its virtual +12 says whether it goes on (no: end gain 0), and the rows get the gain unless either
+//     end is 1.0 (the game's own test): one gain (822E4810) or a ramp (822E48F8) per row; then virtual +12 again, and
+//     +57 is cleared when it says no. Without rows, source or +57 the rows are zeroed;
+//   - the node's effect stage (822BEDD0), the end gain stored at +36, and on the frame's last sub-frame +40 = +44.
+// Console profile (the nx race): 235 samples, 2.2 ms a frame on JQ Worker 3 / 4: 47 % on one load through a pointer
+// loaded just before it (the source object's vtable: a cache miss). The native cannot take the miss away; it runs the
+// function's own control flow without the copy's context traffic, the calls through the header's struct (C) and the
+// source's virtual calls through the generated dispatch. Exact (flagged inexact: it declines under the guard, as every
+// native that calls guest code must). The registers it leaves: the last callee's, and r9 / r10 of the tail.
+// ---------------------------------------------------------------------------------------------------------------------
+namespace n_822E17C8 {
+template <class C, class S>
+inline bool Native(PPCContext& __restrict ctx, uint8_t* base, S& s) {
+  using namespace blur_audio;
+  if (!On(kN822E17C8) || !Runs<S>()) [[unlikely]] return false;
+  const uint32_t node = ctx.r3.u32, g = ctx.r4.u32, sp0 = ctx.r1.u32;
+  if (!detail::Straight(node, 64) || !detail::Straight(g, 48)) [[unlikely]] return false;
+  if (LdW(base, node + 8) == LdW(base, g + 0)) return true;
+  double f30, f31;
+  if (LdB(base, node + 59) != 0) {
+    f31 = double(Bits(LdW(base, node + 44)));
+    f30 = LdH(base, g + 6) == 0 ? double(Bits(LdW(base, node + 40))) : f31;
+  } else {
+    const double f0 = double(Bits(LdW(base, node + 40)));
+    ctx.f13.f64 = double(Bits(LdW(base, g + 20)));
+    ctx.f12.f64 = double(Bits(LdW(base, g + 16)));
+    ctx.f11.f64 = double(Bits(LdW(base, node + 44)));
+    ctx.f10.f64 = REX_FADDS(ctx.f13.f64, ctx.f12.f64);
+    ctx.f9.f64 = REX_FSUBS(ctx.f11.f64, f0);
+    f30 = double(Bits(LdW(base, node + 36)));
+    f31 = REX_FMADDS_KNOWN(ctx.f10.f64, ctx.f9.f64, f0);
+  }
+  const uint32_t frame = sp0 - 144u;
+  const uint32_t index = LdW(base, node + 4);
+  if (index != 0xFFFFFFFFu) {
+    const uint32_t rows = (index << 2) + LdW(base, g + 28);
+    uint32_t source = 0;
+    if (LdW(base, node + 52) != 0xFFFFFFFFu && LdW(base, node + 48) != 0xFFFFFFFFu)
+      source = LdW(base, g + 24) + LdW(base, node + 52);
+    ctx.r1.u64 = frame;
+    const auto zero_rows = [&] {
+      ctx.r3.u64 = rows;
+      ctx.r4.u64 = LdH(base, node + 22);
+      C::sub_822E4698(ctx, base, s);
+    };
+    const auto call_virtual = [&](uint32_t slot) {  // the source object's vtable entry at +slot
+      const uint32_t fn = LdW(base, LdW(base, source) + slot);
+      REX_CALL_INDIRECT_FUNC(fn);
+    };
+    if (LdB(base, node + 57) != 0 && source != 0) {
+      const double thr = double(Bits(LdW(base, 0x8202E3FCu)));
+      const bool inaudible = !(f30 >= thr) && f31 < thr;
+      if (inaudible || LdB(base, node + 31) == 0) {
+        zero_rows();
+        ctx.r3.u64 = source;
+        ctx.r4.u64 = g;
+        call_virtual(24);
+      } else {
+        ctx.r3.u64 = source;
+        ctx.r4.u64 = rows;
+        ctx.r5.u64 = g;
+        call_virtual(20);
+        ctx.r3.u64 = source;
+        ctx.r4.u64 = g + 36;
+        call_virtual(12);
+        if ((ctx.r3.u32 & 0xFFu) == 0) f31 = double(Bits(0x00000000u));
+        const double one = double(Bits(0x3F800000u));
+        if (!(f30 == one) && !(f31 == one)) {
+          const uint32_t n = LdH(base, node + 22);
+          for (uint32_t k = 0; k < n; ++k) {
+            ctx.r3.u64 = rows + (k << 10);
+            ctx.r4.u64 = rows + (k << 10);
+            if (f30 == f31) {
+              ctx.f1.f64 = f31;
+              C::sub_822E4810(ctx, base, s);
+            } else {
+              ctx.r7.s64 = 256;
+              ctx.f2.f64 = f31;
+              ctx.f1.f64 = f30;
+              C::sub_822E48F8(ctx, base, s);
+            }
+          }
+        }
+      }
+      ctx.r3.u64 = source;
+      ctx.r4.u64 = g + 36;
+      call_virtual(12);
+      if ((ctx.r3.u32 & 0xFFu) == 0) {
+        *::banjo::hot::Raw(base, node + 57) = 0;
+        ::banjo::hot::Card(base, node + 57, 1);
+      }
+    } else {
+      zero_rows();
+    }
+    ctx.r3.u64 = node;
+    ctx.r4.u64 = g;
+    C::sub_822BEDD0(ctx, base, s);
+    ctx.r1.u64 = sp0;
+  }
+  StW(base, node + 36, std::bit_cast<uint32_t>(float(f31)));
+  ctx.r10.u64 = LdH(base, g + 6);
+  ctx.r9.s64 = int64_t(LdH(base, g + 4)) - 1;
+  if (ctx.r10.s32 == ctx.r9.s32) StW(base, node + 40, rex::ppc::QuietSingleBits(LdW(base, node + 44)));
+  return true;
+}
+}  // namespace n_822E17C8
