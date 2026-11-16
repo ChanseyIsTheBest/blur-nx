@@ -100,6 +100,22 @@ docs/cpu-ideas-176-195-replacements-1116.md.
   blur_guest_fences_split.
 - **CG-26:** tools/fp_env_files.py lists the 18 generated files with a guest FPSCR write; they keep -ftrapping-math.
 
+## The PC guard run (2026-11-16 18:33, guard_15ms, 600 s, a race with RT held)
+
+1,927 listed and 1,903 of 3,093 bulk copies reached; 145 M calls compared; 7 differences in 5 functions, every one a
+real difference and every one fixed (cd479041, afb88d14). The generated code's own checks found none (read-only
+constants, promoted indirect calls, the r1 mirror, the flush-mode flow).
+
+| Function | What differed | Cause | Fix |
+|---|---|---|---|
+| 822D7DF0 (N4's stereo converter, new) | r10 with n = 0 | the native left out the `subf / rlwinm / add` that sets r10 on every path before the vectors | the statement added |
+| 8230A4D8 (and 8230AD50, which holds it) | the word at r1 - 144 | #145 (BLUR_BACK_CHAIN_ELIDE) dropped the back-chain store from the generated code; batch 3b's natives still wrote it | batch 3b's four natives store it only without REX_BACK_CHAIN_ELIDE, as the other files already did |
+| 82954F28 (exp) | the flush mode left on | #43's memo (on in the tomls since this batch) returned on a hit before setting the mode off, which the original does on every call | the hit sets it off |
+| 826803B0 (one of the ten bigger closures) | r12 | with members up to 2400 lines the copy took in a member that changes r12, and wrote its own entry r12 back at the return; the original keeps r12 as a local around its __savevmx calls and leaves the callee's | back to the default closure (the other nine showed nothing); a scratch register no caller reads, so harmless, but a difference |
+
+The new filter native (822E29A8) and the inexact natives' copies (the guard compares those: the natives decline under
+it) showed none.
+
 ## The audio natives: what the code allows (2026-11-16)
 
 **The hand-native framework allows only leaves:** natives may call other natives, but no guest function. The guard
