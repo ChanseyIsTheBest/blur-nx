@@ -114,6 +114,9 @@ def main():
     # again. --redo writes only the files that change, so the build does not recompile the others.
     run(tool('direct_calls.py'), '--redo', '--gen', gen)
     run(tool('guest_cas.py'), '--gen', gen)
+    # blur-nx (2026-11-16, the 15 ms batch, #164 / #165): sync, lwsync and eieio with the PowerPC's orderings (lwsync
+    # `dmb ishld` + `dmb ishst`, eieio `dmb ishst` on AArch64; g_rex_guest_fence_full puts the full fence back).
+    run(tool('guest_fences.py'), '--gen', gen)
     run(tool('flush_mode_flow.py'), '--redo', '--gen', gen, '--image', IMAGE, '--tomls', *HOOK_TOMLS)
     run(tool('vec_byteswap.py'), '--gen', gen)
     run(tool('pch_neon_shuffles.py'), pch)
@@ -245,6 +248,9 @@ def main():
     # blur-nx (2026-11-11, CPU batch 1, docs/vector-store-ideas.md VS-05): a 128-byte dcbzl as two DC ZVA (no read of
     # the line it zeroes). After store_cards.py, which finds the dcbz by its memset to put the card in front.
     run(tool('vec_dcbz_zva.py'), '--gen', gen)
+    # blur-nx (2026-11-16, the 15 ms batch, CG-26): the files that write the guest FPSCR keep -ftrapping-math when the
+    # rest gets -fno-trapping-math (app/CMakeLists.txt, BLUR_NO_TRAPPING_MATH); last, on the final text.
+    run(tool('fp_env_files.py'), '--gen', gen)
     if scratch:
         print(f'post_codegen: optimised codegen steps done on {gen}')
         return

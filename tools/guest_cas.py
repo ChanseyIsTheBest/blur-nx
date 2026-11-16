@@ -43,12 +43,24 @@ extern "C" unsigned char g_rex_atomic_legacy_barrier;
 // guest compare-and-swap writes (app/src/cpu/banjo_codegen_checks.cpp).
 extern "C" void RexNxCasCensus(const void* word);
 #endif
+#if defined(__aarch64__)
+// blur-nx (2026-11-16, #163 of docs/cpu-codegen-recheck-360-precision-1114.md): 1 = the sequentially consistent loop
+// (ldaxr / stlxr) instead of the relaxed one (sdk/src/core/atomic_posix.cpp; the app's key blur_guest_cas_relaxed).
+extern "C" unsigned char g_rex_guest_cas_seq_cst;
+#endif
 template <typename T, typename E, typename D>
 [[gnu::always_inline]] static inline bool RexGuestCas(T* p, E e, D d) noexcept {
 #if defined(REX_NX_CENSUS_ON)
   RexNxCasCensus(static_cast<const void*>(p));
 #endif
   T expected = static_cast<T>(e);
+#if defined(__aarch64__) && !defined(REX_GUEST_CAS_SEQ_CST)
+  // blur-nx (2026-11-16, #163): on the 360 lwarx / stwcx. order no other access; the game orders with its own
+  // lwsync / sync / eieio (REX_GUEST_LWSYNC and kin, tools/guest_fences.py; Blur has no isync), so the exclusives
+  // need no acquire or release of their own: ldxr / stxr. Exact with respect to the 360's memory model.
+  if (!g_rex_guest_cas_seq_cst) [[likely]]
+    return __atomic_compare_exchange_n(p, &expected, static_cast<T>(d), false, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+#endif
   const bool swapped = __atomic_compare_exchange_n(p, &expected, static_cast<T>(d), false, __ATOMIC_SEQ_CST,
                                                    __ATOMIC_SEQ_CST);
 #if defined(__aarch64__)

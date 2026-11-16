@@ -281,11 +281,26 @@ endforeach()
 # -DBANJO_GENERATED_NO_TRAPPING_MATH=ON puts it back for a measurement.
 option(BANJO_GENERATED_MATH_FLAGS "-fno-math-errno on the generated game code" ON)
 option(BANJO_GENERATED_NO_TRAPPING_MATH "-fno-trapping-math on the generated game code (not exact, see the comment)" OFF)
+# blur-nx (2026-11-16, the 15 ms batch: docs/cpu-15ms-batch-1116.md, CG-26 of docs/codegen-ideas-3.md): under
+# BLUR_FPCR_ONE_MODE the reason above is gone. The game code switches no flush mode (one mode for good), so the only
+# `msr fpcr` left in it is the guest's own FPSCR write (mtfsf and kin, ctx.fpscr.storeFromGuest: the rounding mode).
+# tools/fp_env_files.py (post-codegen) lists the files that have one (18 of the generated files today, no copy shard);
+# they keep -ftrapping-math, everything else gets -fno-trapping-math: game code, copies, the app, Renut, plume, the
+# SDK and FFmpeg. Exact: no float operation can move across a mode change the code makes. The SDK's own `msr fpcr`
+# (a thread's first mode, the profiler's reads) is in functions that compute no guest floats.
+option(BLUR_NO_TRAPPING_MATH "-fno-trapping-math everywhere but the FPSCR writers (needs BLUR_FPCR_ONE_MODE)" ON)
+# blur-nx (2026-11-16, the same batch): -fno-math-errno for the rest of the program too (the app, Renut, plume, the SDK,
+# FFmpeg; the game code and the copies have it already). Nothing reads errno after a math call; it lets sqrt and kin
+# be one instruction, and GCC inlines between functions only when they agree on it.
+option(BLUR_SDK_MATH_FLAGS "-fno-math-errno on the app, the renderer and the SDK too" ON)
 if(BANJO_GENERATED_MATH_FLAGS AND TARGET renut_recomp AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(renut_recomp PRIVATE -fno-math-errno)
-    if(BANJO_GENERATED_NO_TRAPPING_MATH)
+    if(BANJO_GENERATED_NO_TRAPPING_MATH OR (BLUR_NO_TRAPPING_MATH AND BLUR_FPCR_ONE_MODE))
         target_compile_options(renut_recomp PRIVATE -fno-trapping-math)
     endif()
+endif()
+if(BLUR_NO_TRAPPING_MATH AND NOT BLUR_FPCR_ONE_MODE)
+    message(WARNING "blur: BLUR_NO_TRAPPING_MATH needs BLUR_FPCR_ONE_MODE (the flush-mode switches); left off")
 endif()
 
 # The localized native copies (src/cpu/banjo_hot_guest.cpp includes generated/hot) are game code compiled in the app:
@@ -310,6 +325,9 @@ set(BANJO_HOT_SOURCES src/cpu/banjo_hot_guest.cpp
 )
 if(BANJO_GENERATED_MATH_FLAGS AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     set_property(SOURCE ${BANJO_HOT_SOURCES} APPEND PROPERTY COMPILE_OPTIONS -fno-math-errno)
+    if(BANJO_GENERATED_NO_TRAPPING_MATH OR (BLUR_NO_TRAPPING_MATH AND BLUR_FPCR_ONE_MODE))
+        set_property(SOURCE ${BANJO_HOT_SOURCES} APPEND PROPERTY COMPILE_OPTIONS -fno-trapping-math)
+    endif()
 endif()
 if(NOT REXGLUE_PLATFORM_SWITCH)
     set_property(SOURCE ${BANJO_HOT_SOURCES} APPEND PROPERTY COMPILE_DEFINITIONS REX_DIET_CENSUS_ON)
@@ -502,7 +520,13 @@ endif()
 if(BANJO_GEN_NV_SAVES_ELIDE)
     list(APPEND _banjo_round_definitions REX_NV_SAVES_ELIDE)
 endif()
-if(BANJO_GEN_BACK_CHAIN_ELIDE)
+# blur-nx (2026-11-16, the 15 ms batch, #145): the back-chain stores left out where nothing reads them, ON for Blur.
+# tools/frame_traffic.py marks a function's store only when the function reads no back chain itself (a load at 0
+# from r1, a copy of r1, stwux / stdux: 121 functions keep theirs, the 98 that pop their frame through it among them),
+# and marks none at all if any function reads another frame through a chain value (a stack walker: Blur has none).
+# Exact for the game; the host's crash report walks the chain and then shows stale words past the faulting frame.
+option(BLUR_BACK_CHAIN_ELIDE "No back-chain stores where frame_traffic.py proves nothing reads them" ON)
+if(BANJO_GEN_BACK_CHAIN_ELIDE OR BLUR_BACK_CHAIN_ELIDE)
     list(APPEND _banjo_round_definitions REX_BACK_CHAIN_ELIDE)
 endif()
 if(NOT BANJO_GEN_LOOP_LOCALS)
@@ -609,6 +633,54 @@ foreach(_banjo_target renut_recomp renut)
     endif()
 endforeach()
 message(STATUS "banjo: sa2-nx's CPU rounds: definitions '${_banjo_round_definitions}'")
+
+# blur-nx (2026-11-16, the 15 ms batch): BLUR_NO_TRAPPING_MATH and BLUR_SDK_MATH_FLAGS (above) on the rest of the
+# program, and the guest-FPSCR writers back to -ftrapping-math (tools/fp_env_files.py's list; a source's option comes
+# after its target's on the command line, so it wins). Without the list (no post-codegen run yet) the game code keeps
+# -ftrapping-math everywhere.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    set(_blur_fp_env_list "${CMAKE_CURRENT_SOURCE_DIR}/generated/fp_env_files.txt")
+    set(_blur_no_trapping OFF)
+    if(BLUR_NO_TRAPPING_MATH AND BLUR_FPCR_ONE_MODE)
+        if(EXISTS "${_blur_fp_env_list}")
+            set(_blur_no_trapping ON)
+            set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_blur_fp_env_list}")
+            file(STRINGS "${_blur_fp_env_list}" _blur_fp_env_files)
+            foreach(_blur_f ${_blur_fp_env_files})
+                set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/${_blur_f}" APPEND PROPERTY COMPILE_OPTIONS
+                             -ftrapping-math)
+            endforeach()
+            list(LENGTH _blur_fp_env_files _blur_fp_env_count)
+            message(STATUS "blur: -fno-trapping-math, but ${_blur_fp_env_count} FPSCR-writing files keep -ftrapping-math")
+        else()
+            message(WARNING "blur: ${_blur_fp_env_list} is missing (tools/post_codegen.py writes it): the game code "
+                    "keeps -ftrapping-math")
+            # Back to the old option where the blocks above set the new one (the list names the exceptions).
+            if(TARGET renut_recomp AND NOT BANJO_GENERATED_NO_TRAPPING_MATH)
+                target_compile_options(renut_recomp PRIVATE -ftrapping-math)
+            endif()
+            if(NOT BANJO_GENERATED_NO_TRAPPING_MATH)
+                set_property(SOURCE ${BANJO_HOT_SOURCES} APPEND PROPERTY COMPILE_OPTIONS -ftrapping-math)
+            endif()
+        endif()
+    endif()
+    set(_blur_other_math_flags)
+    if(BLUR_SDK_MATH_FLAGS)
+        list(APPEND _blur_other_math_flags -fno-math-errno)
+    endif()
+    if(_blur_no_trapping)
+        list(APPEND _blur_other_math_flags -fno-trapping-math)
+    endif()
+    if(_blur_other_math_flags)
+        foreach(_blur_t renut banjo_renut_gpu plume rexruntime rexaudio rexcore rexfilesystem rexinput rexui rexgpu-xenos
+                        libavcodec libavutil)
+            if(TARGET ${_blur_t})
+                target_compile_options(${_blur_t} PRIVATE "$<$<COMPILE_LANGUAGE:C,CXX>:${_blur_other_math_flags}>")
+            endif()
+        endforeach()
+        message(STATUS "blur: ${_blur_other_math_flags} on the app, the renderer and the SDK")
+    endif()
+endif()
 
 # banjo-nx (2026-10-21, the user's request): link-time and profile-guided optimisation of the Switch build, from
 # sa2-nx (its app/CMakeLists.txt and docs/enhancements.md, "Link-time optimisation of a recompiled program"). Both OFF
@@ -750,6 +822,27 @@ if(REXGLUE_PLATFORM_SWITCH)
             endforeach()
         endif()
         message(STATUS "banjo: Switch LTO (${BANJO_SWITCH_LTO_JOBS} jobs)")
+    endif()
+    # blur-nx (2026-11-16, the 15 ms batch; CG-25 of docs/codegen-ideas-3.md): cold-block splitting. GCC enables
+    # -freorder-blocks-and-partition by default only on x86; on AArch64 it is off unless asked (gcc -Q --help=optimizers
+    # showed [disabled]). With the profile, each function's blocks the training never ran go to .text.unlikely
+    # (libnx's switch.ld gathers those first, away from .text.hot), so the hot copies (sub_8250A7E8's is 120 KB, the
+    # A57's I-cache 48 KB) pack their hot paths together. Exact: only the layout changes. The profile's checksums are
+    # taken before the pass, so the existing profile still applies. The compile and the LTO link both get it.
+    option(BLUR_SWITCH_SPLIT_COLD "Switch: cold-block splitting (-freorder-blocks-and-partition)" ON)
+    if(BLUR_SWITCH_SPLIT_COLD)
+        foreach(target ${_banjo_opt_targets})
+            if(TARGET ${target})
+                target_compile_options(${target} PRIVATE -freorder-blocks-and-partition)
+            endif()
+        endforeach()
+        foreach(target ${_banjo_sdk_opt_targets})
+            if(TARGET ${target})
+                target_compile_options(${target} PRIVATE "$<$<COMPILE_LANGUAGE:C,CXX>:-freorder-blocks-and-partition>")
+            endif()
+        endforeach()
+        target_link_options(renut PRIVATE -freorder-blocks-and-partition)
+        message(STATUS "blur: cold-block splitting (-freorder-blocks-and-partition)")
     endif()
     get_filename_component(_banjo_pgo_dir "${_banjo_pgo_profile}" ABSOLUTE)
     file(TO_NATIVE_PATH "${_banjo_pgo_dir}" _banjo_pgo_dir)

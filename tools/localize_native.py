@@ -155,7 +155,8 @@ KNOWN = re.compile(r'^(?:REX_\w+|simde_\w+|__builtin_\w+|rex::ppc::\w+|std::fma|
 # Forms that make a function unfit for a copy and for a closure (see the docstring).
 SPECIAL = re.compile(r'\b(REX_GUEST_CAS|reserved|REX_MM_(?:STORE|LOAD)_\w+|ppc_setjmp|ppc_longjmp|REX_ENTER_GLOBAL_LOCK|'
                      r'REX_LEAVE_GLOBAL_LOCK|REX_CHECK_GLOBAL_LOCK|REX_QUERY_TIMEBASE|REX_UNIMPLEMENTED|'
-                     r'std::atomic_thread_fence|storeFromGuest|loadFromHost|log2f)\b')
+                     r'std::atomic_thread_fence|REX_GUEST_SYNC|REX_GUEST_LWSYNC|REX_GUEST_EIEIO|storeFromGuest|'
+                     r'loadFromHost|log2f)\b')
 # Guest memory through a raw host address. Loads (the vector loads) and the two store forms the tool logs.
 # banjo-nx (2026-10-23): the store-card form of a vector store too (package 34: REX_CARD(ea), then the store, one comma
 # expression); the guard's Note goes in front of the whole expression, so the card and the store run together.
@@ -172,12 +173,14 @@ RAW_LOAD = re.compile(r'^\tsimde_mm_store_si128\(\(simde__m128i\*\)\w+(?:\.\w+)+
 # logged run ends before the first one (the call is then not compared, as for a call outside the copy), and in the
 # running form Open() is a constant false. log2f is a pure function. SASRT_LOCALIZE_ATOMICS=0: refused, as before.
 ATOMICS = os.environ.get('SASRT_LOCALIZE_ATOMICS', '1') != '0'
-ATOMIC_SPECIAL = {'reserved', 'REX_GUEST_CAS', 'std::atomic_thread_fence', 'log2f'}
+# blur-nx (2026-11-16, tools/guest_fences.py): the guest fences as macros with the PowerPC orderings, the same rules.
+ATOMIC_SPECIAL = {'reserved', 'REX_GUEST_CAS', 'std::atomic_thread_fence', 'REX_GUEST_SYNC', 'REX_GUEST_LWSYNC',
+                  'REX_GUEST_EIEIO', 'log2f'}
 ATOMIC_HOST = {'std::atomic_thread_fence', 'log2f'}
 ATOMIC_LOAD = re.compile(r'^\t+reserved\.u(?:32|64) = \*\(uint(?:32|64)_t\*\)REX_RAW_ADDR\(ea\);$')
 ATOMIC_CAS = re.compile(r'^\t+[\w.]+\.eq = REX_GUEST_CAS(?:_C)?\((?:ea, )?reinterpret_cast<uint(?:32|64)_t\*>\(REX_RAW_ADDR\(ea\)\), '
                         r'reserved\.s(?:32|64), __builtin_bswap(?:32|64)\([\w.]+\.s(?:32|64)\)\);$')
-ATOMIC_FENCE = re.compile(r'^\t+std::atomic_thread_fence\(std::memory_order_\w+\);$')
+ATOMIC_FENCE = re.compile(r'^\t+(?:std::atomic_thread_fence\(std::memory_order_\w+\)|REX_GUEST_(?:SYNC|LWSYNC|EIEIO)\(\));$')
 
 
 # sasrt-nx (2026-11-11, port 74; its idea 39): store-card runs. Every guest store outside the stack marks its page's card

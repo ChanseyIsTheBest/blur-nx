@@ -824,6 +824,16 @@ void XThread::DeliverAPCs() {
   auto kthread = guest_object<X_KTHREAD>();
   auto* dispatcher = kernel_state_->function_dispatcher();
 
+  // blur-nx (2026-11-16, the 15 ms batch, #171): every alertable wait calls this twice, almost always with nothing
+  // queued, and the guest spinlock (an interlocked loop on the KTHREAD plus the PCR's IRQL bookkeeping, twice) was
+  // taken just to see that. An empty queue is now seen by one read of its head's forward link first. Exact: a read
+  // that sees it empty is the same as taking the lock just before another thread queues an APC (the queueing thread
+  // holds the lock while it links the entry, and the link word changes in one aligned store); one that sees an entry
+  // takes the locked path below, which checks again.
+  if (kthread->apc_lists[1].empty(mem)) {
+    return;
+  }
+
   auto old_irql = kernel::xboxkrnl::xeKeKfAcquireSpinLock(ctx, &kthread->apc_lock);
   auto& user_apc_queue = kthread->apc_lists[1];
 
