@@ -30,6 +30,18 @@ namespace blur_b3b {
   StW(base, ea, uint32_t(d >> 32));
   StW(base, ea + 4u, uint32_t(d));
 }
+// blur-nx (2026-11-16, the 15 ms batch's PC guard run): a stwu's back-chain word, as the generated code stores it: not at
+// all under REX_BACK_CHAIN_ELIDE (#145: tools/frame_traffic.py marks these four functions' chain stores REX_CHAIN_STORE,
+// nothing reads them). Written unconditionally before, the guard found the word the original no longer writes.
+[[gnu::always_inline]] inline void ChainW(uint8_t* base, uint32_t ea, uint32_t sp) {
+#if !defined(REX_BACK_CHAIN_ELIDE)
+  StW(base, ea, sp);
+#else
+  (void)base;
+  (void)ea;
+  (void)sp;
+#endif
+}
 // Sets the low word of a 64-bit register image only (the generated `reg.u32 = x` leaves the upper word).
 [[gnu::always_inline]] inline uint64_t SetLo(uint64_t r, uint32_t v) { return (r & 0xFFFFFFFF00000000ull) | v; }
 // An int16 as the generated scalar path leaves it: double(float(v)) (exact) and v * 2^-15 as a single in a double.
@@ -102,7 +114,7 @@ template <class S>
   if (idx == 0xFFFFFFFFu) {
     s.Hand(kN8230A4D8, 0);
     if (!s.Note(frame, 4u) || !s.Note(obj + 8u, 4u)) [[unlikely]] return true;
-    StW(base, frame, ctx.r1.u32);
+    ChainW(base, frame, ctx.r1.u32);
     StW(base, obj + 8u, LdW(base, o4));
     ::banjo::hot::Card(base, obj + 8u, 4u);
     return true;
@@ -115,7 +127,7 @@ template <class S>
   if (n == 0) {
     s.Hand(kN8230A4D8, 0);
     if (!s.Note(frame, 4u) || !s.Note(obj + 31u, 1u) || !s.Note(obj + 8u, 4u)) [[unlikely]] return true;
-    StW(base, frame, ctx.r1.u32);
+    ChainW(base, frame, ctx.r1.u32);
     *::banjo::hot::Raw(base, obj + 31u) = 0;
     ::banjo::hot::Card(base, obj + 31u, 1u);
     StW(base, obj + 8u, tail);
@@ -149,7 +161,7 @@ template <class S>
   if (!s.Note(frame, 4u) || !s.Note(w0, wlen) || (flag && !s.Note(z0, len)) || !s.Note(obj + 31u, 1u) ||
       !s.Note(obj + 8u, 4u)) [[unlikely]]
     return true;
-  StW(base, frame, ctx.r1.u32);
+  ChainW(base, frame, ctx.r1.u32);
   ::banjo::hot::Card(base, w0, wlen);
   if (flag) {
     const uint32_t d = dst0 & ~15u, lead = dst0 & 16u, s16 = srcb & ~15u;
@@ -374,7 +386,7 @@ template <class S>
   if (!s.Note(frame, 4u)) [[unlikely]] return true;
   if ((sv[0] || sv[1] || sv[2] || sv[3]) && !s.Note(frame + 80u, 32u)) [[unlikely]] return true;
   if (n != 0 && !s.Note(out, 4u * n)) [[unlikely]] return true;
-  StW(base, frame, sp);
+  ChainW(base, frame, sp);
   for (uint32_t k = 0; k < 4; ++k)
     if (sv[k]) StD(base, frame + 80u + 8u * k, sd[k]);
   if (n != 0) {
@@ -455,7 +467,7 @@ template <class S>
   const uint32_t w172 = (a172 & 15u) <= 12u ? step : 0u, w80 = (a80 & 15u) <= 12u ? uint32_t(step << 3) : 0u;
   s.Hand(kN822D9040, 1024);
   if (!s.Note(frame, 4u) || !s.Note(a80, 4u) || !s.Note(a172, 4u) || !s.Note(o16, 1024u)) [[unlikely]] return true;
-  StW(base, frame, sp);
+  ChainW(base, frame, sp);
   StW(base, a80, uint32_t(step << 3));
   StW(base, a172, step);
   ::banjo::hot::Card(base, o16, 1024u);
@@ -581,7 +593,7 @@ template <class S>
   const uint32_t a140 = frame + 140u;
   s.Hand(kN822D79A8, 2048);
   if (!s.Note(frame, 4u) || !s.Note(a140, 4u) || !s.Note(o1, 1024u) || !s.Note(o2, 1024u)) [[unlikely]] return true;
-  StW(base, frame, sp);
+  ChainW(base, frame, sp);
   StW(base, a140, step);
   ::banjo::hot::Card(base, o1, 1024u);
   ::banjo::hot::Card(base, o2, 1024u);
