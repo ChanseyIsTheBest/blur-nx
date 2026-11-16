@@ -95,7 +95,17 @@ SHIPPED = {
     # minute of the console race (11,302 frames) and answered 26 % of the frames; 128 MB answered 37 %, 256 MB 65 %
     # (119,441 frames, full after about 90 s of racing): the XMA Decoder 15.2 -> 10.9 ms a frame, the race 23.84 ->
     # 24.77 fps (build A of batch 3). The heap's room never handed out at the end of the race: 834 MB with 24 MB, ~600 MB with 256 MB (Renut's texture reserve, banjo_renut_textures_reserve_mb, is 384).
-    'banjo_xma_frame_cache_mb': '256  # blur-nx: 24 -> 256 (26 -> 65 % of the frames answered); the cvar allows up to 512 since 2026-11-12 (320 not measured yet)',
+    'banjo_xma_frame_cache_mb': '384  # blur-nx: 24 -> 256 (26 -> 65 % of the frames answered) -> 384 (2026-11-16, the 15 ms batch: 91-97 % answered at 256, ~600 MB of the heap still free at the race\'s end); the cvar allows up to 512',
+    # blur-nx (2026-11-16, the 15 ms batch's "15 more": docs/cpu-15ms-batch-1116.md). The audio may cheat a bit (the
+    # user's word): Blur's near-exact audio tolerances at their maximum, 2^-15 (under one step of the 16-bit output),
+    # and the resampler's ratio-1 copy. Exact: the XMA kicks wake the decoder only when it waits, the exp native's memo.
+    'audio_nx_silent_eps': "3.0517578125e-05  # blur-nx: #21, a gain under 2^-15 is not mixed (inaudible)",
+    'audio_nx_unity_eps': "3.0517578125e-05  # blur-nx: #23, a gain within 2^-15 of 1.0 mixes as an add",
+    'audio_nx_ramp_eps': "3.0517578125e-05  # blur-nx: #24, a gain within 2^-15 of its target mixes as constant",
+    'audio_nx_resample_copy': "true  # blur-nx: #49, a ratio-1 resampling block copied (fraction 0 at every output)",
+    'audio_xma_kick_wake_idle_only': "true  # blur-nx: exact, a kick signals the XMA decoder only when it waits",
+    'cpu_nx_exp_memo': "true  # blur-nx: #43, exact, the exp native's last 64 arguments per thread",
+    'banjo_xma_frame_cache_hash_only': "true  # blur-nx: near-exact #12 (audio), the cache matches its 64-bit key without comparing the packets",
     # blur-nx (2026-11-12, the user: "maybe 8mb is safer"): each guest thread's host stack (heap on the Switch, port 58),
     # 16 -> 8 MB: 152 MB of heap back for 19 threads. The profiler's deepest sampled stack of a guest thread in every
     # console run since 2026-11-11 is 13-17 KB, except one reading of 4,226 KB (LayerManagerThr, the 4-core LTO+PGO run
@@ -214,6 +224,12 @@ CONFIGS = {
                               'audio latency'),
     'renut_15ms_sampler1.toml': ({'switch_profile_stacks_ms': '1'},
                                  'the SDK sampler every 1 ms, as before the batch: #197 off'),
+    'renut_15ms_pump3.toml': ({'audio_switch_pump_frames': '3'},
+                              'three audio frames back to back a tick (16 ms) instead of two: #196, 5.3 ms more '
+                              'audio latency'),
+    'renut_15ms_yieldspin.toml': ({'switch_yield_spin': '64'},
+                                  'near-exact #26 (timing only): the first yields of a quick run spin 64 `yield` '
+                                  'instructions instead of svcSleepThread(0)'),
 }
 
 

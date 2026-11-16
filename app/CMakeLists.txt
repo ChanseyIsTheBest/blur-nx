@@ -844,6 +844,19 @@ if(REXGLUE_PLATFORM_SWITCH)
         target_link_options(renut PRIVATE -freorder-blocks-and-partition)
         message(STATUS "blur: cold-block splitting (-freorder-blocks-and-partition)")
     endif()
+    # blur-nx (2026-11-16, the 15 ms batch's "15 more", CG-28 of docs/codegen-ideas-3.md): the machine copies (the 12
+    # bulk shards and banjo_hot_guest.cpp) aligned for the A57's 16-byte fetch: functions at 32 bytes, loops and the
+    # targets of jumps at 16 (GCC's cortex-a57 tuning aligns loops and jumps at 4 / 8). With cold-block splitting the
+    # padding lands in hot code only. And with the cold blocks gone from the hot functions, their inline-unit-growth
+    # 12 -> 20 (the limit sa2-nx set to keep code the sessions never ran out of the copies). Exact: layout only.
+    option(BLUR_SWITCH_ALIGN_HOT "Switch: the copies' functions at 32 bytes, loops and jump targets at 16" ON)
+    if(BLUR_SWITCH_ALIGN_HOT)
+        set_property(SOURCE ${BANJO_HOT_SOURCES} APPEND PROPERTY COMPILE_OPTIONS
+                     -falign-functions=32 -falign-loops=16 -falign-jumps=16)
+    endif()
+    if(BLUR_SWITCH_SPLIT_COLD AND BANJO_SWITCH_INLINE_UNIT_GROWTH STREQUAL "12")
+        set(BANJO_SWITCH_INLINE_UNIT_GROWTH "20")  # a normal variable: shadows the cached 12 for this configure only
+    endif()
     get_filename_component(_banjo_pgo_dir "${_banjo_pgo_profile}" ABSOLUTE)
     file(TO_NATIVE_PATH "${_banjo_pgo_dir}" _banjo_pgo_dir)
     file(TO_NATIVE_PATH "${CMAKE_BINARY_DIR}" _banjo_pgo_prefix)

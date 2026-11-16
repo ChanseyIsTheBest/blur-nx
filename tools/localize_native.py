@@ -1166,6 +1166,28 @@ def localize(index, hooks, reach, root, what, opts, out_dir, quiet=False, hand=N
             return {'r3', 'r4'}, set(), False  # the trap helper reads two registers and writes none
         return ALL, ALL, False
 
+    sync_memo = {}
+
+    def call_syncs(name):
+        """blur-nx (2026-11-16, CG-11): can a call of this function (or anything under it) synchronise with another
+        thread? True when unsure (a cycle while it is being decided, a function outside the index)."""
+        b = base_name(name) or name
+        if b in sync_memo:
+            return sync_memo[b]
+        sync_memo[b] = True
+        f = index.funcs.get(b)
+        if f is None or f['unknown'] or hooks.replaced(b) or name.startswith('__imp__') or (hand and b in hand):
+            return True
+        if any(s.startswith('host function') or 'setjmp' in s or 'longjmp' in s for s in f['special']):
+            return True
+        for _, l in index.body(b):
+            if ATOMIC_LOAD.match(l) or ATOMIC_CAS.match(l) or ATOMIC_FENCE.match(l) or 'storeFromGuest' in l or \
+                    '__imp__' in l or 'REX_CALL_INDIRECT' in l or 'ppc_trap(' in l:
+                return True
+        result = any(call_syncs(c) for c in f['callees'])
+        sync_memo[b] = result
+        return result
+
     def call_text(m, me, my_regs, my_written, localized):
         """The replacement of one call statement. my_written: the registers that can be dirty here."""
         written_name = m.group(1)
@@ -1193,7 +1215,12 @@ def localize(index, hooks, reach, root, what, opts, out_dir, quiet=False, hand=N
                 # sub_8271F9C0 took the other branch; the first diet PC run crashed after them).
                 return ('{ ' + before + CARD_FLUSH + 'if (!%s(ctx, base, s)) { f_%s(ctx, base, s); '
                         'if (s.Stopped()) return; } else if (s.Stopped()) return;%s }' % (native_call(hand[b]), b, after))
-            return '{ ' + before + CARD_FLUSH + 'f_%s(ctx, base, s); if (s.Stopped()) return;' % b + after + ' }'
+            # blur-nx (2026-11-16, the 15 ms batch, CG-11 of docs/codegen-ideas-3.md): the pending card run is flushed
+            # before a call only when the callee's tree can tell another thread about stores (a fence, an atomic, a
+            # kernel import, an indirect or unknown call, a hook). Otherwise this copy's next flush (at its own
+            # synchronisation or return) marks the page in time for Renut, which reads the cards only after one.
+            flush = CARD_FLUSH if call_syncs(b) else ''
+            return '{ ' + before + flush + 'f_%s(ctx, base, s); if (s.Stopped()) return;' % b + after + ' }'
         stats['calls_open'] += 1
         return '{ if (s.Open()) return; ' + before + CARD_FLUSH + m.group(0) + after + ' }'
 

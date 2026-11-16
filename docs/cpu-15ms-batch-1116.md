@@ -163,3 +163,38 @@ miss: about 0.5-1.5 ms for all seven together, at a large cost in work and risk.
 **So the 15 ms target is not in reach with these exact items.** Measuring what is built first, then deciding, is the
 honest next step.
 
+## 15 more (2026-11-16, the user: "15 more in the batch please")
+
+Key settings first (the audio ones may cheat, the user's word; each tolerance at most 2^-15, under one step of 16-bit
+output), then code and process. ms: CPU a frame, estimates.
+
+| # | Item | Kind | Est. ms | Status |
+|---|---|---|---|---|
+| 1 | #21 audio_nx_silent_eps 2^-15: gains under it not mixed | audio, inaudible | 0.05-0.2 | in the tomls |
+| 2 | #23 audio_nx_unity_eps 2^-15: gains within it of 1.0 as adds | audio, inaudible | 0.05-0.2 | in the tomls |
+| 3 | #24 audio_nx_ramp_eps 2^-15: near-equal ramps as constant gains | audio, inaudible | 0.1-0.3 | in the tomls |
+| 4 | #49 audio_nx_resample_copy: ratio-1 resampling as a copy | audio, inaudible | 0.1-0.3 | in the tomls |
+| 5 | #12 banjo_xma_frame_cache_hash_only: the cache matches its 64-bit key without comparing packets | audio, near-exact | 0.05-0.2 | in the tomls |
+| 6 | audio_xma_kick_wake_idle_only: a kick wakes the XMA decoder only when it waits | exact | 0.05-0.2 | in the tomls |
+| 7 | #43 cpu_nx_exp_memo: the exp native's last 64 arguments per thread | exact | 0.1-0.3 | in the tomls |
+| 8 | the XMA frame cache 256 -> 384 MB | exact | 0.05-0.3 | in the tomls |
+| 9 | CG-06: the indirect-call promotions refreshed from a fresh PC census | exact (guarded) | 0.3-1.0 | in the PC batch (census), then the codegen |
+| 10 | CG-11: the card run flushed before a call only when the callee's tree can synchronise | exact | 0.1-0.3 | done (localize_native.py call_syncs) |
+| 11 | CG-28: the copies' functions at 32 bytes, loops and jump targets at 16 | exact | 0-0.2 | done (BLUR_SWITCH_ALIGN_HOT) |
+| 12 | inline-unit-growth 12 -> 20 with cold-block splitting | exact | 0-0.3 | done |
+| 13 | a longer PGO training race (more of the race's code with counts) | exact | 0-0.5 | in the Switch cycle |
+| 14 | #26 switch_yield_spin: an A/B config | timing | 0-0.3 | config |
+| 15 | #196 three audio frames a tick: an A/B config (with the four-frame one) | timing | 0-0.5 | config |
+
+**Checked and dropped on the way:**
+
+- **CG-30** (NewOp's clean-page skip): the store cards cover only the views Renut reads. Cards for the device's state
+  pages would mean a check in every guest store, and a missed one is a stale draw state.
+- **CG-34** (Replay's prefetch): already there (the op records three ahead, the next state's lines; one variant
+  measured worse, banjo_renut_replay_record_prefetch).
+- **CG-31** (the render thread's memcpy): the profile's caller histograms keep only a thread's top entries, too few to
+  find memcpy's callers.
+- **CG-17 / CG-20** (stack store-to-load forwarding): the same address expression and no store between, so GCC
+  forwards those already.
+- **The Bink decoder during races:** no sample in the nx race.
+
