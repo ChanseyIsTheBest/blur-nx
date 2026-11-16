@@ -269,3 +269,142 @@ inline bool Native(PPCContext& __restrict ctx, uint8_t* base, S& s) {
   return true;
 }
 }  // namespace n_8230AD50
+
+// ---------------------------------------------------------------------------------------------------------------------
+// sub_822DA210 - the audio graph's compressor effect (one of the effect stage 822BEDD0's processors; r3 = its state,
+// r4 = the rows: u16 +8 of them, 256 floats each, processed in place). The hottest code inside 822BEDD0's copy (its
+// multiply-add chain at +0x32dc of the nx race's copy). Read from its generated statements:
+//   - nothing (r3 = 1) when its +10 is 0 or the byte at 0x82C8E081 is set;
+//   - every row gets a gain ramp: y[n] = x[n] * (n * slope + start), start = +76 * +84, slope = (+80 * +76 - start) *
+//     the scalar at 0x82B9D114;
+//   - with +88 == 0 (the detector on) each row also runs its level: acc = x[n]^2 * +16 + +20 * acc from the row's state
+//     at +28 + 4 * row (written back), the rows' sum divided by the row count and its square root (frsqrte and two
+//     Newton steps) stored at +52;
+//   - then the attack / release of the gain (+80, the previous one kept at +84) toward the compression the level asks
+//     (+68 threshold, +72 ratio, +60 attack, +64 release, 1.0 at most); r3 = 1.
+// The native: the ramp four elements at a time; the level of up to four rows at once, one row a lane, with each lane's
+// operations those of the original (fmuls, then fmadds fused in single; the flush mode as the original's), the sum
+// and the tail as the original computes them: the same results. Flagged inexact anyway (the audio rules of this file):
+// not written, the original's stack word at -160 (its int-to-float conversion) and its scratch float registers.
+// ---------------------------------------------------------------------------------------------------------------------
+namespace n_822DA210 {
+template <class S>
+[[gnu::always_inline]] inline bool Native(PPCContext& __restrict ctx, uint8_t* base, S& s) {
+  using namespace blur_audio;
+  (void)s;
+  if (!On(kN822DA210) || !Runs<S>()) [[unlikely]] return false;
+  const uint32_t p = ctx.r3.u32, buf = ctx.r4.u32;
+  if (!detail::Straight(p, 92)) [[unlikely]] return false;
+  const uint32_t rows = LdH(base, p + 8);
+  if (rows && (!detail::Straight(buf, rows * 1024u) || !detail::Straight(p + 28, 4u * rows) ||
+               !Apart(buf, rows * 1024u, p, 92) || !Apart(buf, rows * 1024u, p + 28, 4u * rows))) [[unlikely]]
+    return false;
+  ctx.r3.u64 = 1;
+  if (LdB(base, p + 10) == 0 || LdB(base, 0x82C8E081u) != 0) return true;
+  const float k = Bits(LdW(base, 0x82B9D114u));
+  const float c76 = Bits(LdW(base, p + 76)), c84 = Bits(LdW(base, p + 84)), c80 = Bits(LdW(base, p + 80));
+  const float start = c76 * c84;                       // fmuls
+  const float slope = std::fma(c80, c76, -start) * k;  // fmsubs (fused, single), fmuls
+  const simde__m128 vstart = simde_mm_set1_ps(start), vslope = simde_mm_set1_ps(slope);
+  const simde__m128 lane = simde_mm_set_ps(3.0f, 2.0f, 1.0f, 0.0f);
+  uint8_t* const rp = rows ? ::banjo::hot::Raw(base, buf) : nullptr;
+  const bool meter = LdB(base, p + 88) == 0;
+  double f6 = 0.0;
+  if (!meter) {
+    for (uint32_t r = 0; r < rows; ++r)
+      for (uint32_t c = 0; c < 64; ++c) {
+        uint8_t* q = rp + r * 1024u + 16u * c;
+        const simde__m128 n = simde_mm_add_ps(simde_mm_set1_ps(float(4 * c)), lane);
+        blur_swap::StoreWords(q, simde_mm_mul_ps(REX_VMADDFP(n, vslope, vstart), blur_swap::LoadWords(q)));
+      }
+    if (rows) ::banjo::hot::Card(base, buf, rows * 1024u);
+  } else {
+    const float b = Bits(LdW(base, p + 16)), a = Bits(LdW(base, p + 20));
+    const simde__m128 vb = simde_mm_set1_ps(b), va = simde_mm_set1_ps(a);
+    for (uint32_t r0 = 0; r0 < rows; r0 += 4) {
+      const uint32_t nr = rows - r0 < 4 ? rows - r0 : 4;
+      alignas(16) float st[4] = {0, 0, 0, 0};
+      for (uint32_t l = 0; l < nr; ++l) st[l] = Bits(LdW(base, p + 28 + 4 * (r0 + l)));
+      simde__m128 acc = simde_mm_load_ps(st);
+      for (uint32_t c = 0; c < 64; ++c) {
+        // The four rows' chunk c (elements 4c..4c+3), ramped in place, and transposed for the level (lane = row).
+        simde__m128 x[4];
+        const simde__m128 n = simde_mm_add_ps(simde_mm_set1_ps(float(4 * c)), lane);
+        const simde__m128 gain = REX_VMADDFP(n, vslope, vstart);
+        for (uint32_t l = 0; l < 4; ++l) {
+          if (l < nr) {
+            uint8_t* q = rp + (r0 + l) * 1024u + 16u * c;
+            x[l] = blur_swap::LoadWords(q);
+            blur_swap::StoreWords(q, simde_mm_mul_ps(x[l], gain));
+          } else {
+            x[l] = simde_mm_setzero_ps();
+          }
+        }
+        // the transpose: e_k holds element 4c+k of each row
+        const simde__m128 t0 = simde_mm_unpacklo_ps(x[0], x[1]), t1 = simde_mm_unpackhi_ps(x[0], x[1]);
+        const simde__m128 t2 = simde_mm_unpacklo_ps(x[2], x[3]), t3 = simde_mm_unpackhi_ps(x[2], x[3]);
+        const simde__m128 e0 = simde_mm_movelh_ps(t0, t2), e1 = simde_mm_movehl_ps(t2, t0);
+        const simde__m128 e2 = simde_mm_movelh_ps(t1, t3), e3 = simde_mm_movehl_ps(t3, t1);
+        acc = REX_VMADDFP(simde_mm_mul_ps(e0, e0), vb, simde_mm_mul_ps(va, acc));
+        acc = REX_VMADDFP(simde_mm_mul_ps(e1, e1), vb, simde_mm_mul_ps(va, acc));
+        acc = REX_VMADDFP(simde_mm_mul_ps(e2, e2), vb, simde_mm_mul_ps(va, acc));
+        acc = REX_VMADDFP(simde_mm_mul_ps(e3, e3), vb, simde_mm_mul_ps(va, acc));
+      }
+      simde_mm_store_ps(st, acc);
+      for (uint32_t l = 0; l < nr; ++l) {
+        StW(base, p + 28 + 4 * (r0 + l), std::bit_cast<uint32_t>(st[l]));
+        f6 = double(float(double(st[l]) + f6));  // fadds f6,f8,f6, row by row
+      }
+    }
+    if (rows) ::banjo::hot::Card(base, buf, rows * 1024u);
+    // loc_822DA5A0: the level, as the original computes it.
+    const double f0 = 1.0, f7 = 0.0, half = double(Bits(0x3F000000u));
+    const double f10 = double(float(double(int64_t(int32_t(rows)))));
+    const double f9 = REX_FDIVS(f6, f10);
+    const double f8 = double(float(1.0 / sqrt(f9)));
+    const double f6n = -f9;
+    const double f5 = double(float(f8));
+    const double f4 = REX_FMULS(f5, f5);
+    const double f3 = -REX_FMADDS(f4, f9, -f0);
+    const double f2 = REX_FMULS(f3, f5);
+    const double f1 = REX_FMADDS(f2, half, f5);
+    const double f12 = REX_FMULS(f1, f1);
+    const double f11 = -REX_FMADDS(f12, f9, -f0);
+    const double f10b = REX_FMULS(f11, f1);
+    const double f8b = REX_FMADDS(f10b, half, f1);
+    const double f5b = rex::ppc::GeZeroAnyMode(f8b) ? f8b : f7;
+    const double f4b = double(float(f5b * f9));
+    const double f3b = rex::ppc::GeZeroAnyMode(f6n) ? f7 : f4b;
+    StW(base, p + 52, std::bit_cast<uint32_t>(float(f3b)));
+  }
+  // loc_822DA600: the gain toward the compression the level asks for.
+  {
+    const double f0 = 1.0;
+    const double f13 = double(Bits(LdW(base, p + 52)));
+    const double f11 = double(Bits(LdW(base, p + 68)));
+    const double f10 = double(float(1.0 / f13));
+    const double f9 = double(float(f13 - f11));
+    const double f8 = double(Bits(LdW(base, p + 72)));
+    const uint32_t fb12 = LdW(base, p + 80);
+    const double f12 = rex::ppc::SingleToDoublePure(fb12);
+    StW(base, p + 84, rex::ppc::QuietSingleBits(fb12));
+    const double f7 = REX_FMADDS(f8, f9, f11);
+    const double f6 = double(float(f10 * f7));
+    const double target = rex::ppc::GeZeroAnyMode(f9) ? f6 : f0;
+    if (target < f12) {
+      const double att = double(Bits(LdW(base, p + 60)));
+      const double g = -REX_FMADDS(att, target, -f12);
+      StW(base, p + 80, std::bit_cast<uint32_t>(float(g)));
+      const double d = double(float(g - target));
+      StW(base, p + 80, std::bit_cast<uint32_t>(float(rex::ppc::GeZeroAnyMode(d) ? g : target)));
+    } else if (target > f12) {
+      const double rel = double(Bits(LdW(base, p + 64)));
+      const double g = REX_FMADDS(rel, target, f12);
+      StW(base, p + 80, std::bit_cast<uint32_t>(float(g)));
+      const double d = double(float(f0 - g));
+      StW(base, p + 80, std::bit_cast<uint32_t>(float(rex::ppc::GeZeroAnyMode(d) ? g : f0)));
+    }
+  }
+  return true;
+}
+}  // namespace n_822DA210

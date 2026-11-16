@@ -33,3 +33,4 @@
 # to cheat a bit and not be exact as like as the game doesnt break"): blur_hand_natives_audio.h. inexact: the native
 # declines while the guard runs (the guard compares the exact copy). calls=: the guest functions it calls itself.
 8230AD50 inexact calls=8230A4D8,822E17C8,8230AD50,822BD548,822BEDD0   # nx race (2026-11-13 abN5_1), JQ Worker 3 64 % / 4 35 %, 5.0 ms a frame: flat (node fields missing the cache, context traffic around its calls, the inlined kernels); the native reads the node once, fuses each child's input rows per output row, one card per row
+822DA210 inexact   # nx race (2026-11-13 abN5_1): the hottest code in the effect stage 822BEDD0 copy (its fmadds chain at +0x32dc); a compressor: the gain ramp four elements at a time, the level of up to four rows in lanes with the original per-lane operations

@@ -52,7 +52,13 @@ the PC before the console.
 | #157 | leaf red-zone slots as locals | todo | |
 | #158 | getter call merging | todo | |
 | #159 | non-escaped stack slots survive calls | todo | |
-| N1-N7 | natives: 8230AD50, 822BEDD0, 822E17C8, 8230EDE0, 822E98B0, 822D2378, 8230B778 | todo | |
+| N1 | the node loop 8230AD50 | done (unverified) | inexact flag (declines under the guard), calls= its child processors and the effect stage; node fields read once, each child's input rows fused per output row, no reload of a freshly zeroed row, one card per row |
+| N2 | the effect stage 822BEDD0: its compressor 822DA210 | done (unverified) | the stage's hottest code; the ramp vectorized, the level of up to four rows in lanes (the original's per-lane operations: the same results) |
+| N3 | the voice step 822E17C8 | not written | it already skips rendering inaudible voices (rows zeroed, the source advanced); its zeroing cannot be skipped without reading the row; four indirect calls |
+| N4 | the resampler 8230EDE0 | not written | its copy is NEON vector code already (fmla, ext windows, tbl swaps), flat profile; 737 instructions with a deep callee tree |
+| N5 | the convolution reverb 822E98B0 | not written | #22's census: the reverb's whole path is ~0.15 % of samples on silence; the rest is FFT arithmetic its copy already vectorizes |
+| N6 | the sound update 822D2378 | not written | game-side sound logic (voices start and stop): not the arithmetic that may cheat |
+| N7 | the node dispatch 8230B778 | not written | control flow and child calls (the node loop's native covers the mixers it reaches) |
 
 ## Replacements (#176-#195)
 
