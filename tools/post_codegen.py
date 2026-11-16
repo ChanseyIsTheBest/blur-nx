@@ -197,7 +197,7 @@ def main():
     # plain ones: 10,239 sites were left in the integer form). After ro_constants_cfg.py and dead_ctx_defs.py, before
     # the copies (so they take the same forms) and store_cards.py (which marks the new stores' cards). renut-ultimate
     # (2026-11-13): after port 121's stack_forward.py, which then sees the stores as port 121 measured them.
-    run(tool('float_loads.py'), '--gen', gen, '--any-mode')
+    run(tool('float_loads.py'), '--gen', gen, '--any-mode', '--doubles')  # #231: lfd too (2026-11-17)
     # blur-nx (2026-11-13, docs/cpu-near-exact-50-1113.md, the user's choice of near-exact ideas): the forms a near-exact
     # switch changes as helpers whose default is the generator's expression (#42: vmaxfp / vminfp as rex::ppc::VMaxFp /
     # VMinFp, sdk/include/rex/ppc/diet_ops.h). Before the copies, so they take the same forms.
