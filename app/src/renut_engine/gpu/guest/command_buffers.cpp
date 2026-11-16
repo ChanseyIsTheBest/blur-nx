@@ -56,6 +56,13 @@ extern "C" char *fake_heap_end;  // libnx: the end of the malloc heap
 // that changed since the device's previous op (the op's 'changed', which the replay relies on as well). Exact:
 // set_words only accumulates, and a chunk that did not change still differs from the Begin image where it did at the
 // previous op, already noted; a buffer's first op scans everything.
+// blur-nx (2026-11-17, the 24-hour run): every hook's first steps (FlushRecordedVertices here, FlushDeferredVertices in
+// backend/queued.cpp) take their locks only when their own device has something waiting.
+REXCVAR_DEFINE_BOOL(blur_renut_flush_fast_local, true, "Banjo/Enhancements",
+                    "Every D3D hook's first steps (the recorded and the deferred Begin*Vertices data) take their locks "
+                    "only when their own device has something waiting, not whenever any device has (Game Master waited "
+                    "3.4 % of its racing time on the delta chain's lock in QueueDraw). Off: the global counts, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 // blur-nx (2026-11-17, the 24-hour run): NewOp's memo checked per command buffer and per device (below, RecordCache).
 REXCVAR_DEFINE_BOOL(blur_renut_record_memo_local, true, "Banjo/Enhancements",
                     "NewOp's lock-free path (banjo_renut_cpu_memos) invalidated per command buffer and per device: a "
@@ -709,6 +716,10 @@ std::atomic<u32> g_cb_generation[kCbGenerations];
 inline std::atomic<u32> &CbGeneration(u32 command_buffer) {
   return g_cb_generation[(command_buffer * 2654435761u) >> 20];
 }
+// blur-nx (2026-11-17, blur_renut_flush_fast_local): g_pending_vertices' entries per device, hashed (a collision only
+// costs a lock), changed with the list under g_record_mutex; FlushRecordedVertices reads its own device's without it.
+std::atomic<u32> g_pending_by_device[64];
+inline std::atomic<u32> &PendingOf(u32 device_va) { return g_pending_by_device[(device_va * 2654435761u) >> 26]; }
 inline void BumpRecordGeneration(u32 command_buffer) {
   g_record_generation.fetch_add(1, std::memory_order_acq_rel);
   CbGeneration(command_buffer).fetch_add(1, std::memory_order_acq_rel);
@@ -2293,6 +2304,7 @@ void FlushPending(Match match) {
     if (match(g_pending_vertices[i])) {
       CopyPending(g_pending_vertices[i]);
       g_recording_devices[g_pending_vertices[i].device].pending.fetch_sub(1, std::memory_order_acq_rel);  // blur-nx
+      PendingOf(g_pending_vertices[i].device).fetch_sub(1, std::memory_order_acq_rel);
       g_pending_vertices[i] = g_pending_vertices.back();
       g_pending_vertices.pop_back();
     } else {
@@ -3415,6 +3427,7 @@ void RecordDeferredDraw(u32 device_va, const DrawCall &call, const u8 *scratch, 
   g_pending_vertices.push_back(
       {device_va, RecordingBuffer(device_va), op->call.up_vertices, scratch, bytes});
   g_recording_devices[device_va].pending.fetch_add(1, std::memory_order_acq_rel);  // blur-nx (2026-11-17)
+  PendingOf(device_va).fetch_add(1, std::memory_order_acq_rel);
   SyncPendingCount();
 }
 
@@ -3528,7 +3541,10 @@ void RecordRun(u32 device_va, u32 command_buffer_va) {
 void FlushRecordedVertices(u32 device_va) {
   // banjo-nx (2026-10-20, from sa2-nx, banjo_renut_callbacks_fast): every hook calls this first; nothing pending (always so without
   // command buffers, SA2's case) needs no lock. g_pending_count is kept under g_record_mutex (SyncPendingCount).
-  if (HookFastPathsOn() && g_pending_count.load(std::memory_order_acquire) == 0)
+  // blur-nx (2026-11-17, blur_renut_flush_fast_local): this device's count (FlushDevicePending takes nothing else).
+  static const bool local = REXCVAR_GET(blur_renut_flush_fast_local);
+  if (HookFastPathsOn() && (local ? PendingOf(device_va).load(std::memory_order_acquire) == 0
+                                  : g_pending_count.load(std::memory_order_acquire) == 0))
     return;
   std::lock_guard lock(g_record_mutex);
   FlushDevicePending(device_va);
@@ -3997,6 +4013,7 @@ void ReleaseCommandBuffer(u32 command_buffer_va) {
     for (size_t i = 0; i < g_pending_vertices.size();) {
       if (g_pending_vertices[i].command_buffer == command_buffer_va) {
         g_recording_devices[g_pending_vertices[i].device].pending.fetch_sub(1, std::memory_order_acq_rel);  // blur-nx
+        PendingOf(g_pending_vertices[i].device).fetch_sub(1, std::memory_order_acq_rel);
         g_pending_vertices[i] = g_pending_vertices.back();
         g_pending_vertices.pop_back();
       } else {
