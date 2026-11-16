@@ -71,7 +71,7 @@ volatile unsigned long long g_rex_stack_fwd_checked = 0;
 // compares, arithmetic, cold paths, float copy loads and stores).
 volatile unsigned long long g_rex_diet_census[6] = {};
 // blur-nx (2026-11-13, docs/cpu-near-exact-50-1113.md): the near-exact ideas' census (rex/ppc/diet_ops.h REX_NX_CENSUS).
-volatile unsigned long long g_rex_nx_census[48] = {};  // slots: sdk/include/rex/ppc/diet_ops.h; 40 the node loop native's children checked for silent rows (#197), 41 of them all zero (not mixed)
+volatile unsigned long long g_rex_nx_census[48] = {};  // slots: sdk/include/rex/ppc/diet_ops.h; 40 the node loop native's children checked for silent rows (#197), 41 of them all zero (not mixed); 42 voice effect stages skipped (#197b)
 }
 
 #if !defined(__SWITCH__)
@@ -325,8 +325,8 @@ void RuntimeCensusReport(int seconds) {
       REXLOG_INFO("[census] near-exact #43 (cumulative): exp memo hits {}, misses {} (cpu_nx_exp_memo)", nx[31], nx[32]);
       REXLOG_INFO("[census] inexact audio (cumulative; the voice step native): voice steps {}, under Blur's own floor {}, "
                   "under audio_nx_voice_floor too {}; compressor blocks {}, at unity gain (not multiplied) {}; mixer "
-                  "children checked {}, silent (not mixed) {}",
-                  nx[35], nx[36], nx[37], nx[38], nx[39], nx[40], nx[41]);
+                  "children checked {}, silent (not mixed) {}; voice effect stages skipped {}",
+                  nx[35], nx[36], nx[37], nx[38], nx[39], nx[40], nx[41], nx[42]);
 #if !defined(__SWITCH__)
       CasCensusReport();  // blur-nx (2026-11-13, #32)
       REXLOG_INFO("[census] near-exact #57 / #34 (cumulative): single-object waits that succeeded {}, polls (a zero "

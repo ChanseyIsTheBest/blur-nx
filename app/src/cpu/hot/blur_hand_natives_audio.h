@@ -24,6 +24,7 @@
 
 extern "C" float blur_nx_voice_floor;  // blur-nx (2026-11-17): app/src/blur_nx_mix.cpp, audio_nx_voice_floor
 extern "C" bool blur_nx_skip_silent;    // blur-nx (2026-11-17): app/src/blur_nx_mix.cpp, audio_nx_skip_silent_rows
+extern "C" bool blur_nx_skip_silent_fx;  // blur-nx (2026-11-17): app/src/blur_nx_mix.cpp, audio_nx_skip_silent_fx
 
 namespace blur_audio {
 
@@ -44,6 +45,26 @@ namespace blur_audio {
   ::banjo::hot::Card(base, a, 4);
 }
 [[gnu::always_inline]] inline float Bits(uint32_t b) { return std::bit_cast<float>(b); }
+// blur-nx (2026-11-17, #197b, inexact audio): how many frames in a row a voice node's output rows were all zero after
+// it ran (its effects included), kept by the node loop (a node address and its count in one 64-bit word, so a collision
+// or a race only costs a count). The voice step skips the effect stage of a node silent for 128 frames in a row (~0.7 s:
+// longer than a delay effect's echo of what it played before) that is silent again (audio_nx_skip_silent_fx): its
+// effects have settled on silence.
+inline std::atomic<uint64_t> g_silent_nodes[4096];
+[[gnu::always_inline]] inline std::atomic<uint64_t>& SilentEntry(uint32_t node) {
+  return g_silent_nodes[(node * 2654435761u) >> 20];
+}
+[[gnu::always_inline]] inline void NoteSilent(uint32_t node, bool silent) {
+  std::atomic<uint64_t>& e = SilentEntry(node);
+  const uint64_t v = e.load(std::memory_order_relaxed);
+  uint32_t count = uint32_t(v >> 32) == node ? uint32_t(v) : 0;
+  count = silent ? (count < 255 ? count + 1 : 255) : 0;
+  e.store((uint64_t(node) << 32) | count, std::memory_order_relaxed);
+}
+[[gnu::always_inline]] inline bool SettledSilent(uint32_t node) {
+  const uint64_t v = SilentEntry(node).load(std::memory_order_relaxed);
+  return uint32_t(v >> 32) == node && uint32_t(v) >= 128;
+}
 // blur-nx (2026-11-17, #197): are the n bytes of big-endian floats at guest address a all +0 or -0? (the sign bit of
 // each float is bit 7 of its first byte: bits 7 and 39 of each 8-byte little-endian word). Stops at the first other.
 inline bool RowsZero(uint8_t* base, uint32_t a, uint32_t n) {
@@ -281,7 +302,9 @@ inline bool Native(PPCContext& __restrict ctx, uint8_t* base, S& s) {
     // infinite gain met a zero sample). audio_nx_skip_silent_rows; census slots 40 (children mixed) and 41 (skipped).
     if (blur_nx_skip_silent && processed && detail::Straight(src, inputs << 10)) {
       REX_NX_CENSUS(40);
-      if (RowsZero(base, src, inputs << 10)) {
+      const bool zero = RowsZero(base, src, inputs << 10);
+      if (type == 2) NoteSilent(child, zero);  // #197b
+      if (zero) {
         REX_NX_CENSUS(41);
         for (uint32_t j = 0; j < inputs; ++j)
           for (uint32_t i = 0; i < outputs; ++i) ops[j][i].kind = kSkip;
@@ -598,6 +621,7 @@ inline bool Native(PPCContext& __restrict ctx, uint8_t* base, S& s) {
   }
   const uint32_t frame = sp0 - 144u;
   const uint32_t index = LdW(base, node + 4);
+  bool zeroed = false;  // #197b: the rows zeroed this frame (the game's inaudible path or no source)
   if (index != 0xFFFFFFFFu) {
     const uint32_t rows = (index << 2) + LdW(base, g + 28);
     uint32_t source = 0;
@@ -625,6 +649,7 @@ inline bool Native(PPCContext& __restrict ctx, uint8_t* base, S& s) {
       REX_NX_CENSUS_IF(inaudible, 36);
       REX_NX_CENSUS_IF(floored, 37);
       if (inaudible || floored || LdB(base, node + 31) == 0) {
+        zeroed = true;
         zero_rows();
         ctx.r3.u64 = source;
         ctx.r4.u64 = g;
@@ -664,11 +689,22 @@ inline bool Native(PPCContext& __restrict ctx, uint8_t* base, S& s) {
         ::banjo::hot::Card(base, node + 57, 1);
       }
     } else {
+      zeroed = true;
       zero_rows();
     }
-    ctx.r3.u64 = node;
-    ctx.r4.u64 = g;
-    C::sub_822BEDD0(ctx, base, s);
+    // blur-nx (2026-11-17, #197b, inexact audio): a voice zeroed again whose output was silent for 128 frames in a row
+    // (its effects settled on silence) skips its effect stage; the stage's own stamp of the node (+8 = the frame's)
+    // is written as the stage would. Only the effects' states differ (held instead of decaying further on silence).
+    // audio_nx_skip_silent_fx; census slot 42.
+    if (zeroed && blur_nx_skip_silent_fx && SettledSilent(node)) {
+      REX_NX_CENSUS(42);
+      if (LdW(base, node + 8) != LdW(base, g + 0) && LdW(base, node + 4) != 0xFFFFFFFFu) StW(base, node + 8, LdW(base, g + 0));
+      ctx.r3.u64 = 1;
+    } else {
+      ctx.r3.u64 = node;
+      ctx.r4.u64 = g;
+      C::sub_822BEDD0(ctx, base, s);
+    }
     ctx.r1.u64 = sp0;
   }
   StW(base, node + 36, std::bit_cast<uint32_t>(float(f31)));

@@ -40,6 +40,10 @@ REXCVAR_DEFINE_BOOL(audio_nx_skip_silent_rows, false, "Audio",
                     "Blur inexact audio (#197): a mixer child whose input rows are all zero after it ran (a voice under "
                     "the floor, an idle node) is not mixed (only a -0 output would have become +0)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(audio_nx_skip_silent_fx, false, "Audio",
+                    "Blur inexact audio (#197b, needs audio_nx_skip_silent_rows): a silent voice whose output was all "
+                    "zero for 128 frames in a row (~0.7 s) skips its effect stage (the effects' states held on silence)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(cpu_nx_exp_memo, false, "CPU",
                     "Blur #43 (exact): the exp native (sub_82954F28) keeps the last 64 arguments per thread with their "
                     "results; a repeated argument (the audio parameter fetch's dB offsets) gives the stored result")
@@ -56,6 +60,7 @@ float blur_nx_unity_eps = 0.0f;
 float blur_nx_silent_eps = 0.0f;
 float blur_nx_voice_floor = 0.0f;  // 2026-11-17 (cpu/hot/blur_hand_natives_audio.h, the voice step)
 bool blur_nx_skip_silent = false;  // 2026-11-17 (the node loop native, #197)
+bool blur_nx_skip_silent_fx = false;  // 2026-11-17 (the voice step native, #197b)
 bool blur_nx_resample_copy = false;
 bool blur_nx_exp_memo = false;  // #43 (cpu/hot/blur_hand_natives_batch2.h)
 }
@@ -73,6 +78,7 @@ void Latch() {
   blur_nx_silent_eps = float(std::clamp(REXCVAR_GET(audio_nx_silent_eps), 0.0, 0.001));
   blur_nx_voice_floor = float(std::clamp(REXCVAR_GET(audio_nx_voice_floor), 0.0, 0.01));
   blur_nx_skip_silent = REXCVAR_GET(audio_nx_skip_silent_rows);
+  blur_nx_skip_silent_fx = blur_nx_skip_silent && REXCVAR_GET(audio_nx_skip_silent_fx);
   blur_nx_resample_copy = REXCVAR_GET(audio_nx_resample_copy);
   blur_nx_exp_memo = REXCVAR_GET(cpu_nx_exp_memo);
   if (blur_nx_voice_floor > 0.0f)
