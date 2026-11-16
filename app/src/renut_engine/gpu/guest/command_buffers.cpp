@@ -56,6 +56,13 @@ extern "C" char *fake_heap_end;  // libnx: the end of the malloc heap
 // that changed since the device's previous op (the op's 'changed', which the replay relies on as well). Exact:
 // set_words only accumulates, and a chunk that did not change still differs from the Begin image where it did at the
 // previous op, already noted; a buffer's first op scans everything.
+// blur-nx (2026-11-17, the 24-hour run): NewOp's memo checked per command buffer and per device (below, RecordCache).
+REXCVAR_DEFINE_BOOL(blur_renut_record_memo_local, true, "Banjo/Enhancements",
+                    "NewOp's lock-free path (banjo_renut_cpu_memos) invalidated per command buffer and per device: a "
+                    "buffer begun or released elsewhere, or vertices pending for another device, no longer send every "
+                    "recording thread through the record mutex (the job workers waited on it 7 % of their time). Off: "
+                    "the global generation and pending count, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(banjo_renut_set_words_changed, true, "Banjo/Enhancements",
                     "Renut's command buffer recording: an op notes the words set since Begin (halo3-nx's inherit) from "
                     "the chunks that changed since its device's previous op only (exact). false: every op scans the "
@@ -540,6 +547,9 @@ std::atomic<uint64_t> g_census_setter_fields[18], g_census_inline_fields[18];
 struct DeviceRecording {
   // Float constant groups the buffer has set (Op::vs_set / ps_set).
   uint64_t vs = 0, ps = 0;
+  // blur-nx (2026-11-17): this device's entries in g_pending_vertices (changed under g_record_mutex; NewOp's memo reads
+  // it without the lock: blur_renut_record_memo_local).
+  std::atomic<u32> pending{0};
   // banjo-nx (2026-10-26, banjo_renut_tags): the shadow is the device's as of its last op and the device's marks have
   // been taken since (the next op may compare only the marked chunks); ops since the last whole check.
   bool primed = false;
@@ -690,9 +700,23 @@ std::vector<PendingVertices> g_pending_vertices;
 // mirrors g_pending_vertices.size(): with anything pending, NewOp takes the lock to copy it in first.
 std::atomic<uint64_t> g_record_generation{1};
 std::atomic<size_t> g_pending_count{0};
+// blur-nx (2026-11-17, blur_renut_record_memo_local): a generation per command buffer (hashed: a collision only costs an
+// extra lock), bumped with the global one wherever a buffer is made, begun, replaced or released, so a recording
+// thread's memo is invalidated by changes to its own buffer only. As safe as the global check: a buffer is recorded on
+// one thread at a time and begun or released only when nobody records into it (the comment above).
+constexpr u32 kCbGenerations = 4096;
+std::atomic<u32> g_cb_generation[kCbGenerations];
+inline std::atomic<u32> &CbGeneration(u32 command_buffer) {
+  return g_cb_generation[(command_buffer * 2654435761u) >> 20];
+}
+inline void BumpRecordGeneration(u32 command_buffer) {
+  g_record_generation.fetch_add(1, std::memory_order_acq_rel);
+  CbGeneration(command_buffer).fetch_add(1, std::memory_order_acq_rel);
+}
 struct RecordCache {
   u32 device_va = 0, command_buffer = 0;
   uint64_t generation = 0;
+  u32 cb_generation = 0;  // blur-nx (2026-11-17)
   HostCommandBuffer *buffer = nullptr;
   DeviceRecording *set = nullptr;
 };
@@ -2096,9 +2120,12 @@ Op *NewOp(u32 device_va, OpKind kind, HostCommandBuffer **out_buffer) {
   const u32 touch_slot = native::TouchSlotOf(device_va);
   RecordCache &cache = touch_slot - 1 < native::kTouchSlots - 1 ? g_record_cache_slots[touch_slot].c : t_record_cache;
   const bool memo = banjo::renut_gpu::CpuMemosOn();
+  static const bool local = REXCVAR_GET(blur_renut_record_memo_local);
   if (memo && cache.device_va == device_va && cache.command_buffer == command_buffer &&
-      cache.generation == g_record_generation.load(std::memory_order_acquire) &&
-      g_pending_count.load(std::memory_order_acquire) == 0) {
+      (local ? cache.cb_generation == CbGeneration(command_buffer).load(std::memory_order_acquire) &&
+                   cache.set->pending.load(std::memory_order_acquire) == 0
+             : cache.generation == g_record_generation.load(std::memory_order_acquire) &&
+                   g_pending_count.load(std::memory_order_acquire) == 0)) {
     found = cache.buffer;
     found_set = cache.set;
   } else {
@@ -2107,12 +2134,13 @@ Op *NewOp(u32 device_va, OpKind kind, HostCommandBuffer **out_buffer) {
     auto &slot = g_buffers[command_buffer];
     if (!slot) {
       slot = NewBuffer();
-      g_record_generation.fetch_add(1, std::memory_order_acq_rel);
+      BumpRecordGeneration(command_buffer);
     }
     found = slot.get();
     found_set = &g_recording_devices[device_va];
     if (memo)
-      cache = {device_va, command_buffer, g_record_generation.load(std::memory_order_relaxed), found, found_set};
+      cache = {device_va, command_buffer, g_record_generation.load(std::memory_order_relaxed),
+               CbGeneration(command_buffer).load(std::memory_order_relaxed), found, found_set};
   }
   HostCommandBuffer &buffer = *found;
   DeviceRecording &set = *found_set;
@@ -2264,6 +2292,7 @@ void FlushPending(Match match) {
   for (size_t i = 0; i < g_pending_vertices.size();) {
     if (match(g_pending_vertices[i])) {
       CopyPending(g_pending_vertices[i]);
+      g_recording_devices[g_pending_vertices[i].device].pending.fetch_sub(1, std::memory_order_acq_rel);  // blur-nx
       g_pending_vertices[i] = g_pending_vertices.back();
       g_pending_vertices.pop_back();
     } else {
@@ -3177,7 +3206,7 @@ void BeginRecording(u32 device_va, u32 command_buffer_va) {
   });
   // A queued run may still hold the old recording.
   auto &slot = g_buffers[command_buffer_va];
-  g_record_generation.fetch_add(1, std::memory_order_acq_rel);  // banjo-nx: NewOp's per-thread lookups
+  BumpRecordGeneration(command_buffer_va);  // banjo-nx: NewOp's per-thread lookups (blur-nx: and its buffer's own)
   if (!slot || slot.use_count() > 1) {
     slot = NewBuffer();
   } else {
@@ -3385,6 +3414,7 @@ void RecordDeferredDraw(u32 device_va, const DrawCall &call, const u8 *scratch, 
   std::lock_guard lock(g_record_mutex);
   g_pending_vertices.push_back(
       {device_va, RecordingBuffer(device_va), op->call.up_vertices, scratch, bytes});
+  g_recording_devices[device_va].pending.fetch_add(1, std::memory_order_acq_rel);  // blur-nx (2026-11-17)
   SyncPendingCount();
 }
 
@@ -3963,9 +3993,10 @@ void QueueRunCommandBuffer(u32 device_va, u32 command_buffer_va) {
 void ReleaseCommandBuffer(u32 command_buffer_va) {
   std::lock_guard lock(g_record_mutex);
   if (g_buffers.erase(command_buffer_va)) {
-    g_record_generation.fetch_add(1, std::memory_order_acq_rel);  // banjo-nx: NewOp's per-thread lookups
+    BumpRecordGeneration(command_buffer_va);  // banjo-nx: NewOp's per-thread lookups (blur-nx: and its buffer's own)
     for (size_t i = 0; i < g_pending_vertices.size();) {
       if (g_pending_vertices[i].command_buffer == command_buffer_va) {
+        g_recording_devices[g_pending_vertices[i].device].pending.fetch_sub(1, std::memory_order_acq_rel);  // blur-nx
         g_pending_vertices[i] = g_pending_vertices.back();
         g_pending_vertices.pop_back();
       } else {
