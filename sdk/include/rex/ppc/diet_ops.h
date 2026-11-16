@@ -44,6 +44,7 @@ extern "C" volatile unsigned long long g_rex_diet_census[6];
 //   30 #21 ramps with both ends under 2^-16
 //   31 #43 exp memo hits, 32 its misses (cpu/hot/blur_hand_natives_batch2.h)
 //   33 #66 the copies' run marks on a page Renut reads, 34 of them writing the card (26: the run marks with a run)
+//   35 the voice step native's voice steps, 36 of them under Blur's own floor (1e-4), 37 under audio_nx_voice_floor only
 #if defined(REX_DIET_CENSUS_ON) && !defined(__SWITCH__)
 extern "C" volatile unsigned long long g_rex_nx_census[48];
 #define REX_NX_CENSUS(k) (g_rex_nx_census[k] = g_rex_nx_census[k] + 1)

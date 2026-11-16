@@ -22,6 +22,8 @@
 #define BLUR_CALL_VIRTUAL(fn) REX_CALL_INDIRECT_FUNC(fn)
 #endif
 
+extern "C" float blur_nx_voice_floor;  // blur-nx (2026-11-17): app/src/blur_nx_mix.cpp, audio_nx_voice_floor
+
 namespace blur_audio {
 
 [[gnu::always_inline]] inline uint32_t LdW(uint8_t* base, uint32_t a) {
@@ -556,7 +558,15 @@ inline bool Native(PPCContext& __restrict ctx, uint8_t* base, S& s) {
     if (LdB(base, node + 57) != 0 && source != 0) {
       const double thr = double(Bits(LdW(base, 0x8202E3FCu)));
       const bool inaudible = !(f30 >= thr) && f31 < thr;
-      if (inaudible || LdB(base, node + 31) == 0) {
+      // blur-nx (2026-11-17, the 24-hour run, inexact audio): a voice whose start and end gains are both under
+      // audio_nx_voice_floor (Blur's own floor above is 1e-4, -80 dB) takes the game's own inaudible path (its rows
+      // zeroed, the source advanced through its +24 instead of rendered through +20 / +12).
+      const bool floored = !inaudible && blur_nx_voice_floor > 0.0f && !(std::fabs(f30) >= double(blur_nx_voice_floor)) &&
+                           std::fabs(f31) < double(blur_nx_voice_floor);
+      REX_NX_CENSUS(35);
+      REX_NX_CENSUS_IF(inaudible, 36);
+      REX_NX_CENSUS_IF(floored, 37);
+      if (inaudible || floored || LdB(base, node + 31) == 0) {
         zero_rows();
         ctx.r3.u64 = source;
         ctx.r4.u64 = g;

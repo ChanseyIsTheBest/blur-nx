@@ -15,6 +15,7 @@
 #include <rex/logging.h>
 
 #include <algorithm>
+#include <cmath>
 
 REXCVAR_DEFINE_DOUBLE(audio_nx_ramp_eps, 0.0, "Audio",
                       "Blur near-exact #24: a mixer gain whose target differs from its current value by less than this "
@@ -27,7 +28,13 @@ REXCVAR_DEFINE_DOUBLE(audio_nx_unity_eps, 0.0, "Audio",
 
 REXCVAR_DEFINE_DOUBLE(audio_nx_silent_eps, 0.0, "Audio",
                       "Blur near-exact #21: a mixer gain (or a ramp's two ends) under this is not mixed at all, as a "
-                      "zero gain is not (0: off, as before; at most 2^-15)")
+                      "zero gain is not (0: off, as before; at most 0.001, -60 dB, since 2026-11-17)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// blur-nx (2026-11-17, the 24-hour run; the user: "do more non-exact audio stuff to save usage"): the voice floor.
+REXCVAR_DEFINE_DOUBLE(audio_nx_voice_floor, 0.0, "Audio",
+                      "Blur inexact audio: a voice whose start and end gains are both under this takes the game's own "
+                      "inaudible path (not rendered, its source advanced), as one under Blur's own 1e-4 (-80 dB) does "
+                      "(0: off, as before; 0.001 is -60 dB; at most 0.01)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(cpu_nx_exp_memo, false, "CPU",
                     "Blur #43 (exact): the exp native (sub_82954F28) keeps the last 64 arguments per thread with their "
@@ -43,6 +50,7 @@ extern "C" {
 float blur_nx_ramp_eps = 0.0f;   // the generated statements' tolerances (tools/blur_mix_nx.py)
 float blur_nx_unity_eps = 0.0f;
 float blur_nx_silent_eps = 0.0f;
+float blur_nx_voice_floor = 0.0f;  // 2026-11-17 (cpu/hot/blur_hand_natives_audio.h, the voice step)
 bool blur_nx_resample_copy = false;
 bool blur_nx_exp_memo = false;  // #43 (cpu/hot/blur_hand_natives_batch2.h)
 }
@@ -53,9 +61,14 @@ void Latch() {
   constexpr double kMax = 1.0 / 32768.0;
   blur_nx_ramp_eps = float(std::clamp(REXCVAR_GET(audio_nx_ramp_eps), 0.0, kMax));
   blur_nx_unity_eps = float(std::clamp(REXCVAR_GET(audio_nx_unity_eps), 0.0, kMax));
-  blur_nx_silent_eps = float(std::clamp(REXCVAR_GET(audio_nx_silent_eps), 0.0, kMax));
+  // 2026-11-17: the silent gain may go to -60 dB (the user: "more non-exact audio"); the others stay at 2^-15.
+  blur_nx_silent_eps = float(std::clamp(REXCVAR_GET(audio_nx_silent_eps), 0.0, 0.001));
+  blur_nx_voice_floor = float(std::clamp(REXCVAR_GET(audio_nx_voice_floor), 0.0, 0.01));
   blur_nx_resample_copy = REXCVAR_GET(audio_nx_resample_copy);
   blur_nx_exp_memo = REXCVAR_GET(cpu_nx_exp_memo);
+  if (blur_nx_voice_floor > 0.0f)
+    REXLOG_INFO("[audio] inexact: voices under {:g} ({:.1f} dB) take the game's inaudible path", blur_nx_voice_floor,
+                20.0 * std::log10(double(blur_nx_voice_floor)));
   if (blur_nx_ramp_eps > 0.0f || blur_nx_unity_eps > 0.0f || blur_nx_silent_eps > 0.0f || blur_nx_resample_copy) {
     REXLOG_INFO("[audio] near-exact mixer: gain ramps under {:g} mixed as constant, gains within {:g} of 1 as unity, "
                 "gains under {:g} not mixed, 256-sample resampling blocks copied: {}",
