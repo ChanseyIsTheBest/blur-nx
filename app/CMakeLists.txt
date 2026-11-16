@@ -882,6 +882,18 @@ if(REXGLUE_PLATFORM_SWITCH)
         target_link_options(renut PRIVATE -freorder-blocks-and-partition)
         message(STATUS "blur: cold-block splitting (-freorder-blocks-and-partition)")
     endif()
+    # blur-nx (2026-11-17, #208 of docs/cpu-ideas-196-225-1116.md): cold-block splitting on the generated game code and
+    # the copies only (the per-function option travels with them into LTO), not on the SDK, the app or libstdc++'s
+    # instantiations, where the link failed. A build of its own: if the generated code's own switches meet the same
+    # assembler error, that settles it.
+    option(BLUR_SWITCH_SPLIT_COLD_GEN "#208: cold-block splitting on the generated code and the copies only" OFF)
+    if(BLUR_SWITCH_SPLIT_COLD_GEN AND NOT BLUR_SWITCH_SPLIT_COLD)
+        if(TARGET renut_recomp)
+            target_compile_options(renut_recomp PRIVATE -freorder-blocks-and-partition)
+        endif()
+        set_property(SOURCE ${BANJO_HOT_SOURCES} APPEND PROPERTY COMPILE_OPTIONS -freorder-blocks-and-partition)
+        message(STATUS "blur: cold-block splitting on the generated code and the copies (#208)")
+    endif()
     # blur-nx (2026-11-16, the 15 ms batch's "15 more", CG-28 of docs/codegen-ideas-3.md): the machine copies (the 12
     # bulk shards and banjo_hot_guest.cpp) aligned for the A57's 16-byte fetch: functions at 32 bytes, loops and the
     # targets of jumps at 16 (GCC's cortex-a57 tuning aligns loops and jumps at 4 / 8). With cold-block splitting the
