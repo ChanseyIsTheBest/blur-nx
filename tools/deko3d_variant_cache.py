@@ -327,6 +327,14 @@ def read_list(path, blend_skip_on, alpha_guess=ALPHA_GUESS):
                     spec[966 + r] = ec
         if no_clip:
             spec[929] = 0
+        # blur-nx (2026-11-17): halo3-nx's target constants, as render/pipeline.cpp gives them: the gamma targets (924, the
+        # key's reserved bits 4-7) and the colour exponent biases (925, bits 8-31), with blur_renut_target_bias_rgb's 927 (on
+        # by default) beside 925. Not here before: those pipelines' variants were compiled on the device every time.
+        if ps and (reserved >> 4) & 0xF:
+            spec[924] = (reserved >> 4) & 0xF
+        if ps and reserved >> 8:
+            spec[925] = reserved >> 8
+            spec[927] = 1
         for w in range(8):
             for b in range(32):
                 if mask[w] >> b & 1:
