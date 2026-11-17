@@ -58,10 +58,12 @@ CMakeLists.txt; `__wrap_nvioctlChannel_KickoffPb` at the end of plume_deko3d.cpp
 | pg3_kick1 | the card's (mixed) | 1 refusal: 2040 entries, Timeout; halves in | loaded; the event ran to its results |
 | pg3_kick2 | none (1304 compiles, 220 blocking) | 2 refusals: 2040, then 950 with +3 increments; halves in | loaded; ran to its results; no fence hang |
 | pg3_ship (shipping toml) | the user's | 2 refusals: 2040, then its first half of 1020; quarters in | loaded; ran to its results |
+| pg2_ship (shipping toml): race 2, Amboy, single player | the user's | none; the largest submission 731 entries | loaded; raced 2 minutes |
 
-Logs: C:/blur-nx-test/kick1, kick2, ship1. Screens: C:/blur-nx-test/console_runs/pg3_kick1, pg3_kick2, pg3_ship.
+Logs: C:/blur-nx-test/kick1, kick2, ship1, ship2. Screens: C:/blur-nx-test/console_runs/pg3_kick1, pg3_kick2,
+pg3_ship, pg2_ship. Each run ended with the user's cache put back as it was.
 
 ## Not tested
 
 The split-screen Amboy race needs a second controller, which the console tools can't drive. Its crash had the same
-signature, through the same path.
+signature, through the same path. Single-player Amboy peaks at 731 entries; two views load more.
