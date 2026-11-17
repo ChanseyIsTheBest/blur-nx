@@ -88,13 +88,21 @@ def main():
         sys.exit(__doc__)
     check = '--check' in sys.argv
     text = open(args[0], encoding='utf-8').read()
+    # blur-nx (2026-11-17, RR6's finding in the base): another tool's block may sit between this one and ANCHOR
+    # (tools/guest_fences.py inserts its block right before ANCHOR, after this one): this block present means done, and an
+    # older one is cut only up to the next tool's marker. Cutting everything up to ANCHOR deleted the fences on every
+    # post-codegen run over an existing tree (the build then stopped on REX_GUEST_EIEIO).
+    if BLOCK in text:
+        print('pch_neon_shuffles: already in %s' % args[0])
+        return
     if MARKER in text:
         # sasrt-nx (2026-11-11, port 73): an older block of this tool is replaced (it lies before ANCHOR).
         start = text.index(MARKER)
         end = text.index(ANCHOR, start)
-        if text[start:end] == BLOCK:
-            print('pch_neon_shuffles: already in %s' % args[0])
-            return
+        for next_marker in ('\n// rexglue ports: ', '\n// blur-nx: '):
+            k = text.find(next_marker, start + len(MARKER))
+            if k != -1 and k + 1 < end:
+                end = k + 1
         text = text[:start] + text[end:]
     if ANCHOR not in text:
         sys.exit('ERROR (post-codegen patch): pch_neon_shuffles: no REX_LOAD_U8 in %s: the generated pch changed'
