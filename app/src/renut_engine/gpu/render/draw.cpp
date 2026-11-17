@@ -14775,12 +14775,16 @@ uint32_t ResolveCoverPixels(const HostSurface *surface, const ClearRect *source_
 // the motion blur's source, is such a view over its 1280x720 post target: left in the view's image it was black, and with
 // the colour hand-over on (sasrt_gpu_handover_with_smaa, or SMAA off) the race darkened with speed and the mirror went
 // black in Ryujinx, and the console flickered at the mirror and the car's back.
-bool SampleGridResolveWantedLocked(const HostSurface *s, const HostTexture *d) {
+// The grid's target that resolve reads, or null (a level-0, slice-0 resolve, as ResolveTarget's grid path).
+const HostSurface *SampleGridSourceLocked(const HostSurface *s, const HostTexture *d) {
   if (s->depth || !banjo::renut_gpu::SampleGridResolveOn() || d->host_format != s->format ||
       ((u32(s->info_word) >> 16) & 3) == 0)
-    return false;
+    return nullptr;
   const HostSurface *grid = SampleGridAliasLocked(s);
-  return grid && grid->blur_draw_seq > s->blur_draw_seq;
+  return grid && grid->blur_draw_seq > s->blur_draw_seq ? grid : nullptr;
+}
+bool SampleGridResolveWantedLocked(const HostSurface *s, const HostTexture *d) {
+  return SampleGridSourceLocked(s, d) != nullptr;
 }
 
 // A resolve into 'd' left in the target's image when it can be (true). Otherwise (false, the resolve is drawn) a
@@ -15910,6 +15914,19 @@ void ResolveTargetsLocked(const u32 *targets, u32 flags, const ClearRect *source
       uint64_t sig = fits ? ResolveSignature(surface, src, dest_x, dest_y, dest_level, dest_slice) : 0;
       if (sig && exp_bias)
         sig ^= (uint64_t(uint32_t(exp_bias) & 63u) + 1u) * 0x9E3779B97F4A7C15ull;  // a biased resolve is another one
+      // blur-nx (2026-11-17, the menu backdrop): a resolve the sample grid draws (below) reads the grid's target, not the
+      // view, which the game never draws into (its writes and image never change). Its signature takes the grid target's
+      // image, writes and last draw too: with the view's alone, banjo_renut_resolve_skip kept the first resolve for good.
+      // Blur's 640x360 half-size scene behind the menus (a view at a fixed address) stayed the sky of the frame it was
+      // first made in, and its depth-of-field composite blended the city's buildings and trees away.
+      if (sig && slice == 0 && z == 0 && dest_level == 0) {
+        if (const HostSurface *grid = SampleGridSourceLocked(surface, dest)) {
+          sig ^= (uint64_t(grid->generation) * 0xC2B2AE3D27D4EB4Full) ^ (uint64_t(grid->writes) * 0x165667B19E3779F9ull) ^
+                 (uint64_t(grid->blur_draw_seq) * 0x27D4EB2F165667C5ull);
+          if (!sig)
+            sig = 1;
+        }
+      }
       if (fits && banjo::renut_gpu::ResolveSkipOn() && dest->resolve_signature == sig) {
         // banjo-nx (2026-10-19, banjo_renut_resolve_skip): the same resolve of an unchanged source is in dest already.
         banjo::renut_gpu::CountSkippedResolve(false);
