@@ -39,7 +39,6 @@
 #include "renut_engine/gpu/backend/video.h"
 #include "profiler/profiler.h"  // katamari-nx: the frame boundary at Present
 #include <atomic>
-extern std::atomic<uint64_t> g_banjo_game_frames;  // katamari_keys.cpp: frames presented
 
 using namespace renut::gpu;
 
@@ -598,8 +597,8 @@ void D3DDevice_Present_hook(u32 device) {
   native::SetScissorRect(d, scissor[0], scissor[1], scissor[2], scissor[3]);
   native::Swap(device, front_buffer, device + 0x361C);  // katamari-nx: 0x3548->0x3530 (blur-nx: 0x3530->0x361C)
   // katamari-nx: one game frame ends at Present (N&B's ended at its appMainDraw hook, renut_engine/FPS.cpp): frame
-  // time, the Switch profiler's frame marks, the stall watchdog.
-  g_banjo_game_frames.fetch_add(1, std::memory_order_relaxed);
+  // time, the Switch profiler's frame marks, the stall watchdog. blur-nx (2026-11-17): g_banjo_game_frames is counted
+  // in the Swap hook (device.cpp) that native::Swap above runs: Blur swaps without Present.
   banjo::profiler::FrameBoundary();
 }
 

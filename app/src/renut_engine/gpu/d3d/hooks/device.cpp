@@ -61,6 +61,7 @@
 // banjo-nx (2026-10-20, from sa2-nx): the SDK's Switch core layout (sdk/src/system/xthread.cpp).
 extern "C" uint32_t RexSetGuestThreadCoreLayout(int main_core, uint32_t others_mask, int others_preferred);
 void renutFrameLimit();  // katamari_keys.cpp: the player's frame_cap
+extern std::atomic<uint64_t> g_banjo_game_frames;  // blur_keys.cpp: game frames swapped (D3DDevice_Swap_hook)
 
 // banjo-nx (2026-10-20, from sa2-nx's sa2_renut_core_layout): see D3DDevice_Swap_hook.
 REXCVAR_DEFINE_BOOL(banjo_renut_core_layout, false, "Banjo/Enhancements",
@@ -909,6 +910,10 @@ void D3DDevice_Swap_hook(u32 device_va, u32 front_buffer, u32 /*parameters*/) {
 #endif
   }
   renut::frame_stats::OnGameFrame();
+  // blur-nx (2026-11-17): the game frames the captures' video waits on (banjo_video_s) and the D3D census reads, counted
+  // here rather than in the Present hook (hooks/draw.cpp, which ends in this hook through native::Swap): Blur swaps
+  // without Present, so the count stayed 0 and the video never got its first frame (no file in any Ryujinx run).
+  g_banjo_game_frames.fetch_add(1, std::memory_order_relaxed);
   rex::latency::NoteGuestSwap();  // banjo-nx (2026-10-19, input latency): the probe
   const uint64_t swap_ordinal = rex::latency::SwapCount();
   FlushDeferredVertices(device_va);
