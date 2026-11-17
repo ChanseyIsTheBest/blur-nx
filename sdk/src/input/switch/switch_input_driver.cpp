@@ -21,7 +21,6 @@
 #include <atomic>
 #include <condition_variable>  // blur-nx (2026-11-17, audit #6): the rumble thread
 #include <mutex>
-#include <thread>
 
 #include <rex/chrono/clock.h>
 #include <rex/cvar.h>
@@ -444,17 +443,27 @@ class RumbleSender {
   static constexpr size_t kKeys = 9;  // npads No1-No8, then handheld
   static size_t KeyOf(HidNpadIdType id) { return id == HidNpadIdType_Handheld ? 8 : size_t(id) & 7; }
 
-  void Post(HidNpadIdType id, const HidVibrationDeviceHandle* handles, int count,
+  // false: the rumble thread is not running (the caller sends the values itself).
+  bool Post(HidNpadIdType id, const HidVibrationDeviceHandle* handles, int count,
             const std::array<HidVibrationValue, 2>& values) {
     const size_t k = KeyOf(id);
     bool wake;
     {
       std::lock_guard<std::mutex> lock(m_);
-      if (stopped_) return;
+      if (stopped_) return true;  // the driver's teardown: nothing more is sent
       if (!started_) {
         started_ = true;
-        std::thread([this] { Main(); }).detach();
+        // A libnx thread: std::thread is not implemented on Horizon (std::system_error "Function not implemented",
+        // batch 3's first console run, 2026-11-17 12:48). Priority 0x3C (below the game threads' 0x3B), the
+        // process's default core, a 32 KiB stack; never joined (the sender lives as long as the process).
+        if (R_FAILED(threadCreate(&thread_, &RumbleSender::Entry, this, nullptr, 0x8000, 0x3C, -2)) ||
+            R_FAILED(threadStart(&thread_))) {
+          failed_start_ = true;
+          static uint32_t logged = 0;
+          if (logged++ < 4) REXLOG_WARN("input: the rumble thread could not start: rumble sent from the game thread");
+        }
       }
+      if (failed_start_) return false;
       Request& r = req_[k];
       std::copy(handles, handles + count, r.handles.begin());
       r.count = count;
@@ -463,6 +472,7 @@ class RumbleSender {
       wake = waiting_;
     }
     if (wake) cv_.notify_one();
+    return true;
   }
 
   // The last send for this pad failed: the game thread sends its next value even if unchanged.
@@ -484,9 +494,11 @@ class RumbleSender {
     bool pending = false;
   };
 
+  bool Started() const { return !failed_start_; }
+
+  static void Entry(void* self) { static_cast<RumbleSender*>(self)->Main(); }
+
   void Main() {
-    // Below the game threads (0x3B): a send waits on the HID service anyway.
-    svcSetThreadPriority(threadGetCurHandle(), 0x3C);
     std::array<Request, kKeys> todo;
     for (;;) {
       size_t n = 0;
@@ -534,6 +546,8 @@ class RumbleSender {
   std::array<Request, kKeys> req_{};
   std::array<std::atomic<bool>, kKeys> failed_{};
   bool started_ = false, waiting_ = false, sending_ = false, stopped_ = false;
+  bool failed_start_ = false;  // the thread could not start: the game thread sends (RumbleThreadOn's caller checks)
+  Thread thread_{};
 };
 
 RumbleSender& Rumble() {
@@ -1126,8 +1140,8 @@ X_RESULT SwitchInputDriver::SetDeviceVibration(DeviceId id, X_INPUT_VIBRATION* v
   value.amp_high = float(uint16_t(vibration->right_motor_speed)) / 65535.0f;
   value.freq_high = 320.0f;
   std::array<HidVibrationValue, 2> values = {value, value};
-  if (RumbleThreadOn()) {  // blur-nx (2026-11-17, audit #6): sent by the rumble thread
-    Rumble().Post(npad_id, slot->vibration_handles.data(), slot->vibration_count, values);
+  if (RumbleThreadOn() &&  // blur-nx (2026-11-17, audit #6): sent by the rumble thread when it runs
+      Rumble().Post(npad_id, slot->vibration_handles.data(), slot->vibration_count, values)) {
   } else if (const Result rc = hidSendVibrationValues(slot->vibration_handles.data(), values.data(), slot->vibration_count);
       R_FAILED(rc)) {
     slot->vibration_sent = false;  // retried on the next call
