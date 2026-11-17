@@ -156,7 +156,7 @@ them as well". The batch has one: #36.
 | 20, 21 | Census: op vectors that grew; ops that captured stack headers | (census) | - |
 | 22 | Checked, not changed: a deferred capture is taken at Begin and queued at End, out of the delta chain's order; its copy is ~65 us a frame | - | - |
 | 23 | The replay's prefetch stages 55 and 56 are in the A/B list | (A/B 55, 56) | as before |
-| 26 | Checked, not changed: with the profile, GCC lays out the untaken blocks after the hot ones and puts never-run functions in .text.unlikely. FastDrawLocked's samples span its first ~19 KB of 38 KB; a hand split moves no hot code, and the compiler's partition broke LTO (11-16) | - | - |
+| 26 | Checked, not changed: with the profile, GCC lays out the untaken blocks after the hot ones and puts never-run functions in .text.unlikely. 78 of FastDrawLocked's 79 samples lie in its first 20 KB of 38 KB; a hand split moves no hot code, and the compiler's partition broke LTO (11-16) | - | - |
 | 27 | No ImGui frame while no overlay shows (the dialogs answer WantsFrame; the Switch's buttons are still read for the shortcuts' state) | ui_skip_hidden_dialogs | on |
 | 28 | Census: wakes by kind and their time, and the record lock's waits on the Game Master. Also an option: runs and resolves wake the render thread as draws do | blur_renut_wake_batch_all (238) | off (A/B) |
 | 29 | Census: the immediate draws and their queueing time | (census) | - |
