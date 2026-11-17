@@ -3138,3 +3138,126 @@ namespace plume {
         return d && d->queue && dkQueueIsInErrorState(d->queue);
     }
 };
+
+// blur-nx (2026-11-18, the map-load crashes: Video::KickLocked -> dkQueueSubmitCommands or dkQueueFlush ->
+// dk::detail::RaiseError(DkResult_Fail) -> diagAbortWithResult, Atmosphère's 2359-0001). deko3d 0.5.0 raises that error
+// when libnx's gpfifo kickoff fails and the channel holds no error notification: Queue::appendGpfifoEntries and
+// Queue::flush then ask Queue::checkError(), which returns false. So it is not a GPU fault: nvservices refused the
+// submission. libnx's nvGpuChannelKickoff retries nvservices' Busy every 100 ms and returns any other refusal. The
+// ioctl is wrapped here (-Wl,--wrap=nvioctlChannel_KickoffPb, plume's CMakeLists.txt). The largest submissions are
+// logged. A refusal is logged with its result, and the submission is sent again in two halves (and so on down), with
+// the gpfifo entries in their order, so the GPU runs the same commands. The first half carries the submission's
+// syncpoint increments (flag 8: nvservices raises the syncpoint's expected value by fence.value; the increment
+// commands are in deko3d's entries). The expected value then runs ahead of the GPU until the second half's
+// increments run, the state of any submission in flight. The second half is a plain one (libnx's flags without
+// increments).
+extern "C" Result __real_nvioctlChannel_KickoffPb(u32 fd, nvioctl_gpfifo_entry *entries, u32 num_entries, u32 flags,
+                                                  nvioctl_fence *fence_inout);
+extern "C" Result __wrap_nvioctlChannel_KickoffPb(u32 fd, nvioctl_gpfifo_entry *entries, u32 num_entries, u32 flags,
+                                                  nvioctl_fence *fence_inout);
+
+namespace plume {
+    static std::atomic<uint32_t> g_kickoffMost{0}, g_kickoffLogged{0}, g_kickoffRefusalLines{0};
+    static std::atomic<uint64_t> g_kickoffRefusals{0}, g_kickoffResent{0};
+    static constexpr uint32_t kKickoffIncrementFlag = 1u << 8;  // nvservices: the syncpoint raised by fence.value
+    static constexpr uint32_t kKickoffRefusalLines = 48;
+    static constexpr Result kKickoffBusy = MAKERESULT(Module_LibnxNvidia, LibnxNvidiaError_Busy);
+
+    static void kickoffRefused(Result r, const nvioctl_gpfifo_entry *entries, uint32_t count, uint32_t flags,
+                               const nvioctl_fence &fence, uint32_t depth) {
+        const uint64_t n = g_kickoffRefusals.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (g_kickoffRefusalLines.fetch_add(1, std::memory_order_relaxed) >= kKickoffRefusalLines)
+            return;
+        uint64_t words = 0;
+        uint32_t biggest = 0;
+        for (uint32_t i = 0; i < count; i++) {
+            const uint32_t w = (entries[i].desc32[1] >> 10) & 0x1FFFFFu;  // the entry's length in words
+            words += w;
+            biggest = std::max(biggest, w);
+        }
+        uint64_t heapFree = 0, processFree = 0, used = 0, total = 0;
+        memoryFigures(heapFree, processFree);
+        systemResource(used, total);
+        logf("nvservices REFUSED a GPU submission (refusal %" PRIu64 ", split depth %u): result 0x%X (module %u, "
+             "description %u); %u gpfifo entries (%" PRIu64 " command words, the largest entry %u), flags 0x%X, "
+             "syncpoint %u +%u; blocks %u live (%" PRIu64 " MB), GPU region %" PRIu64 " MB, heap %" PRIu64
+             " MB free, process %" PRIu64 " MB unused, system resource %" PRIu64 " of %" PRIu64 " KiB; %s",
+             n, depth, unsigned(r), unsigned(R_MODULE(r)), unsigned(R_DESCRIPTION(r)), count, words, biggest, flags,
+             fence.id, fence.value, g_blocksLive.load(std::memory_order_relaxed),
+             g_blocksLiveBytes.load(std::memory_order_relaxed) >> 20,
+             g_regionBytesNow.load(std::memory_order_relaxed) >> 20, heapFree >> 20, processFree >> 20, used >> 10,
+             total >> 10, count > 1 ? "sent again in halves" : "one entry: nothing to split (deko3d aborts)");
+    }
+
+    static Result kickoffHalves(u32 fd, nvioctl_gpfifo_entry *entries, u32 count, u32 flags, nvioctl_fence *fence,
+                                u32 depth);
+
+    // One part. nvservices' Busy is waited out here, as libnx does (libnx's own retry would send the whole submission
+    // again). A refusal is split again.
+    static Result kickoffPart(u32 fd, nvioctl_gpfifo_entry *entries, u32 count, u32 flags, nvioctl_fence *fence,
+                              u32 depth) {
+        for (;;) {
+            nvioctl_fence f = *fence;
+            const Result r = __real_nvioctlChannel_KickoffPb(fd, entries, count, flags, &f);
+            if (r == kKickoffBusy) {
+                svcSleepThread(100'000'000);
+                continue;
+            }
+            if (R_SUCCEEDED(r)) {
+                *fence = f;
+                return r;
+            }
+            kickoffRefused(r, entries, count, flags, *fence, depth);
+            return count > 1 ? kickoffHalves(fd, entries, count, flags, fence, depth + 1) : r;
+        }
+    }
+
+    static Result kickoffHalves(u32 fd, nvioctl_gpfifo_entry *entries, u32 count, u32 flags, nvioctl_fence *fence,
+                                u32 depth) {
+        const u32 first = count / 2;
+        nvioctl_fence a = *fence;  // the first half: the increments
+        Result r = kickoffPart(fd, entries, first, flags, &a, depth);
+        if (R_FAILED(r))
+            return r;
+        nvioctl_fence b{fence->id, 0};
+        r = kickoffPart(fd, entries + first, count - first, flags & ~kKickoffIncrementFlag, &b, depth);
+        if (R_FAILED(r))
+            return r;
+        *fence = a;
+        return r;
+    }
+
+}  // namespace plume
+
+extern "C" __attribute__((used)) Result __wrap_nvioctlChannel_KickoffPb(u32 fd, nvioctl_gpfifo_entry *entries,
+                                                                        u32 num_entries, u32 flags,
+                                                                        nvioctl_fence *fence_inout) {
+    using namespace plume;
+    if (num_entries > g_kickoffMost.load(std::memory_order_relaxed)) {
+        g_kickoffMost.store(num_entries, std::memory_order_relaxed);
+        if (num_entries >= 64 && (num_entries >= 2 * g_kickoffLogged.load(std::memory_order_relaxed) || num_entries >= 1024)) {
+            g_kickoffLogged.store(num_entries, std::memory_order_relaxed);
+            logf("nvservices: a GPU submission of %u gpfifo entries, the most so far (libnx sends at most 2048)",
+                 num_entries);
+        }
+    }
+    const nvioctl_fence in = *fence_inout;
+    const Result r = __real_nvioctlChannel_KickoffPb(fd, entries, num_entries, flags, fence_inout);
+    if (R_SUCCEEDED(r) || r == kKickoffBusy)
+        return r;  // (Busy: nothing was sent; libnx waits 100 ms and sends it again, as before)
+    kickoffRefused(r, entries, num_entries, flags, in, 0);
+    if (num_entries < 2)
+        return r;
+    nvioctl_fence f = in;
+    const Result s = kickoffHalves(fd, entries, num_entries, flags, &f, 1);
+    if (R_SUCCEEDED(s)) {
+        *fence_inout = f;
+        const uint64_t resent = g_kickoffResent.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (resent <= 16 || (resent & 63) == 0)
+            logf("nvservices: the refused submission went in as parts (%" PRIu64 " so far)", resent);
+    } else {
+        logf("nvservices: the refused submission could not be sent in parts either: result 0x%X (deko3d aborts)",
+             unsigned(s));
+    }
+    return s;
+}
