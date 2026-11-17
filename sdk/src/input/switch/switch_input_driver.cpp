@@ -454,13 +454,20 @@ class RumbleSender {
       if (!started_) {
         started_ = true;
         // A libnx thread: std::thread is not implemented on Horizon (std::system_error "Function not implemented",
-        // batch 3's first console run, 2026-11-17 12:48). Priority 0x3C (below the game threads' 0x3B), the
-        // process's default core, a 32 KiB stack; never joined (the sender lives as long as the process).
-        if (R_FAILED(threadCreate(&thread_, &RumbleSender::Entry, this, nullptr, 0x8000, 0x3C, -2)) ||
-            R_FAILED(threadStart(&thread_))) {
+        // batch 3's first console run, 2026-11-17 12:48). Priority 0x3B, the game threads' and the lowest this
+        // process may use (0x3C was refused: the second run fell back to the game thread); the process's default
+        // core, a 32 KiB stack; never joined (the sender lives as long as the process). It sleeps in its condition
+        // variable or in the HID request, so it takes little of the game threads' time slices.
+        Result rc = threadCreate(&thread_, &RumbleSender::Entry, this, nullptr, 0x8000, 0x3B, -2);
+        if (R_SUCCEEDED(rc)) rc = threadStart(&thread_);
+        if (R_FAILED(rc)) {
           failed_start_ = true;
           static uint32_t logged = 0;
-          if (logged++ < 4) REXLOG_WARN("input: the rumble thread could not start: rumble sent from the game thread");
+          if (logged++ < 4)
+            REXLOG_WARN("input: the rumble thread could not start (0x{:X}): rumble sent from the game thread",
+                        unsigned(rc));
+        } else {
+          REXLOG_INFO("input: rumble thread started (input_switch_rumble_thread)");
         }
       }
       if (failed_start_) return false;
