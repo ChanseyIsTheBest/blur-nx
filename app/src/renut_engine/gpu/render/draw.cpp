@@ -15353,6 +15353,11 @@ void SyncColorViewLocked(HostSurface *surface) {
     push.param0 = std::ldexp(1.0f, int32_t(surface->color_info_word << 6) >> 26);
     push.param1 = 1.0f;
   }
+  // blur-nx (2026-11-17, blur_renut_target_bias_rgb): with the colour scaled by the target's bias as it is drawn
+  // (shader_common.h banjoTrim, constant 927), the float target holds the biased value, as the console's EDRAM does: the
+  // words are made from it as it is, and bytes read back as floats stay biased. 2^bias here as well scaled it twice.
+  if (banjo::renut_gpu::TargetBiasRgbOn())
+    push.param0 = 1.0f;
   cmd->setGraphicsPushConstants(0, &push, 0, sizeof(push));
   cmd->drawInstanced(3, 1, 0, 0);
   surface->synced_view = latest;

@@ -9,6 +9,7 @@
 //                      shader's output, without the bias): the output is the word's four bytes, for the 8888 target;
 //   g_Push.param1 = 1: the source is the 8888 view; param0 = 2^bias of the float surface being read: the output is the
 //                      word's 7e3 floats (divided by that bias) and its 2-bit alpha, for the float target.
+//   With blur_renut_target_bias_rgb (2026-11-17) the float target holds the biased colour: param0 is 1 in both modes.
 // The pixel plus g_Push.translate is the source texel; present_vs draws the fullscreen triangle.
 // VIEW_REINTERPRET_MS = 1 (view_reinterpret_ms_ps.hlsl): both views multisampled (Blur's scene is 4x): the shader runs
 // per sample (SV_SampleIndex) and reads the same sample of the source, each sample's word being its own.
