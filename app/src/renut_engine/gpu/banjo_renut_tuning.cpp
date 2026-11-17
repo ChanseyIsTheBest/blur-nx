@@ -10,6 +10,7 @@
 #include "renut_engine/gpu/render/draw.h"
 #include "renut_engine/gpu/render/textures.h"  // blur-nx (2026-11-17, audit #4/#5): ResolveRemakeReport
 #include "renut_engine/gpu/stage_census.h"  // blur-nx (2026-11-17, audit #17-#22, #30)
+#include "renut_engine/gpu/host_batch.h"  // blur-nx (2026-11-18, the Renut host batch)
 #include "renut_engine/perf/frame_stats.h"  // blur-nx (2026-11-13): #37's census
 #include "renut_engine/gpu/render/graphics_options.h"  // banjo-nx (2026-10-28): dynamic resolution's ranges
 #include "renut_engine/gpu/guest/command_buffers.h"  // banjo-nx (2026-10-26): TagsReport
@@ -1149,6 +1150,18 @@ const char *AbName(int target) {
   case 219: return "a colour resolve's exponent bias applied (blur_renut_resolve_exp_bias)";
   case 220: return "a target kept in part takes what other views wrote over its EDRAM (blur_renut_edram_inherit)";
   case 221: return "a multisampled resolve into a slice other than 0 goes through staging (blur_renut_ms_slice_resolve)";
+  // blur-nx (2026-11-18, the Renut host batch: gpu/host_batch.h, docs/renut-host-ideas-25-1118.md).
+  case 230: return "NewOp builds no resource objects or slot extents while replays inherit (blur_renut_record_skip_unused, #1 #2)";
+  case 231: return "an op's inherited words put back only in the chunks it applied (blur_renut_inherit_by_chunk, #3)";
+  case 232: return "the draw before's whole-buffer answer for the same streams (blur_renut_whole_repeat, #4)";
+  case 233: return "the ring cleaner above the game threads (blur_renut_ring_cleaner_priority, #11)";
+  case 234: return "BuildInheritRuns a 32-bit word at a time (blur_renut_inherit_runs_words, #13)";
+  case 235: return "the fast pipeline cache two-way (blur_renut_fast_pipeline_two_way, #16)";
+  case 236: return "the texture slot memo two-way (blur_renut_texture_memo_two_way, #17)";
+  case 237: return "a provisional pipeline answer looked up again with its kept key (blur_renut_provisional_key_kept, #18)";
+  case 238: return "runs and resolves wake the render thread as draws do (blur_renut_wake_batch_all, #28)";
+  case 239: return "eight viewports kept, not one (blur_renut_viewport_memo, #32)";
+  case 240: return "the mesh objects' generation raised only by a whole copy's drop (blur_renut_mesh_gen_whole_only, #36)";
   default: {
     // sasrt-nx (2026-11-08): the GPU round's items (sasrt_gpu_round.h: 90 and up).
     const char *name = sasrt::gpu_round::AbName(target);
@@ -1397,6 +1410,8 @@ void StatsGameFrame() {
     REXLOG_INFO("[renut] {}", rr);
   if (const std::string st = ::renut::gpu::census::Report(since); !st.empty())  // blur-nx (2026-11-17, audit #17)
     REXLOG_INFO("[renut] {}", st);
+  if (const std::string hb = ::renut::gpu::host_batch::Report(since); !hb.empty())  // blur-nx (2026-11-18)
+    REXLOG_INFO("[renut] {}", hb);
   if (const std::string rc = ::renut::gpu::ReplayRepeatCensusReport(); !rc.empty())  // banjo-nx (2026-10-26)
     REXLOG_INFO("[renut] {}", rc);
   if (const std::string pc = ::renut::gpu::PacketCensusReport(); !pc.empty())  // banjo-nx (2026-10-28)
@@ -2446,6 +2461,7 @@ void OnRenderThreadStart() {
 #endif
 }
 
+int BackgroundThreadPriority() { return kBackgroundPriority; }  // blur-nx (2026-11-18, #11)
 void OnBackgroundThreadStart(const char *what) {
 #if REX_PLATFORM_SWITCH
   const bool priority_ok = RexSwitchSetCurrentThreadPriorityOk(kBackgroundPriority);
@@ -2709,3 +2725,185 @@ void BanjoTlbTestTick() {
   RexGmLatencyTest([](const char* line) { REXLOG_INFO("{}", line); });
 #endif
 }
+
+// blur-nx (2026-11-18, the Renut host batch: gpu/host_batch.h; docs/renut-host-ideas-25-1118.md). Each switch is exact
+// (the same pixels) and an in-run A/B target (host_batch::kAbBase + its item); the census is a diagnostic.
+REXCVAR_DEFINE_BOOL(blur_renut_record_skip_unused, true, "Banjo/Enhancements",
+                    "blur-nx (#1, #2; A/B 230): while banjo_renut_replay_inherits is on, NewOp builds no resource "
+                    "objects (banjo_renut_resource_objects) and no slot extents (banjo_renut_record_extents): a replay "
+                    "with inherited words uses neither (Blur: every replay)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(blur_renut_inherit_by_chunk, true, "Banjo/Enhancements",
+                    "blur-nx (#3; A/B 231): a replayed op's inherited words are put back from the running device only "
+                    "in the chunks the op applied (ApplyState writes no other), not every inherited run at every op")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(blur_renut_whole_repeat, true, "Banjo/Enhancements",
+                    "blur-nx (#4; A/B 232): a draw whose streams, index buffer, shader and layout are the draw before's, "
+                    "in the same kick and frame and with no export pending, takes that draw's whole-buffer copies "
+                    "without WholeGeometryTry's probes and lookups (their proofs and uses were made by that draw)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_INT32(blur_renut_ring_cleaner_priority, 0x2D, "Banjo/Enhancements",
+                     "blur-nx (#11; A/B 233): the upload ring cleaner's priority on the background core (0x2D: above "
+                     "the game threads' 0x3B, below the render thread and audio), so that it cleans the ranges before "
+                     "the submit needs them instead of the render thread taking them over. 0: the background priority")
+    .range(0, 0x3F)
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(blur_renut_inherit_runs_words, true, "Banjo/Enhancements",
+                    "blur-nx (#13; A/B 234): BuildInheritRuns works on the set-word bitmap a 32-bit word at a time")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(blur_renut_fast_pipeline_two_way, true, "Banjo/Enhancements",
+                    "blur-nx (#16; A/B 235): the fast path's pipeline cache looks in two neighbouring entries (the "
+                    "older one replaced on a miss), not one: its conflicts each made the key and looked it up again")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(blur_renut_texture_memo_two_way, true, "Banjo/Enhancements",
+                    "blur-nx (#17; A/B 236): the texture slot memo looks in two neighbouring entries (the older one "
+                    "replaced on a miss), not one: its misses to another entry each went the bind's whole way")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(blur_renut_provisional_key_kept, true, "Banjo/Enhancements",
+                    "blur-nx (#18; A/B 237): a pipeline cache entry with this draw's inputs from an earlier prebuild "
+                    "epoch is looked up again with the key it holds (made from the same inputs), not a new MakeKey")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(blur_renut_wake_batch_all, false, "Banjo/Enhancements",
+                    "blur-nx (#28; A/B 238): command buffer runs and resolves wake a sleeping render thread as draws do "
+                    "(once banjo_renut_wake_batch items wait; it looks every 2 ms anyway), not at once. The same "
+                    "commands; the Game Master makes fewer wake calls, the render thread may start an item up to 2 ms "
+                    "later")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(blur_renut_viewport_memo, true, "Banjo/Enhancements",
+                    "blur-nx (#32; A/B 239): ComputeViewport keeps its last eight answers by their inputs, not one")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(blur_renut_mesh_gen_whole_only, true, "Banjo/Enhancements",
+                    "blur-nx (#36, found on the way; A/B 240): a cached copy's drop raises the mesh objects' generation "
+                    "(voiding every one of them) only when the copy is a whole buffer's, which alone mesh objects, "
+                    "geometry objects and the whole-repeat answer hold; range copies' drops left them all to miss")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(blur_renut_diag_batch_census, false, "Banjo/Diagnostics",
+                    "blur-nx (2026-11-18, the Renut host batch's census): one 10 s line of counts for the batch's "
+                    "questions (inherited bytes, repeated geometry and texture sets, resolves, uploads, fence waits, "
+                    "conversions by kind, draws without field changes, op growth, stack headers, wakes, the record "
+                    "lock, immediate draws, setter calls). A load and a store a count when on")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+namespace renut::gpu::host_batch {
+Switches g_switches;
+std::atomic<bool> g_ready{false};
+std::atomic<uint64_t> g_count[kCountCount];
+void LatchSwitches() {
+  Switches s;
+  s.on[kSkipUnused] = REXCVAR_GET(blur_renut_record_skip_unused);
+  s.on[kInheritByChunk] = REXCVAR_GET(blur_renut_inherit_by_chunk);
+  s.on[kWholeRepeat] = REXCVAR_GET(blur_renut_whole_repeat);
+  s.on[kCleanerPriority] = REXCVAR_GET(blur_renut_ring_cleaner_priority) > 0;
+  s.on[kInheritWords] = REXCVAR_GET(blur_renut_inherit_runs_words);
+  s.on[kPipelineTwoWay] = REXCVAR_GET(blur_renut_fast_pipeline_two_way);
+  s.on[kTextureTwoWay] = REXCVAR_GET(blur_renut_texture_memo_two_way);
+  s.on[kProvisionalKey] = REXCVAR_GET(blur_renut_provisional_key_kept);
+  s.on[kWakeBatchAll] = REXCVAR_GET(blur_renut_wake_batch_all);
+  s.on[kViewportMemo] = REXCVAR_GET(blur_renut_viewport_memo);
+  s.on[kMeshGenWhole] = REXCVAR_GET(blur_renut_mesh_gen_whole_only);
+  g_switches = s;
+  g_ready.store(true, std::memory_order_release);
+}
+void SetThisThreadPriority(int priority) {
+#if REX_PLATFORM_SWITCH
+  (void)RexSwitchSetCurrentThreadPriorityOk(priority);
+#else
+  (void)priority;
+#endif
+}
+int BackgroundPriority() { return banjo::renut_gpu::BackgroundThreadPriority(); }
+int CleanerPriority() {
+  static const int p = REXCVAR_GET(blur_renut_ring_cleaner_priority);
+  return p;
+}
+bool CensusOn() {
+  static const bool on = REXCVAR_GET(blur_renut_diag_batch_census);
+  return on;
+}
+uint64_t Ticks() {
+#if defined(__SWITCH__)
+  return armGetSystemTick();
+#else
+  return uint64_t(std::chrono::steady_clock::now().time_since_epoch().count());
+#endif
+}
+namespace {
+struct UploadNote {
+  uint32_t va = 0, width = 0, height = 0, format = 0;
+  uint64_t count = 0, bytes = 0;
+};
+std::mutex g_upload_mutex;
+UploadNote g_uploads[32];
+double TickMs() {
+#if defined(__SWITCH__)
+  return 1000.0 / double(armGetSystemTickFreq());
+#else
+  return 1000.0 * double(std::chrono::steady_clock::period::num) / double(std::chrono::steady_clock::period::den);
+#endif
+}
+}  // namespace
+void NoteUpload(uint32_t guest_va, uint32_t width, uint32_t height, uint32_t format, uint64_t bytes) {
+  if (!CensusOn())
+    return;
+  std::lock_guard lock(g_upload_mutex);
+  UploadNote *free_slot = nullptr, *least = &g_uploads[0];
+  for (UploadNote &n : g_uploads) {
+    if (n.count && n.va == guest_va && n.width == width && n.height == height && n.format == format) {
+      ++n.count;
+      n.bytes += bytes;
+      return;
+    }
+    if (!n.count && !free_slot)
+      free_slot = &n;
+    if (n.count < least->count)
+      least = &n;
+  }
+  UploadNote &n = free_slot ? *free_slot : *least;  // (full: the least uploaded one goes)
+  n = {guest_va, width, height, format, 1, bytes};
+}
+std::string Report(double seconds) {
+  if (!CensusOn() || seconds <= 0.0)
+    return {};
+  uint64_t c[kCountCount];
+  for (uint32_t i = 0; i < kCountCount; ++i)
+    c[i] = g_count[i].exchange(0, std::memory_order_relaxed);
+  const double ms = TickMs();
+  const auto per_s = [seconds](uint64_t v) { return double(v) / seconds; };
+  const auto pct = [](uint64_t part, uint64_t whole) { return whole ? 100.0 * double(part) / double(whole) : 0.0; };
+  std::string line = fmt::format(
+      "host batch census (blur_renut_diag_batch_census), a second: #3 inherited words {:.0f} ops, {:.1f} KB as "
+      "before, {:.1f} KB by chunk; #4 whole geometry {:.0f} tries, {:.1f} % the draw before's; #5 texture fills "
+      "{:.0f}, {:.1f} % as the call before, {:.1f} % as one of the 16 before; #6 resolves {:.0f}, {:.2f} ms finding "
+      "the destination, {:.2f} ms their work; #7 texture uploads {:.0f} ({:.1f} MB); #8 fence waits {:.0f} ({:.2f} "
+      "ms), {:.0f} of them kicked their own work; #12 conversions: whole {:.1f} KB, range {:.1f} KB, up {:.1f} KB; "
+      "#19 fast draws {:.0f}, {:.1f} % without a field changed; #20 ops {:.0f}, {:.0f} grew their vector; #21 {:.0f} "
+      "captured stack headers; #28 wakes {:.0f} by draws, {:.0f} by others ({:.2f} ms), record lock waits {:.0f} "
+      "({:.2f} ms); #29 immediate draws {:.0f} ({:.2f} ms queueing); #35 setter calls {:.0f}",
+      per_s(c[kRestoreOps]), per_s(c[kRestoreBytesAll]) / 1024.0, per_s(c[kRestoreBytesChunk]) / 1024.0,
+      per_s(c[kWholeTries]), pct(c[kWholeRepeats], c[kWholeTries]), per_s(c[kTextureSetCalls]),
+      pct(c[kTextureSetSame], c[kTextureSetCalls]), pct(c[kTextureSetSeen], c[kTextureSetCalls]),
+      per_s(c[kResolveCalls]), double(c[kResolveTicksDest]) * ms / seconds, double(c[kResolveTicksWork]) * ms / seconds,
+      per_s(c[kUploadCalls]), per_s(c[kUploadBytes]) / 1048576.0, per_s(c[kFenceWaits]),
+      double(c[kFenceWaitTicks]) * ms / seconds, per_s(c[kFenceWaitsKicked]), per_s(c[kConvertWholeBytes]) / 1024.0,
+      per_s(c[kConvertRangeBytes]) / 1024.0, per_s(c[kConvertUpBytes]) / 1024.0, per_s(c[kFastDraws]),
+      pct(c[kFastDrawsNoFields], c[kFastDraws]), per_s(c[kOps]), per_s(c[kOpGrowths]), per_s(c[kOpsStackHeaders]),
+      per_s(c[kWakesDraw]), per_s(c[kWakesOther]), double(c[kWakeTicks]) * ms / seconds, per_s(c[kRecordLockWaits]),
+      double(c[kRecordLockTicks]) * ms / seconds, per_s(c[kImmediateDraws]), double(c[kImmediateTicks]) * ms / seconds,
+      per_s(c[kSetterCalls]));
+  {
+    std::lock_guard lock(g_upload_mutex);
+    UploadNote sorted[32];
+    std::copy(std::begin(g_uploads), std::end(g_uploads), sorted);
+    std::sort(std::begin(sorted), std::end(sorted),
+              [](const UploadNote &a, const UploadNote &b) { return a.count > b.count; });
+    std::string top;
+    for (int i = 0; i < 8 && sorted[i].count; ++i)
+      top += fmt::format(" {:08X} {}x{} format {} x{} ({:.1f} KB each);", sorted[i].va, sorted[i].width,
+                         sorted[i].height, sorted[i].format, sorted[i].count,
+                         double(sorted[i].bytes) / double(sorted[i].count) / 1024.0);
+    if (!top.empty())
+      line += "; #7 the most uploaded since the start:" + top;
+  }
+  return line;
+}
+}  // namespace renut::gpu::host_batch

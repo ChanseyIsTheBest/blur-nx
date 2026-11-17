@@ -178,6 +178,12 @@ SHIPPED = {
     'banjo_renut_alpha_to_mask_test': "false  # blur-nx (2026-11-17, the trees): alpha to coverage stays on at MSAA 1x, with the GPU's dither (banjo_deko3d_a2c_dither)",
     'banjo_deko3d_a2c_dither': "true  # blur-nx (2026-11-17, the trees): a fading tree is a fine dot pattern instead of vanishing at alpha 0.5 (leaf edges dotted too)",
     'frame_cap': "\"30\"  # blur-nx (2026-11-17, the user: 30 by default, 60 as an option): \"30\" a frame every second refresh of the 60 Hz display, released on the refresh; \"60\" every refresh (the menus at 60, races as fast as they go); \"Off\" no cap",
+    # blur-nx (2026-11-18, the Renut host batch: docs/renut-host-ideas-25-1118.md). Exact: #14's check never matched in
+    # Blur (0 of 131,072 replays), #15's test never skipped a draw (0 in every 10 s window), #31's whole check found 0
+    # chunks changed without a mark in 9,408 a 10 s (it now runs every 256 ops of a device, not 32).
+    'ultimate_renut_replay_inherit_same': "false  # blur-nx (2026-11-18, #14): 0 of 131,072 replays had their inherited words as recorded; its copy and compare cost every replay",
+    'sasrt_gpu_skip_inert_draws': "false  # blur-nx (2026-11-18, #15): 0 draws skipped in every 10 s window of the race; its test ran before every draw",
+    'banjo_renut_tags_check': "256  # blur-nx (2026-11-18, #31): the whole-device check every 256 ops of a device (0 unmarked chunks in 9,408 checks a 10 s at 32)",
 }
 # blur-nx (2026-11-17, the user: "turn diagnostics off in the shipping toml", no A/B): renut.toml without the
 # samplers, the GPU traces, the libnx call counts and the stall watchdog (a dump pauses every game thread); the log

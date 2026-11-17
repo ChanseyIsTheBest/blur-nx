@@ -15,6 +15,7 @@
  */
 #include <rex/frame_latency.h>  // banjo-nx (2026-10-19)
 #include "renut_engine/gpu/stage_census.h"  // blur-nx (2026-11-17, the Renut audit's census)
+#include "renut_engine/gpu/host_batch.h"  // blur-nx (2026-11-18, the Renut host batch)
 #include "renut_engine/display_sync.h"
 #include "renut_engine/gpu/render/pipeline.h"  // banjo-nx (2026-10-20): SyncPipelineListLocked
 #include <algorithm>
@@ -618,12 +619,20 @@ u32 BlockOnFence_hook(u32 device_va, u32 fence, u32 /*type*/, u32 /*no_kick*/) {
   // The fence may wait for callbacks, which this thread runs as the render
   // thread reaches them.
   const auto waiting = std::chrono::steady_clock::now();
+  const bool hb_census = ::renut::gpu::host_batch::CensusOn();  // blur-nx (2026-11-18, the census's #8)
+  const uint64_t hb_t0 = hb_census ? ::renut::gpu::host_batch::Ticks() : 0;
   for (;;) {
     RunReadyCallbacks();
     if (!FencePending(bytes, fence))
       break;
     if (!render_thread::WaitForFenceProgress(std::chrono::milliseconds(2)))
       break;  // no render thread: nothing would complete it
+  }
+  if (hb_census) {
+    ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kFenceWaits);
+    ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kFenceWaitTicks, ::renut::gpu::host_batch::Ticks() - hb_t0);
+    if (!covered)
+      ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kFenceWaitsKicked);
   }
   renut::frame_stats::OnGameThreadWait(
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - waiting).count());

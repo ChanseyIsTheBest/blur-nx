@@ -3,6 +3,7 @@
  */
 #include "renut_engine/gpu/render/draw.h"
 #include "renut_engine/gpu/stage_census.h"  // blur-nx (2026-11-17, the Renut audit's census)
+#include "renut_engine/gpu/host_batch.h"  // blur-nx (2026-11-18, the Renut host batch)
 #include "renut_engine/gpu/render/smaa.h"
 #include "renut_engine/gpu/render/ui_scale.h"  // banjo-nx (2026-10-21, internal resolution)  // banjo-nx (2026-10-21): banjo_renut_smaa
 
@@ -1938,7 +1939,12 @@ ContentVerifier<StreamKey, HashGuestStream> g_stream_verifier;
 void DropCachedCopy(CachedStream &c) {
   if (!c.copy)
     return;
-  ++g_mesh_gen;  // banjo-nx (2026-10-27): mesh objects may name it
+  // blur-nx (2026-11-18, the Renut host batch's #36, blur_renut_mesh_gen_whole_only / A/B 240): mesh objects (and the
+  // geometry objects, the whole-repeat answer) name whole copies alone (WholeStreamCopy marks each entry it answers
+  // 'whole' before it returns), so a range copy's drop leaves them all valid. Every drop raised the generation: the
+  // console race's mesh objects missed 16,562 draws a 10 s as "of an older generation" (generation 5,555 by the end).
+  if (c.whole || !::renut::gpu::host_batch::On(::renut::gpu::host_batch::kMeshGenWhole))
+    ++g_mesh_gen;  // banjo-nx (2026-10-27): mesh objects may name it
   g_stream_cache_bytes -= c.bytes;
   g_copy_pool.Free(c.copy);
   c.copy = {};
@@ -2737,6 +2743,30 @@ ViewportState ComputeViewport(const GuestDevice &device, const Targets &t) {
   static bool valid = false;
   if (valid && std::memcmp(key, last_key, sizeof(key)) == 0)
     return last;
+  // blur-nx (2026-11-18, the Renut host batch's #32, blur_renut_viewport_memo / A/B 239): the last eight answers by
+  // their inputs (the frame goes back and forth between a few viewports: the shadow maps, the scene, the passes after
+  // it). ComputeViewportSlow reads only what the key holds, as the single answer above assumed.
+  if (::renut::gpu::host_batch::On(::renut::gpu::host_batch::kViewportMemo)) {
+    static u32 keys[8][24];
+    static ViewportState states[8];
+    static u32 count = 0, next = 0;
+    for (u32 e = 0; e < count; ++e) {
+      if (std::memcmp(key, keys[e], sizeof(key)) == 0) {
+        last = states[e];
+        std::memcpy(last_key, key, sizeof(key));
+        valid = true;
+        return last;
+      }
+    }
+    last = ComputeViewportSlow(device, t);
+    std::memcpy(keys[next], key, sizeof(key));
+    states[next] = last;
+    next = (next + 1) & 7;
+    count = std::min<u32>(count + 1, 8);
+    std::memcpy(last_key, key, sizeof(key));
+    valid = true;
+    return last;
+  }
   last = ComputeViewportSlow(device, t);
   std::memcpy(last_key, key, sizeof(key));
   valid = true;
@@ -3906,7 +3936,24 @@ TextureSlotMemo g_texture_slot_memo[kTextureMemoEntries];
 
 inline TextureSlotMemo &TextureMemoSlot(u32 texture_va, const TextureFetch &fetch) {
   static_assert(kTextureMemoEntries == 1u << 12);
-  return g_texture_slot_memo[((texture_va ^ (fetch.dword[0] * 0x85EBCA6Bu) ^ fetch.dword[1]) * 0x9E3779B1u) >> 20];
+  const u32 i = ((texture_va ^ (fetch.dword[0] * 0x85EBCA6Bu) ^ fetch.dword[1]) * 0x9E3779B1u) >> 20;
+  // blur-nx (2026-11-18, the Renut host batch's #17, blur_renut_texture_memo_two_way / A/B 236): the entry and its
+  // neighbour, the one holding this texture and fetch words' first two (the hash's inputs), else the one to fill: an
+  // empty one, else the one of the older frame. Every caller checks all the entry's words and epochs itself, so the
+  // answers are those of the entry either way; the race had 17,690 misses to another entry a 10 s (61 a frame), each
+  // the bind's whole way.
+  if (!::renut::gpu::host_batch::On(::renut::gpu::host_batch::kTextureTwoWay))
+    return g_texture_slot_memo[i];
+  TextureSlotMemo &a = g_texture_slot_memo[i], &b = g_texture_slot_memo[i ^ 1u];
+  if (a.va == texture_va && a.device[0] == fetch.dword[0] && a.device[1] == fetch.dword[1])
+    return a;
+  if (b.va == texture_va && b.device[0] == fetch.dword[0] && b.device[1] == fetch.dword[1])
+    return b;
+  if (!a.va && !a.frame)
+    return a;
+  if (!b.va && !b.frame)
+    return b;
+  return a.frame <= b.frame ? a : b;
 }
 
 // banjo-nx (2026-10-20, from sa2-nx, banjo_renut_chain_reuse): 'slot_fx' (32 entries, or null) receives each bound slot's effects (its
@@ -4326,6 +4373,33 @@ void FillTextures(const GuestDevice &device, u32 fetch_mask, SharedConstants &sc
     const TextureSlotMemo &m = TextureMemoSlot(va, fetches[r]);
     if (m.va == va && m.fx.transition[0])
       __builtin_prefetch(&m.fx.transition[0]->layout);
+  }
+  // blur-nx (2026-11-18, the census's #5): how often a call binds the same slots, textures and fetch words as the call
+  // before, or as one of the 16 before it (what a cache of whole texture sets would answer).
+  if (::renut::gpu::host_batch::CensusOn() && fetch_mask) {
+    uint64_t h = uint64_t(fetch_mask) * 0x9E3779B97F4A7C15ull;
+    for (u32 bits = fetch_mask; bits; bits &= bits - 1) {
+      const u32 r = u32(std::countr_zero(bits));
+      h = (h ^ SlotTextureVa(device, r)) * 0xFF51AFD7ED558CCDull;
+      for (u32 k = 0; k < 6; ++k)
+        h = (h ^ fetches[r].dword[k]) * 0xC4CEB9FE1A85EC53ull;
+    }
+    static uint64_t ring[16] = {};
+    static uint64_t last_set = 0;
+    static u32 at = 0;
+    ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kTextureSetCalls);
+    if (h == last_set) {
+      ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kTextureSetSame);
+    } else {
+      for (const uint64_t e : ring) {
+        if (e == h) {
+          ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kTextureSetSeen);
+          break;
+        }
+      }
+      ring[at++ & 15] = last_set;
+      last_set = h;
+    }
   }
   for (u32 bits = fetch_mask; bits; bits &= bits - 1) {
     const u32 r = u32(std::countr_zero(bits));
@@ -4909,6 +4983,7 @@ struct CachedIndices {
   PoolSpan copy;
   u32 bytes = 0, index_count = 0, lo = 0, max_index = 0;
   bool wide = false;
+  bool whole = false;  // blur-nx (2026-11-18, #36): a whole buffer's entry (WholeIndexCopy), as CachedStream's
   uint64_t last_used = 0;               // g_stream_cache_frame
   uint64_t checked_frame = UINT64_MAX;  // frame the range was last hashed or checked in
   uint64_t proven_flush = UINT64_MAX;   // banjo-nx: g_flush_serial the copy was last hashed equal in
@@ -4927,7 +5002,8 @@ ContentVerifier<IndexKey, HashIndices> g_index_verifier;
 void DropCachedIndices(CachedIndices &c) {
   if (!c.copy)
     return;
-  ++g_mesh_gen;  // banjo-nx (2026-10-27): mesh objects may name it
+  if (c.whole || !::renut::gpu::host_batch::On(::renut::gpu::host_batch::kMeshGenWhole))  // blur-nx (2026-11-18, #36): as DropCachedCopy
+    ++g_mesh_gen;  // banjo-nx (2026-10-27): mesh objects may name it
   g_stream_cache_bytes -= c.bytes;
   g_copy_pool.Free(c.copy);
   c.copy = {};
@@ -5879,6 +5955,8 @@ CachedStream *WholeStreamCopy(const StreamKey &key, const HostVertexStream &hs) 
   const PoolSpan copy = g_copy_pool.Allocate(bytes);
   if (!copy)
     return WholeMiss<CachedStream>(kWhyAlloc);
+  if (::renut::gpu::host_batch::CensusOn())  // blur-nx (2026-11-18, the census's #12)
+    ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kConvertWholeBytes, bytes);
   ConvertVertices(hs, key.guest, key.stride, key.count, key.endian, static_cast<u8 *>(copy.cpu));
   c.copy = copy;
   c.bytes = bytes;
@@ -5900,6 +5978,7 @@ CachedIndices *WholeIndexCopy(const IndexKey &key) {
   }
   CachedIndices &c = *g_whole_last_index;
   c.last_used = g_stream_cache_frame;
+  c.whole = true;  // blur-nx (2026-11-18, #36): the mesh objects and the whole-repeat answer may hold it
   if (c.copy)
     return ProveIndexCopy(key, c) ? &c : WholeMiss<CachedIndices>(kWhyIndexDropped);
   if (c.dynamic || !banjo::renut_gpu::StoreCardsOn() || !banjo::renut_gpu::ExactStreamsOn())
@@ -6314,6 +6393,78 @@ void CountKindWhy(const DrawCall &call, const ShaderRecord &vs) {
 }
 
 // The draw from whole-buffer copies when every stream and the index buffer have one (see above); 'copies' the streams'.
+// blur-nx (2026-11-18, the Renut host batch's #4, blur_renut_whole_repeat / A/B 232): the last answer of
+// WholeGeometryTry's full way (its keys' lookups and proofs), kept with what it was made from. A later draw of the same
+// kick and frame (the proofs are a kick's; g_mesh_gen moves with every whole copy's drop) whose shader, strides, layout,
+// streams' words and index buffer header are the same, with no export pending, finds the same entries with the same
+// copies, proven in this kick already: it takes them without the mesh probe, the stream sources, the keys and the
+// lookups. Each copy is checked to be there and proven in this kick (a drop since would show there too).
+struct WholeRepeat {
+  bool valid = false;
+  const ShaderRecord *vs = nullptr;
+  const u32 *strides = nullptr;
+  const HostVertexLayout *layout = nullptr;
+  uint64_t layout_hash = 0, flush = 0, frame = 0, mesh_gen = 0;
+  u32 used = 0;  // the streams answered, a bit each
+  u32 words[kMaxVertexStreams][4] = {};
+  uint64_t min_vertices = 0;
+  bool indexed = false;
+  u32 ib[3] = {};
+  u32 index_total = 0;
+  plume::RenderIndexBufferView index_view{};
+  CachedIndices *ci = nullptr;
+  CachedStream *copies[kMaxVertexStreams] = {};
+};
+WholeRepeat g_whole_repeat;
+[[gnu::always_inline]] inline void WholeRepeatWords(const GuestDevice &device, u32 stream, u32 w[4]) {
+  const u32 fetch_index = d3d::kFirstVertexFetchIndex + d3d::StreamFetchIndex(stream);
+  w[0] = device.VertexFetchWord(fetch_index, 0);
+  w[1] = device.VertexFetchWord(fetch_index, 1);
+  w[2] = device.U32(d3d::kDeviceOffsetStreamSources + stream * 4);
+  w[3] = device.U8(d3d::kDeviceOffsetStreamStrides + stream);
+}
+bool WholeRepeatHit(const GuestDevice &device, const DrawCall &call, const ShaderRecord &vs, const u32 *strides,
+                    const HostVertexLayout &layout, uint64_t layout_hash, int64_t base, Geometry &g,
+                    CachedStream *copies[kMaxVertexStreams]) {
+  const WholeRepeat &r = g_whole_repeat;
+  if (!r.valid || r.vs != &vs || r.strides != strides || r.layout != &layout || r.layout_hash != layout_hash ||
+      r.flush != g_flush_serial || r.frame != g_stream_cache_frame || r.mesh_gen != g_mesh_gen ||
+      r.indexed != call.indexed || uint64_t(base) >= r.min_vertices)
+    return false;
+  for (u32 left = r.used; left; left &= left - 1) {
+    const u32 s = u32(std::countr_zero(left));
+    u32 w[4];
+    WholeRepeatWords(device, s, w);
+    if (w[0] != r.words[s][0] || w[1] != r.words[s][1] || w[2] != r.words[s][2] || w[3] != r.words[s][3])
+      return false;
+    const CachedStream *c = r.copies[s];
+    if (!c || !c->copy || c->proven_flush != g_flush_serial)
+      return false;
+  }
+  if (call.indexed) {
+    const auto *ib = GuestPtr<const d3d::IndexBuffer>(device.U32(d3d::kDeviceOffsetIndexBuffer));
+    if (!ib || u32(ib->resource.Common) != r.ib[0] || u32(ib->Address) != r.ib[1] || u32(ib->Size) != r.ib[2] ||
+        call.count > r.index_total || call.start_index > r.index_total - call.count || !r.ci || !r.ci->copy ||
+        r.ci->proven_flush != g_flush_serial)
+      return false;
+    g.indexed = true;
+    g.index_count = call.count;
+    g.first_index = call.start_index;
+    g.base_vertex = call.base_vertex;
+    g.index_view = r.index_view;
+  } else {
+    g.vertex_count = call.count;
+    g.first_vertex = call.start_vertex;
+  }
+  for (u32 left = r.used; left; left &= left - 1) {
+    const u32 s = u32(std::countr_zero(left));
+    copies[s] = r.copies[s];
+  }
+  g.whole_base = u32(base);
+  g.whole = true;
+  return true;
+}
+
 bool WholeGeometryTry(const GuestDevice &device, const DrawCall &call, const ShaderRecord &vs,
                       const u32 *shader_strides, const HostVertexLayout &layout, uint64_t layout_hash, Geometry &g,
                       CachedStream *copies[kMaxVertexStreams]) {
@@ -6334,6 +6485,18 @@ bool WholeGeometryTry(const GuestDevice &device, const DrawCall &call, const Sha
   const int64_t base = call.indexed ? int64_t(call.base_vertex) : int64_t(call.start_vertex);
   if (base < 0)
     return WholeMiss<void>(kWhyIndexRange) != nullptr;
+  // blur-nx (2026-11-18, #4): the last full answer, when it holds (see WholeRepeat). Not with the recording's resources
+  // (the geometry objects' path), nor with exports pending, nor without the exact rule (its proofs are the kick's).
+  const bool hb_census = ::renut::gpu::host_batch::CensusOn();
+  if (hb_census)
+    ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kWholeTries);
+  const bool repeat_on = !exports_pending && !g_draw_resources && banjo::renut_gpu::ExactStreamsOn() &&
+                         ::renut::gpu::host_batch::On(::renut::gpu::host_batch::kWholeRepeat);
+  if (repeat_on && WholeRepeatHit(device, call, vs, shader_strides, layout, layout_hash, base, g, copies)) {
+    if (hb_census)
+      ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kWholeRepeats);
+    return true;
+  }
   // banjo-nx (2026-10-26, the record-time draw path's round 4, ARM): in three passes, so that the cache misses of the
   // streams and the index buffer overlap instead of following one another (the console profile: the memo slots, the
   // maps' nodes and the copies' fields were most of WholeGeometryLocked's 10 % of the render thread): the keys and the
@@ -6522,6 +6685,34 @@ bool WholeGeometryTry(const GuestDevice &device, const DrawCall &call, const Sha
   // banjo-nx (2026-10-27, #8): kept as the mesh's object (the probe's streams are the keys', in the same order).
   if (mesh && probe.count == key_count)
     MeshObjectKeep(call, probe, layout, layout_hash, vs, shader_strides, u32(base), keys, copies, ci, index_key);
+  // blur-nx (2026-11-18, #4): this answer for the next draws of the kick (WholeRepeat).
+  if (repeat_on) {
+    WholeRepeat &r = g_whole_repeat;
+    r.valid = true;
+    r.vs = &vs;
+    r.strides = shader_strides;
+    r.layout = &layout;
+    r.layout_hash = layout_hash;
+    r.flush = g_flush_serial;
+    r.frame = g_stream_cache_frame;
+    r.mesh_gen = g_mesh_gen;
+    r.used = 0;
+    r.min_vertices = UINT64_MAX;
+    for (u32 i = 0; i < key_count; ++i) {
+      const u32 s = key_streams[i];
+      r.used |= 1u << s;
+      WholeRepeatWords(device, s, r.words[s]);
+      r.copies[s] = copies[s];
+      r.min_vertices = std::min<uint64_t>(r.min_vertices, keys[i].count);
+    }
+    r.indexed = call.indexed;
+    if (call.indexed) {
+      std::memcpy(r.ib, ib_words, sizeof(r.ib));
+      r.index_total = index_key.count;
+      r.index_view = g.index_view;
+      r.ci = ci;
+    }
+  }
   return true;
 }
 bool WholeGeometryLocked(const GuestDevice &device, const DrawCall &call, const ShaderRecord &vs,
@@ -6751,6 +6942,8 @@ bool BindStreams(const GuestDevice &device, const DrawCall &call, const ShaderRe
     if (fills && !reused) {
       if (call.up_vertices && stream == 0) {
         // A copy taken at the call (queued.cpp).
+        if (::renut::gpu::host_batch::CensusOn())  // blur-nx (2026-11-18, the census's #12)
+          ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kConvertUpBytes, uint64_t(count) * hs.host_stride);
         ConvertVertices(hs, guest, src.stride, count, src.endian, static_cast<u8 *>(alloc.cpu));
       } else {
         PendingStreamFill fill;
@@ -9378,6 +9571,8 @@ void FlushVertexFillsLocked() {
       std::memset(f.host + size_t(good) * f.host_stride, 0, size_t(f.count - good) * f.host_stride);
       continue;
     }
+    if (::renut::gpu::host_batch::CensusOn())  // blur-nx (2026-11-18, the census's #12): the range fills at the kick
+      ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kConvertRangeBytes, uint64_t(f.count) * f.host_stride);
     ConvertVertices(g_fill_elements.data() + f.first_element, f.element_count, f.host_stride, f.guest, f.stride,
                     f.count, f.endian, f.host);
     static const bool redeem = REXCVAR_GET(banjo_renut_stream_redeem);  // port 145 (tw2de_nx's), on by default
@@ -10123,6 +10318,7 @@ struct FastPipeline {
   u32 misc = 0;
   bool blend_used = true;  // banjo-nx (2026-10-27): BlendConstantUsed(key)
   bool provisional = true;  // banjo-nx (2026-10-28): the answer holds only for its prebuild epoch (LastPipelineProvisional)
+  uint8_t stamp = 0;  // blur-nx (2026-11-18, #16): g_fast_pipeline_stamp at its last use (the older way is replaced)
   KeyHot hot;
   PipelineKey key{};
 };
@@ -10155,6 +10351,7 @@ inline u32 DrawKindOf(const Targets &t, const ShaderRecord *ps) {
   return ps ? 2u : (t.color_count == 0 && t.depth ? 0u : 1u);
 }
 uint64_t g_fast_pipeline_generation = 1;  // raised by InvalidateFastDrawLocked
+uint8_t g_fast_pipeline_stamp = 0;  // blur-nx (2026-11-18, #16): one more at each use of an entry
 uint64_t g_fast_record_drops = 0;  // banjo-nx (2026-10-28): InvalidateFastDrawForRecordLocked's calls
 uint64_t g_fast_pipeline_hits = 0, g_fast_pipeline_misses = 0;  // the 10 s line's
 // banjo-nx (2026-10-28, per-draw night): the misses by what the slot held: [0] nothing, [1] another pipeline's answer
@@ -10765,6 +10962,11 @@ int FastDrawLocked(const u8 *device_state, const DrawCall &call, const ReplayCon
 #endif
   // From here the draw is the fast path's: the state below is this draw's.
   ++g_trace_draws;
+  if (::renut::gpu::host_batch::CensusOn()) {  // blur-nx (2026-11-18, the census's #19): the draws with no field changed
+    ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kFastDraws);
+    if (!fields)
+      ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kFastDrawsNoFields);
+  }
   SharedConstants &sc = DrawSharedLocked();
   // What the draw before left for its next draw to put back (DrawStateLocked's own steps): the skin mode, the point
   // sprite state, the memexport windows.
@@ -11171,16 +11373,41 @@ int FastDrawLocked(const u8 *device_state, const DrawCall &call, const ReplayCon
                             declaration->layout_hash != f.kp->layout_hash || ab_off == 41)) ||  // A/B 41: as before
                           FetchSpecDiffers(*f.kp, fetch_spec);  // banjo_gpu_fetch_spec; vivapinata-nx (2026-11-12): every draw
   if (key_inputs) {
-    FastPipeline &c = g_fast_pipelines[FastPipelineIndex(f.rs_epoch, vs->entry, ps_entry, declaration->layout_hash,
-                                                         misc)];
+    // blur-nx (2026-11-18, the Renut host batch's #16, blur_renut_fast_pipeline_two_way / A/B 235): the entry and its
+    // neighbour. An entry answers when it was made from this draw's inputs (same_inputs: all that MakeKey reads and the
+    // words set after it) in this generation and prebuild epoch (or not provisional); a miss fills the way with this
+    // draw's inputs from an earlier epoch, else an empty one, else the one used longer ago. The race had 7,652
+    // conflicts a 10 s (27 a frame), each a MakeKey and GetPipelineLocked.
+    const u32 fp_index = FastPipelineIndex(f.rs_epoch, vs->entry, ps_entry, declaration->layout_hash, misc);
+    const auto same_inputs = [&](const FastPipeline &e) {
+      return e.pipeline && e.rs_epoch == f.rs_epoch && e.vs == vs->entry && e.ps == ps_entry &&
+             e.layout_hash == declaration->layout_hash && e.misc == misc &&
+             e.key.fetch_pad == (e.key.pixel_shader ? plain_fetches : 0u) &&  // sasrt-nx
+             (e.key.reserved & 8u) == clip_bit &&  // sasrt-nx (2026-11-08, sasrt_gpu_clip_spec)
+             std::memcmp(e.key.sasrt_words, spec_words.w, sizeof(spec_words.w)) == 0 &&  // sasrt-nx (the third round)
+             !FetchSpecDiffers(e.key, fetch_spec);  // banjo_gpu_fetch_spec; vivapinata-nx (2026-11-12): every draw
+    };
     // banjo-nx (2026-10-28, per-draw night, A/B 63): the prebuild epoch only for a provisional answer.
-    if (c.pipeline && c.rs_epoch == f.rs_epoch && c.vs == vs->entry && c.ps == ps_entry &&
-        c.layout_hash == declaration->layout_hash && c.misc == misc &&
-        (c.prebuild_epoch == prebuild_epoch || (!c.provisional && ab_off != 63)) &&
-        c.generation == g_fast_pipeline_generation && c.key.fetch_pad == (c.key.pixel_shader ? plain_fetches : 0u) &&  // sasrt-nx
-        (c.key.reserved & 8u) == clip_bit &&  // sasrt-nx (2026-11-08, sasrt_gpu_clip_spec)
-        std::memcmp(c.key.sasrt_words, spec_words.w, sizeof(spec_words.w)) == 0 &&  // sasrt-nx (the third round)
-        !FetchSpecDiffers(c.key, fetch_spec)) {  // banjo_gpu_fetch_spec; vivapinata-nx (2026-11-12): every draw
+    const auto answers = [&](const FastPipeline &e) {
+      return same_inputs(e) && (e.prebuild_epoch == prebuild_epoch || (!e.provisional && ab_off != 63)) &&
+             e.generation == g_fast_pipeline_generation;
+    };
+    FastPipeline *cp = &g_fast_pipelines[fp_index];
+    bool hit = answers(*cp);
+    if (!hit && ::renut::gpu::host_batch::On(::renut::gpu::host_batch::kPipelineTwoWay)) {
+      FastPipeline &other = g_fast_pipelines[fp_index ^ 1u];
+      if (answers(other)) {
+        cp = &other;
+        hit = true;
+      } else if (!same_inputs(*cp) &&
+                 (same_inputs(other) || !other.pipeline ||
+                  (cp->pipeline && uint8_t(g_fast_pipeline_stamp - other.stamp) > uint8_t(g_fast_pipeline_stamp - cp->stamp)))) {
+        cp = &other;
+      }
+    }
+    FastPipeline &c = *cp;
+    c.stamp = ++g_fast_pipeline_stamp;
+    if (hit) {
       ++g_fast_pipeline_hits;
       f.kp = &c.key;
       f.kp_hot = c.hot;
@@ -11194,13 +11421,20 @@ int FastDrawLocked(const u8 *device_state, const DrawCall &call, const ReplayCon
                                      ? 1
                                  : c.generation == g_fast_pipeline_generation ? 2
                                                                               : 3];
-      c.key = MakeKey(device, vs, ps, declaration, targets, call.primitive, geometry.per_instance, sc.booleans,
-                      sc.alpha_test_func, fetch_spec);
-      c.key.fetch_pad = c.key.pixel_shader ? plain_fetches : 0u;  // sasrt-nx (2026-11-08, sasrt_gpu_plain_fetches)
-      c.key.reserved = (c.key.reserved & ~8u) | clip_bit;  // sasrt-nx (2026-11-08, sasrt_gpu_clip_spec)
-      std::memcpy(c.key.sasrt_words, spec_words.w, sizeof(spec_words.w));  // sasrt-nx (the third round)
-      c.blend_used = BlendConstantUsed(c.key);
-      c.hot = KeyHot::Of(c.key);
+      // blur-nx (2026-11-18, the Renut host batch's #18, blur_renut_provisional_key_kept / A/B 237): an entry made from
+      // this draw's inputs in this generation (a provisional answer of an earlier prebuild epoch) holds the key MakeKey
+      // would make again: looked up again with it.
+      const bool keep_key = c.generation == g_fast_pipeline_generation && same_inputs(c) &&
+                            ::renut::gpu::host_batch::On(::renut::gpu::host_batch::kProvisionalKey);
+      if (!keep_key) {
+        c.key = MakeKey(device, vs, ps, declaration, targets, call.primitive, geometry.per_instance, sc.booleans,
+                        sc.alpha_test_func, fetch_spec);
+        c.key.fetch_pad = c.key.pixel_shader ? plain_fetches : 0u;  // sasrt-nx (2026-11-08, sasrt_gpu_plain_fetches)
+        c.key.reserved = (c.key.reserved & ~8u) | clip_bit;  // sasrt-nx (2026-11-08, sasrt_gpu_clip_spec)
+        std::memcpy(c.key.sasrt_words, spec_words.w, sizeof(spec_words.w));  // sasrt-nx (the third round)
+        c.blend_used = BlendConstantUsed(c.key);
+        c.hot = KeyHot::Of(c.key);
+      }
       f.kp = &c.key;
       f.kp_hot = c.hot;
       f.blend_used = c.blend_used;
@@ -15737,11 +15971,36 @@ void ResolveStateLocked(const u8 *device_state, u32 flags, const ClearRect *sour
                        dest_y, dest_level, dest_slice, clear_color, clear_depth, clear_stencil);
 }
 
+// blur-nx (2026-11-18, the census's #6): a resolve's time, and how much of it finding its destination.
+struct HbResolveScope {
+    bool on = false;
+    uint64_t t0 = 0, dest = 0;
+    template <typename F>
+    auto Time(F f) {
+      if (!on)
+        return f();
+      const uint64_t t = ::renut::gpu::host_batch::Ticks();
+      auto r = f();
+      dest += ::renut::gpu::host_batch::Ticks() - t;
+      return r;
+    }
+    ~HbResolveScope() {
+      if (!on)
+        return;
+      const uint64_t total = ::renut::gpu::host_batch::Ticks() - t0;
+      ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kResolveCalls);
+      ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kResolveTicksDest, dest);
+      ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kResolveTicksWork, total > dest ? total - dest : 0);
+    }
+};
 void ResolveTargetsLocked(const u32 *targets, u32 flags, const ClearRect *source_rect,
                           u32 dest_texture_va, const d3d::TextureFetchConstant *dest_format,
                           i32 dest_x, i32 dest_y, u32 dest_level, u32 dest_slice,
                           const float clear_color[4], float clear_depth, u32 clear_stencil) {
   ::renut::gpu::census::Scope census_scope(::renut::gpu::census::kResolveSetup);  // blur-nx (2026-11-17)
+  HbResolveScope hb_rs;  // blur-nx (2026-11-18, the census's #6)
+  hb_rs.on = ::renut::gpu::host_batch::CensusOn();
+  hb_rs.t0 = hb_rs.on ? ::renut::gpu::host_batch::Ticks() : 0;
   auto &s = State();
   static const uint32_t kProfileLabel = gpu_profile::Label("resolves");
   gpu_profile::Mark(s, kProfileLabel);
@@ -15837,7 +16096,7 @@ void ResolveTargetsLocked(const u32 *targets, u32 flags, const ClearRect *source
     if (surface->depth) {
       HostTexture *dest =
           dest_level == 0 && dest_slice == 0
-              ? GetDepthResolveTextureLocked(dest_texture_va, surface->scale, dest_format)
+              ? hb_rs.Time([&] { return GetDepthResolveTextureLocked(dest_texture_va, surface->scale, dest_format); })
               : nullptr;
       ClearRect src;
       if (!dest) {
@@ -15893,9 +16152,10 @@ void ResolveTargetsLocked(const u32 *targets, u32 flags, const ClearRect *source
           dest->resolve_signature = 0;
         }
       }
-    } else if (HostTexture *dest = GetResolveTextureLocked(dest_texture_va, surface->format,
-                                                           surface->scale, dest_format,
-                                                           ResolveCoverPixels(surface, source_rect))) {  // port 76 (212)
+    } else if (HostTexture *dest = hb_rs.Time([&] {
+                 return GetResolveTextureLocked(dest_texture_va, surface->format, surface->scale, dest_format,
+                                                ResolveCoverPixels(surface, source_rect));  // port 76 (212)
+               })) {
       SyncColorViewLocked(surface);  // halo3-nx (2026-11-03)
       ClearRect src;
       // A volume's slices are depth; stacked textures and cubes have layers.

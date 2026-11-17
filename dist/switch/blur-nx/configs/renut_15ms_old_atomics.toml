@@ -611,6 +611,9 @@ blur_small_alloc_mb = 32  # blur-nx (2026-11-17, #220): the host's small allocat
 audio_nx_skip_silent_fx = true  # blur-nx (2026-11-17, #197b): a voice silent for 128 frames skips its effect stage
 banjo_async_present = false  # blur-nx (2026-11-17): the present's binder calls on the game thread (tw2de_nx's helper thread off: the user's verdict, no loss)
 banjo_deko3d_a2c_dither = true  # blur-nx (2026-11-17, the trees): a fading tree is a fine dot pattern instead of vanishing at alpha 0.5 (leaf edges dotted too)
+ultimate_renut_replay_inherit_same = false  # blur-nx (2026-11-18, #14): 0 of 131,072 replays had their inherited words as recorded; its copy and compare cost every replay
+sasrt_gpu_skip_inert_draws = false  # blur-nx (2026-11-18, #15): 0 draws skipped in every 10 s window of the race; its test ran before every draw
+banjo_renut_tags_check = 256  # blur-nx (2026-11-18, #31): the whole-device check every 256 ops of a device (0 unmarked chunks in 9,408 checks a 10 s at 32)
 blur_guest_cas_relaxed = false
 blur_guest_fences_split = false
 

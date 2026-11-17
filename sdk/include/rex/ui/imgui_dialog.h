@@ -39,6 +39,11 @@ class ImGuiDialog {
 
   void Draw();
 
+  // blur-nx (2026-11-18, the Renut host batch's #27, ui_skip_hidden_dialogs): whether the dialog draws anything now. While
+  // no dialog does, ImGuiDrawer::Draw builds no ImGui frame (the overlays attached for good, hidden, built an empty one
+  // at every present: ~0.2 ms a frame of the UI thread). A dialog that draws only sometimes answers false otherwise.
+  virtual bool WantsFrame() const { return true; }
+
  protected:
   ImGuiDialog(ImGuiDrawer* imgui_drawer);
 

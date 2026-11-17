@@ -4,6 +4,7 @@
  *          list management for the native renderer.
  */
 #include "renut_engine/gpu/backend/video.h"
+#include "renut_engine/gpu/host_batch.h"  // blur-nx (2026-11-18, the Renut host batch)
 
 #include <cstdio>
 #include <mutex>
@@ -712,9 +713,25 @@ private:
 
   void Run() {
     banjo::renut_gpu::OnBackgroundThreadStart("ring cleaner");
+    // blur-nx (2026-11-18, the Renut host batch's #11, blur_renut_ring_cleaner_priority / A/B 233): above the game
+    // threads on the background core, so that the ranges are clean before a submit needs them (the race: the render
+    // thread cleaned 835 of 1,946 ranges a 10 s itself, the cleaner behind the game threads there). Set again when the
+    // A/B half changes it.
+    int priority = ::renut::gpu::host_batch::BackgroundPriority();
+    const auto follow = [&priority] {
+      const int want = ::renut::gpu::host_batch::On(::renut::gpu::host_batch::kCleanerPriority)
+                           ? ::renut::gpu::host_batch::CleanerPriority()
+                           : ::renut::gpu::host_batch::BackgroundPriority();
+      if (want != priority) {
+        ::renut::gpu::host_batch::SetThisThreadPriority(want);
+        priority = want;
+      }
+    };
+    follow();
     std::unique_lock lock(mutex_);
     for (;;) {
       cv_.wait(lock, [this] { return !queue_.empty(); });
+      follow();
       const Job job = queue_.front();
       queue_.pop_front();
       working_ = job.ticket;

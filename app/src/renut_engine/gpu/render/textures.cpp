@@ -3,6 +3,7 @@
  */
 #include "renut_engine/gpu/render/textures.h"
 #include "renut_engine/gpu/stage_census.h"  // blur-nx (2026-11-17, the Renut audit's census)
+#include "renut_engine/gpu/host_batch.h"  // blur-nx (2026-11-18, the Renut host batch)
 
 #include <algorithm>
 #include <bit>
@@ -472,6 +473,13 @@ uint64_t g_zero_rechecks = 0, g_zero_reuploads = 0, g_zero_marked = 0;
 // when the command list is submitted if 'defer_read'.
 bool Upload(HostTexture &t, const TextureFetch &fetch, bool defer_read) {
   ::renut::gpu::census::Scope census_scope(::renut::gpu::census::kUpload);  // blur-nx (2026-11-17)
+  // blur-nx (2026-11-18, the census's #7 and #24): which textures upload again, and how much.
+  if (::renut::gpu::host_batch::CensusOn()) {
+    const uint64_t bytes = uint64_t(t.width) * t.height * 4;  // (a size's measure: four bytes a texel)
+    ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kUploadCalls);
+    ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kUploadBytes, bytes);
+    ::renut::gpu::host_batch::NoteUpload(t.guest_va, t.width, t.height, uint32_t(t.guest_format), bytes);
+  }
   FlushResolveMipsLocked(t);  // banjo-nx (2026-10-28, banjo_renut_lazy_resolve_mips): from the level 0 the resolves left
   // banjo-nx (2026-10-19, render-thread proposal 1): the interval the guest bytes are read in: now, or at the next
   // kick's flush (FlushTextureFillsLocked, right after FlushVertexFillsLocked starts a new interval; a later one is

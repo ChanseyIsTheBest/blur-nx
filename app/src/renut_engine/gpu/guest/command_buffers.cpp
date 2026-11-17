@@ -3,6 +3,7 @@
  */
 #include "renut_engine/gpu/guest/command_buffers.h"
 #include "renut_engine/gpu/stage_census.h"  // blur-nx (2026-11-17, the Renut audit's census)
+#include "renut_engine/gpu/host_batch.h"  // blur-nx (2026-11-18, the Renut host batch)
 
 #include <algorithm>
 #include <array>
@@ -526,6 +527,12 @@ struct HostCommandBuffer {
   u32 set_words[(d3d::kDeviceSnapshotSize / 4 + 31) / 32] = {};
   std::vector<std::pair<u32, u32>> inherit_runs;  // offset, bytes
   bool inherit_built = false;
+  // blur-nx (2026-11-18, the Renut host batch's #3, blur_renut_inherit_by_chunk): the same runs cut at the chunks'
+  // edges, in chunk order, and each chunk's first run (inherit_chunk_at[i] .. [i + 1]); their bytes, for the census.
+  std::vector<std::pair<u32, u32>> inherit_chunk_runs;
+  std::array<uint16_t, kPlainChunks + 1> inherit_chunk_at{};
+  bool inherit_chunk_ready = false;
+  u32 inherit_bytes = 0;
   // renut-ultimate (audit, 2026-11-07, ultimate_renut_replay_inherit_same): the inherited runs' bytes as op 0 recorded them
   // (every op had them so), one after another; empty when unknown.
   std::vector<u8> inherit_recorded;
@@ -1463,8 +1470,63 @@ void BuildInheritRuns(HostCommandBuffer &buffer) {
       buffer.inherit_runs.emplace_back(start, at - start);
     }
   };
-  add(kFetchBegin, kVertexShaderF);
-  add(kInheritTailBegin, d3d::kDeviceSnapshotSize);
+  // blur-nx (2026-11-18, the Renut host batch's #13, blur_renut_inherit_runs_words): the same runs found a 32-bit word
+  // of the bitmap at a time (a run of set words skipped by its count of ones, a run of unset ones by its zeros): the
+  // loop above tested ~890 words one by one at every recording's first replay (0.18 ms a frame of the render thread).
+  const auto add_words = [&](u32 from, u32 to) {
+    const u32 b1 = to / 4;
+    for (u32 b = from / 4; b < b1;) {
+      const u32 bits = buffer.set_words[b >> 5] >> (b & 31);
+      const u32 avail = std::min<u32>(32 - (b & 31), b1 - b);
+      if (bits & 1) {
+        b += std::min<u32>(u32(std::countr_one(bits)), avail);
+        continue;
+      }
+      const u32 start = b;
+      for (;;) {
+        const u32 w = buffer.set_words[b >> 5] >> (b & 31);
+        const u32 av = std::min<u32>(32 - (b & 31), b1 - b);
+        const u32 z = std::min<u32>(w ? u32(std::countr_zero(w)) : 32u, av);
+        b += z;
+        if (z < av || b >= b1)
+          break;
+      }
+      buffer.inherit_runs.emplace_back(start * 4, (b - start) * 4);
+    }
+  };
+  static_assert(kFetchBegin % 4 == 0 && kVertexShaderF % 4 == 0 && kInheritTailBegin % 4 == 0 &&
+                d3d::kDeviceSnapshotSize % 4 == 0);
+  if (::renut::gpu::host_batch::On(::renut::gpu::host_batch::kInheritWords)) {
+    add_words(kFetchBegin, kVertexShaderF);
+    add_words(kInheritTailBegin, d3d::kDeviceSnapshotSize);
+  } else {
+    add(kFetchBegin, kVertexShaderF);
+    add(kInheritTailBegin, d3d::kDeviceSnapshotSize);
+  }
+  // #3: the runs cut at the chunks' edges (a run lies in the fetch constants' chunks or in the tail's).
+  buffer.inherit_chunk_runs.clear();
+  buffer.inherit_bytes = 0;
+  {
+    u32 chunk = 0;
+    buffer.inherit_chunk_at[0] = 0;
+    for (const auto &[offset0, bytes0] : buffer.inherit_runs) {
+      buffer.inherit_bytes += bytes0;
+      for (u32 offset = offset0, left = bytes0; left;) {
+        const u32 c = offset < kVertexShaderF ? (offset - kFetchBegin) / kChunkBytes
+                                              : kFetchChunks + (offset - kTailBegin) / kChunkBytes;
+        const u32 end = ChunkOffset(c) + ChunkSize(c);
+        const u32 n = std::min<u32>(left, end - offset);
+        while (chunk < c)
+          buffer.inherit_chunk_at[++chunk] = uint16_t(buffer.inherit_chunk_runs.size());
+        buffer.inherit_chunk_runs.emplace_back(offset, n);
+        offset += n;
+        left -= n;
+      }
+    }
+    while (chunk < kPlainChunks)
+      buffer.inherit_chunk_at[++chunk] = uint16_t(buffer.inherit_chunk_runs.size());
+    buffer.inherit_chunk_ready = buffer.inherit_chunk_runs.size() < 65536;
+  }
   // renut-ultimate (audit, 2026-11-07, ultimate_renut_replay_inherit_same): op 0 keeps every chunk (CopyState: the fetch
   // constants' bytes, then the tail's); a run lies in one of the two.
   static_assert(kInheritTailBegin >= kTailBegin, "an inherited tail run lies in the recorded tail");
@@ -2270,7 +2332,15 @@ Op *NewOp(u32 device_va, OpKind kind, HostCommandBuffer **out_buffer) {
     mask = 0;
   ForgetSnapshotDeltas(device);  // banjo-nx (2026-10-20, from sa2-nx): the masks went to the buffer, not to the next delta (queued.cpp)
 
+  // blur-nx (2026-11-18, the Renut host batch's census, #20): an op vector that grew at this op.
+  const bool hb_census = ::renut::gpu::host_batch::CensusOn();
+  const size_t ops_capacity = hb_census ? buffer.ops.capacity() : 0;
   Op &op = buffer.ops.emplace_back();
+  if (hb_census) {
+    ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kOps);
+    if (buffer.ops.capacity() != ops_capacity)
+      ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kOpGrowths);
+  }
   op.kind = kind;
   op.vs_set = set.vs;
   op.ps_set = set.ps;
@@ -2281,8 +2351,11 @@ Op *NewOp(u32 device_va, OpKind kind, HostCommandBuffer **out_buffer) {
   {
     StackHeaderSet headers;  // blur-nx (2026-11-10, port 76; its key 215: blur_renut_stack_surface_headers)
     CaptureStackHeaders(bytes, headers);
-    if (headers.count)
+    if (headers.count) {
       buffer.stack_headers.emplace_back(u32(buffer.ops.size() - 1), headers);
+      if (hb_census)  // blur-nx (2026-11-18, the census's #21)
+        ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kOpsStackHeaders);
+    }
   }
   if (kind == OpKind::Draw) {
     u32 vs_word;
@@ -2378,13 +2451,22 @@ Op *NewOp(u32 device_va, OpKind kind, HostCommandBuffer **out_buffer) {
   op.vs_dirty = first ? (first_groups ? set.vs : ~uint64_t(0)) : vs_dirty;
   op.ps_dirty = first ? (first_groups ? set.ps : ~uint64_t(0)) : ps_dirty;
   // banjo-nx (2026-10-28, per-draw night): the resources planned first (their table lines in flight over the copy).
-  static const bool resource_objects = ResourceObjectsOn();
+  // blur-nx (2026-11-18, the Renut host batch's #1 and #2, blur_renut_record_skip_unused / A/B 230): a replay with inherited
+  // words (banjo_renut_replay_inherits, and not ultimate_renut_replay_inherit_same's case) reads neither the resource
+  // objects nor the slot extents (Replay: use_resources and g_draw_slot_extents need !inherits), and an op without them
+  // replays as one recorded with the keys off. Blur: every replay inherits (0 of 131,072 as recorded), yet each op
+  // planned and made its objects (FinishResources 0.44 ms a frame, the lookups' 2,000 a frame) and its extents
+  // (RecordExtents 0.39 ms), and the render thread applied and prefetched them.
+  static const bool replays_inherit = REXCVAR_GET(banjo_renut_replay_inherits);
+  const bool skip_unused = replays_inherit && ::renut::gpu::host_batch::On(::renut::gpu::host_batch::kSkipUnused);
+  static const bool resource_objects_key = ResourceObjectsOn();
+  const bool resource_objects = resource_objects_key && !skip_unused;
   ResourcePlan plan;
   if (resource_objects)
     PlanResources(plan, bytes, op.plain_dirty, kind, touch_slot);
   op.state = CopyState(buffer, bytes, op.plain_dirty, op.vs_dirty, op.ps_dirty);
   // banjo-nx (2026-10-27): the changed texture slots' extents (banjo_renut_record_extents).
-  if (RecordExtentsOn())
+  if (RecordExtentsOn() && !skip_unused)
     op.extents = RecordExtents(buffer, bytes, op.plain_dirty, touch_slot);
   // banjo-nx (2026-10-27, Phase A): the op's resources (banjo_renut_resource_objects).
   if (resource_objects)
@@ -2849,6 +2931,10 @@ void Replay(const u8 *running, const BufferSet &buffers, u32 command_buffer_va, 
   // as recorded is the recorded device: no copies, and the record's answers below hold.
   const bool inherit_same = inherits_on && InheritedAsRecorded(buffer, running);
   const bool inherits = inherits_on && !inherit_same;
+  // blur-nx (2026-11-18, the Renut host batch's #3, blur_renut_inherit_by_chunk / A/B 231): see the op loop.
+  const bool inherit_by_chunk = inherits && buffer.inherit_chunk_ready &&
+                                ::renut::gpu::host_batch::On(::renut::gpu::host_batch::kInheritByChunk);
+  const bool hb_census = ::renut::gpu::host_batch::CensusOn();
   if (inherits_on) {
     ++g_inherit_replays;
     g_inherit_same_replays += inherit_same;
@@ -3090,8 +3176,34 @@ void Replay(const u8 *running, const BufferSet &buffers, u32 command_buffer_va, 
     const uint64_t op_start = kinds ? RenderTicks() : 0;
     ApplyState(state, buffer.arena.data() + op.state, op.plain_dirty, op.vs_dirty, op.ps_dirty, groups);
     if (inherits && op.plain_dirty) {
-      for (const auto &[offset, bytes] : buffer.inherit_runs)
-        std::memcpy(state + offset, running + offset, bytes);
+      // blur-nx (2026-11-18, #3): ApplyState wrote the op's chunks alone, so the inherited words outside them still hold
+      // the running device's values from the restore after an earlier op (the buffer's first op applies every chunk, and
+      // a replay that inherits takes no sorted runs): only the applied chunks' inherited runs are put back. The image
+      // is the same after each op as with every run copied (up to 3.5 KB at each op that applied a chunk).
+      if (inherit_by_chunk) {
+        u32 copied = 0;
+        for (uint64_t bits = op.plain_dirty & kAllChunks; bits; bits &= bits - 1) {
+          const u32 c = u32(std::countr_zero(bits));
+          for (u32 k = buffer.inherit_chunk_at[c], end = buffer.inherit_chunk_at[c + 1]; k < end; ++k) {
+            const auto &[offset, bytes] = buffer.inherit_chunk_runs[k];
+            std::memcpy(state + offset, running + offset, bytes);
+            copied += bytes;
+          }
+        }
+        if (hb_census) {
+          ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kRestoreOps);
+          ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kRestoreBytesAll, buffer.inherit_bytes);
+          ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kRestoreBytesChunk, copied);
+        }
+      } else {
+        for (const auto &[offset, bytes] : buffer.inherit_runs)
+          std::memcpy(state + offset, running + offset, bytes);
+        if (hb_census) {
+          ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kRestoreOps);
+          ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kRestoreBytesAll, buffer.inherit_bytes);
+          ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kRestoreBytesChunk, buffer.inherit_bytes);
+        }
+      }
     }
     if (op.extents != kNoExtents)
       ApplyExtents(extents, buffer.arena.data() + op.extents);
@@ -3339,6 +3451,7 @@ void BeginRecording(u32 device_va, u32 command_buffer_va) {
   std::memset(slot->set_words, 0, sizeof(slot->set_words));  // halo3-nx (2026-11-03)
   slot->inherit_runs.clear();
   slot->inherit_built = false;
+  slot->inherit_chunk_ready = false;  // blur-nx (2026-11-18, #3)
   if (const auto *device = GuestPtr<const d3d::Device>(device_va)) {
     set.vs = u64(device->m_Pending[0]);
     set.ps = u64(device->m_Pending[1]);
@@ -4209,7 +4322,16 @@ void QueueRunCommandBuffer(u32 device_va, u32 command_buffer_va) {
   auto run = NewRun();  // blur-nx (2026-11-17, blur_renut_run_pool)
   run->running.assign(device, device + d3d::kDeviceSnapshotSize);
   {
+    // blur-nx (2026-11-18, the Renut host batch's census, #28): the time to take the record lock here (the Game Master).
+    const bool hb_census = ::renut::gpu::host_batch::CensusOn();
+    const uint64_t t0 = hb_census ? ::renut::gpu::host_batch::Ticks() : 0;
     std::lock_guard lock(g_record_mutex);
+    if (hb_census) {
+      const uint64_t waited = ::renut::gpu::host_batch::Ticks() - t0;
+      ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kRecordLockTicks, waited);
+      if (waited > 19)  // over about a microsecond (the 19.2 MHz counter)
+        ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kRecordLockWaits);
+    }
     CaptureBuffers(command_buffer_va, 0, run->buffers);
   }
   // banjo-nx (2026-10-27, banjo_renut_shadow_sort): each captured recording's sorted runs, here and not on the render

@@ -15,6 +15,7 @@
 #include <map>
 
 #include <rex/assert.h>
+#include <rex/cvar.h>  // blur-nx (2026-11-18): ui_skip_hidden_dialogs
 #include <rex/chrono/clock.h>
 #include <rex/logging.h>
 #include <rex/platform.h>
@@ -402,6 +403,14 @@ void ImGuiDrawer::SetImmediateDrawer(ImmediateDrawer* new_immediate_drawer) {
   }
 }
 
+// blur-nx (2026-11-18, the Renut host batch's #27).
+REXCVAR_DEFINE_BOOL(ui_skip_hidden_dialogs, true, "UI",
+                    "blur-nx (2026-11-18): no ImGui frame (NewFrame, the dialogs, Render, the immediate drawer's begin "
+                    "and end) while no attached dialog draws anything (ImGuiDialog::WantsFrame): the FPS, log and "
+                    "profiler overlays stay attached while hidden. The Switch's input is still read for the shortcuts' "
+                    "state")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
   // Drawing is initiated by the presenter (SDK mode), or by the app in detached
   // mode (config.graphics == nullptr), where there is no presenter.
@@ -418,6 +427,29 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
 
   if (dialogs_.empty()) {
     return;
+  }
+
+#if REX_PLATFORM_SWITCH
+  static nx::StateUiEntry state_entry;  // (the Switch block below's, kept here for the skipped frames too)
+#endif
+  // blur-nx (2026-11-18, #27): nothing to draw: no frame (the Switch's buttons read for the shortcuts' state).
+  static const bool skip_hidden = REXCVAR_GET(ui_skip_hidden_dialogs);
+  if (skip_hidden) {
+    bool wanted = false;
+    for (const ImGuiDialog* dialog : dialogs_)
+      wanted = wanted || dialog->WantsFrame();
+    if (!wanted) {
+#if REX_PLATFORM_SWITCH
+      ImGui::SetCurrentContext(internal_state_);
+      const float to_logical = PhysicalToLogical(window_);
+      nx::UiEntry entry;
+      nx::ReadUiEntry(entry, float(window_->GetActualPhysicalWidth()) / 1280.0f * to_logical,
+                      float(window_->GetActualPhysicalHeight()) / 720.0f * to_logical);
+      nx::TrackShortcuts(entry.connected_gamepad ? entry.buttons : 0, state_entry);
+#endif
+      last_frame_time_ticks_ = rex::chrono::Clock::QueryHostTickCount();
+      return;
+    }
   }
 
   ImGui::SetCurrentContext(internal_state_);
@@ -444,7 +476,6 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
     // events: HID is read here, on the UI thread and before NewFrame. While a menu
     // is open, Draw repeats continuously (see the end). There is a single
     // ImGuiDrawer per process. The touch panel always measures 1280x720.
-    static nx::StateUiEntry state_entry;
     nx::UiEntry entry;
     nx::ReadUiEntry(entry,
                       float(window_->GetActualPhysicalWidth()) / 1280.0f * physical_to_logical,

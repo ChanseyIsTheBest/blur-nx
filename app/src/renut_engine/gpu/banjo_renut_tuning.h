@@ -117,6 +117,8 @@ void OnPrebuildWorkerStart();
 // On any other background worker of the renderer, as it starts (the content verifier, render/draw.cpp): the
 // background core and priority, as the prebuild workers.
 void OnBackgroundThreadStart(const char *what);
+// blur-nx (2026-11-18, the Renut host batch's #11): OnBackgroundThreadStart's priority.
+int BackgroundThreadPriority();
 // How many prebuild workers to start; Renut's own count off the Switch.
 uint32_t PrebuildWorkers(uint32_t renut_count);
 // banjo-nx (2026-10-28, the heap): banjo_renut_prebuild_release_s (0: prebuilt pipelines stay).

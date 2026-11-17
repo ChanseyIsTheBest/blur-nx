@@ -2,6 +2,7 @@
  * @file    gpu/backend/queued.cpp
  */
 #include "renut_engine/gpu/backend/queued.h"
+#include "renut_engine/gpu/host_batch.h"  // blur-nx (2026-11-18, the Renut host batch)
 
 #include <algorithm>
 #include <atomic>
@@ -1100,6 +1101,18 @@ void PrefetchDeltaLines(u32 device_va) {
 }
 
 void QueueDraw(u32 device_va, const DrawCall &call, u32 up_vertex_bytes, u32 up_index_bytes) {
+  // blur-nx (2026-11-18, the census's #29): the immediate draws and their queueing time on the game threads.
+  struct HbScope {
+    bool on;
+    uint64_t t0;
+    ~HbScope() {
+      if (on) {
+        ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kImmediateDraws);
+        ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kImmediateTicks, ::renut::gpu::host_batch::Ticks() - t0);
+      }
+    }
+  } hb_scope{::renut::gpu::host_batch::CensusOn(),
+             ::renut::gpu::host_batch::CensusOn() ? ::renut::gpu::host_batch::Ticks() : 0};
   NoteDrawer(device_va);  // blur-nx (2026-11-13, M-31's census)
   const bool deltas = DeltasOn();  // bangaio-nx (2026-10-29, ARM): its static's guard read once, not three times
   if (deltas && DeltaPrefetchOn())
