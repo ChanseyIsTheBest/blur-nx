@@ -336,10 +336,12 @@ renut_post_process_precision = "Game"
 # and hid the river water on deko3d). banjo_gpu_blend_skip above is our native renderer's now; this is Renut's.
 # configs/banjo_renut_blendskip_ab.toml turns it on again, switched every 4 s, for a comparison only.
 banjo_renut_blend_skip = false
-# Package 31 (2026-10-18, the visual fixes; docs/deko3d-renderer.md section 12). Alpha to coverage with MSAA off is an
-# alpha test at 0.5, as the native renderer does: the GPU's own dither drew the grass, fur and foliage edges as a checker
-# pattern (the "non-square pixels"). configs/banjo_renut_a2c_dither.toml has the old way.
-banjo_renut_alpha_to_mask_test = true
+# Alpha to coverage with MSAA off (2026-11-17, the user's clips: trees disappearing and reappearing). Blur fades the
+# trees near the camera through alpha to coverage; on the 360 (4x) a fading tree goes pale and see-through (the
+# emulated renderer shows it). As an alpha test at 0.5 (package 31's way, true here) a tree vanished at half its fade
+# and came back. Now the GPU's own coverage dither (banjo_deko3d_a2c_dither below): a fading tree is a fine dot
+# pattern, the leaves' edges too. Console A/B: 30.44 against 30.64 fps (noise), GPU +0.5 ms.
+banjo_renut_alpha_to_mask_test = false
 # The depth resolve's words carry the stencil, whose bit the depth of field tests to keep the characters sharp (Kazooie
 # blurred in close-ups without it). configs/banjo_renut_words_no_stencil.toml has the old way.
 banjo_renut_depth_words_stencil = true
@@ -623,6 +625,8 @@ audio_nx_skip_silent_fx = true
 
 # The present's binder calls on a helper thread (tw2de_nx's async present): off, the user's verdict of 2026-11-17 (no loss).
 banjo_async_present = false
+# The trees (2026-11-17): the GPU's alpha-to-coverage dither at MSAA 1x, with banjo_renut_alpha_to_mask_test = false above.
+banjo_deko3d_a2c_dither = true
 [input_p1]
 a = ""
 b = ""
