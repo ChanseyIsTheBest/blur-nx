@@ -14789,27 +14789,28 @@ bool HandOverResolveLocked(HostSurface *s, HostTexture *d, const ClearRect &src,
                            bool words) {
   const bool whole = src.x1 == 0 && src.y1 == 0 && src.x2 == int32_t(s->width) && src.y2 == int32_t(s->height) &&
                      dest_x == 0 && dest_y == 0;
-  // blur-nx (2026-11-17): a resolve drawn from the view's sample grid is not left in the view's image (above).
-  const bool grid = !s->depth && banjo::renut_gpu::ColorHandOverOn() && SampleGridResolveWantedLocked(s, d);
-  if (grid) [[unlikely]] {
+  const bool kind_on = s->depth ? banjo::renut_gpu::DepthHandOverOn() && !words
+                                : banjo::renut_gpu::ColorHandOverOn() &&
+                                      (!banjo::renut_gpu::SmaaOn() ||  // sasrt-nx (2026-11-08, sasrt_gpu_handover_with_smaa)
+                                       sasrt::gpu_round::On(sasrt::gpu_round::kHandoverSmaa)) &&
+                                      ResolveCopyPossible(s, d) &&
+                                      !(s->sasrt_fixed16 && banjo::renut_gpu::Fixed16ClampOn()) &&  // its resolve clamps
+                                      !detail::ReadbackDestination(d);  // the CPU reads it (sasrt_renut_resolve_readback)
+  bool can = IsDeko3D() && kind_on && whole && s->texture &&
+             s->samples == plume::RenderSampleCount::COUNT_1 && d->width == s->width &&
+             d->height == s->height && d->scale == s->scale && d->alloc_width == s->scale.Size(s->width) &&
+             d->alloc_height == s->scale.Size(s->height) && d->dimension == TextureDimension::Tex2D &&
+             !d->stacked && d->extra_levels == 0 && d->mip_levels == 1;
+  // blur-nx (2026-11-17): a resolve drawn from the view's sample grid is not left in the view's image (above). Looked at
+  // only for a resolve that could be left there otherwise (the hand-over on: G1 with SMAA, or SMAA off).
+  if (can && !s->depth && SampleGridResolveWantedLocked(s, d)) [[unlikely]] {
+    can = false;
     static u32 logged = 0;
     if (LogLimited(logged, 4))
       RGPU_INFO("[renut] colour hand-over: the resolve of a {}x{} {}x view is drawn from its sample grid, not left in the "
                 "view's image (blur_renut_sample_grid_resolve)", s->width, s->height,
                 ((u32(s->info_word) >> 16) & 3) == 2 ? 4 : 2);
   }
-  const bool kind_on = s->depth ? banjo::renut_gpu::DepthHandOverOn() && !words
-                                : banjo::renut_gpu::ColorHandOverOn() && !grid &&
-                                      (!banjo::renut_gpu::SmaaOn() ||  // sasrt-nx (2026-11-08, sasrt_gpu_handover_with_smaa)
-                                       sasrt::gpu_round::On(sasrt::gpu_round::kHandoverSmaa)) &&
-                                      ResolveCopyPossible(s, d) &&
-                                      !(s->sasrt_fixed16 && banjo::renut_gpu::Fixed16ClampOn()) &&  // its resolve clamps
-                                      !detail::ReadbackDestination(d);  // the CPU reads it (sasrt_renut_resolve_readback)
-  const bool can = IsDeko3D() && kind_on && whole && s->texture &&
-                   s->samples == plume::RenderSampleCount::COUNT_1 && d->width == s->width &&
-                   d->height == s->height && d->scale == s->scale && d->alloc_width == s->scale.Size(s->width) &&
-                   d->alloc_height == s->scale.Size(s->height) && d->dimension == TextureDimension::Tex2D &&
-                   !d->stacked && d->extra_levels == 0 && d->mip_levels == 1;
   // kameo-nx (2026-11-03, diagnostic): why a colour resolve was drawn (the colour hand-over's 10 s line).
   if (!can && !s->depth) {
     const bool same_size = d->width == s->width && d->height == s->height && d->scale == s->scale;
