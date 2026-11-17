@@ -110,3 +110,18 @@ GPU extras:
 | G3 | not built as designed: the edge pass also writes the depth mask (D16) that lets the weights and blend passes skip most pixels, which a compute shader cannot write. A luma pre-pass (R32F, exact) with gathers in the edge pass would cut 5 RGBA reads to 1 + 2 gathers, ~0.3 ms at most |
 | G4 | PS EFE544B8F1999133 (1.52 ms, 1 draw): 6 taps of a 64-bit texture a pixel (5.5 M taps a frame), at the texture units' half rate for that format: fetch-bound, nothing for an ALU pass |
 | G5 | the depth hand-over takes ~1.2 depth resolves a frame and draws every one after all (a depth write follows): those copies are needed; the 1.88 ms (two screens' worth) is next to split by the stage census's resolve setup and a GPU split of decompress vs copy |
+
+### PC checks (2026-11-17 10:06-10:29, the PC build of b416ed69)
+
+- **audit_census** (420 s, every new key at its default, the stage census on): no errors, the same warning kinds as
+  with the keys off; the race renders as before (captures at 60-360 s).
+  - #4/#5: 1,196 resolve destinations made per 10 s (~2 a frame), every one for "another host format" (a texture at
+    one address resolved into in two formats in turn); the pool served all of them (1,196 reused, 0 made new). The
+    cause would need a destination per (address, format); with the pool each remake no longer makes an image.
+  - #31: the 10 s report takes 0.49-0.53 ms on the game thread: nothing to move.
+  - #17-#22, #30 on the PC: the fast draw path is not taken there (FastDrawLocked 0.04 us a call, DrawStateLocked
+    7.2 us a draw at 45,000 draws a second), so the console's census is the one that counts. ResolveTargetsLocked costs
+    17 us of CPU a resolve (7 a frame); NewOp 1.7 us an op (33,000 a second); Upload 28 us (119 a second).
+- **audit_off** (300 s, the batch's keys off): no errors; the remakes are made new (no pool), as before.
+- **audit_guard** (600 s, banjo_cpu_verify): 542 million calls of the copies compared, 0 differences (934 differed once
+  and not when repeated: inputs changed by another thread meanwhile); the generated-code self-checks 0 differences.
