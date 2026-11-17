@@ -14768,14 +14768,38 @@ uint32_t ResolveCoverPixels(const HostSurface *surface, const ClearRect *source_
   return w > 0 && h > 0 ? uint32_t(w) * uint32_t(h) : 0;
 }
 
+// blur-nx (2026-11-17, G1: the colour hand-over in Blur): ResolveTarget draws this resolve from the view's sample grid
+// (blur_renut_sample_grid_resolve, port 76's key 216; the same test as there): the console's resolve averages the samples
+// of a 4x (2x) view, which are the 2x2 (1x2) blocks of the single-sampled target of twice its pitch, drawn after the view.
+// The view's own image is not what that resolve reads, so the resolve is never left in it. Blur's 640x360 half-size scene,
+// the motion blur's source, is such a view over its 1280x720 post target: left in the view's image it was black, and with
+// the colour hand-over on (sasrt_gpu_handover_with_smaa, or SMAA off) the race darkened with speed and the mirror went
+// black in Ryujinx, and the console flickered at the mirror and the car's back.
+bool SampleGridResolveWantedLocked(const HostSurface *s, const HostTexture *d) {
+  if (s->depth || !banjo::renut_gpu::SampleGridResolveOn() || d->host_format != s->format ||
+      ((u32(s->info_word) >> 16) & 3) == 0)
+    return false;
+  const HostSurface *grid = SampleGridAliasLocked(s);
+  return grid && grid->blur_draw_seq > s->blur_draw_seq;
+}
+
 // A resolve into 'd' left in the target's image when it can be (true). Otherwise (false, the resolve is drawn) a
 // destination still holding other content gets it first when the resolve does not cover it.
 bool HandOverResolveLocked(HostSurface *s, HostTexture *d, const ClearRect &src, i32 dest_x, i32 dest_y,
                            bool words) {
   const bool whole = src.x1 == 0 && src.y1 == 0 && src.x2 == int32_t(s->width) && src.y2 == int32_t(s->height) &&
                      dest_x == 0 && dest_y == 0;
+  // blur-nx (2026-11-17): a resolve drawn from the view's sample grid is not left in the view's image (above).
+  const bool grid = !s->depth && banjo::renut_gpu::ColorHandOverOn() && SampleGridResolveWantedLocked(s, d);
+  if (grid) [[unlikely]] {
+    static u32 logged = 0;
+    if (LogLimited(logged, 4))
+      RGPU_INFO("[renut] colour hand-over: the resolve of a {}x{} {}x view is drawn from its sample grid, not left in the "
+                "view's image (blur_renut_sample_grid_resolve)", s->width, s->height,
+                ((u32(s->info_word) >> 16) & 3) == 2 ? 4 : 2);
+  }
   const bool kind_on = s->depth ? banjo::renut_gpu::DepthHandOverOn() && !words
-                                : banjo::renut_gpu::ColorHandOverOn() &&
+                                : banjo::renut_gpu::ColorHandOverOn() && !grid &&
                                       (!banjo::renut_gpu::SmaaOn() ||  // sasrt-nx (2026-11-08, sasrt_gpu_handover_with_smaa)
                                        sasrt::gpu_round::On(sasrt::gpu_round::kHandoverSmaa)) &&
                                       ResolveCopyPossible(s, d) &&
