@@ -62,7 +62,7 @@ namespace plume {
 
     // blur-nx (2026-11-13, the console crash of 21:16: deko3d aborted the process when dkMemBlockCreate failed to map a
     // GPU-region block during a race load, with 1.8 GB of the heap free): the blocks live and their bytes, and before
-    // every dkMemBlockCreate a breadcrumb in this thread's TLS (bytes 0x140-0x1A3: libnx leaves 0x100-0x1DF unused; the
+    // every dkMemBlockCreate a breadcrumb in this thread's TLS (bytes 0x138-0x17B since 2026-11-17, below; the
     // IPC buffer below is what deko3d's own calls overwrite), which Atmosphère's crash report dumps with the thread: the
     // request that failed, the blocks live then, the GPU region's size and the process's system resource (the kernel
     // memory its mappings use).
@@ -76,7 +76,12 @@ namespace plume {
         uint32_t sysUsedKb, sysTotalKb, seq;
         char what[24];
     };
-    static_assert(sizeof(BlockCrumb) <= 0x1E0 - 0x140, "the crumb fits libnx's unused TLS bytes");
+    // blur-nx (2026-11-17, RR6's finding in the base): 0x180-0x1DF are libnx's twelve thread-local slots (threadTlsGet reads
+    // tpidrro_el0 + 8 * slot + 0x180), so the crumb at 0x140 overwrote the low half of slot 0's pointer (the first pthread
+    // key, likely libstdc++'s thread_local destructor list) on every thread that made a block. Now 0x138-0x17B, as the base.
+    static constexpr size_t kBlockCrumbAt = 0x138;
+    static_assert(kBlockCrumbAt >= 0x108 && kBlockCrumbAt + sizeof(BlockCrumb) <= 0x180,
+                  "the crumb stays below libnx's TLS slots (0x180-0x1DF)");
     static void systemResource(uint64_t &used, uint64_t &total) {
         used = total = 0;
         svcGetInfo(&total, InfoType_SystemResourceSizeTotal, CUR_PROCESS_HANDLE, 0);
@@ -97,7 +102,7 @@ namespace plume {
         c.sysTotalKb = uint32_t(total >> 10);
         c.seq = g_blockCrumbSeq.fetch_add(1, std::memory_order_relaxed);
         std::strncpy(c.what, what ? what : "", sizeof(c.what) - 1);
-        auto *tls = static_cast<volatile uint8_t *>(armGetTls()) + 0x140;
+        auto *tls = static_cast<volatile uint8_t *>(armGetTls()) + kBlockCrumbAt;
         const auto *from = reinterpret_cast<const uint8_t *>(&c);
         for (size_t i = 0; i < sizeof(c); ++i)
             tls[i] = from[i];
