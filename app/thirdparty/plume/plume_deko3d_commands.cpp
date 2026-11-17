@@ -166,7 +166,15 @@ namespace plume {
         boundImageSetObj = nullptr;
         texSizeValid = 0;
         // Whatever the GPU holds of descriptors and shader code from before is dropped.
-        dkCmdBufBarrier(cmd, DkBarrier_None, DkInvalidateFlags_Descriptors | DkInvalidateFlags_Shader);
+        // blur-nx (2026-11-17, the crashes loading new maps; plume_deko3d.cpp's code placement): DkInvalidateFlags_Shader
+        // drops the shader caches, not the L2, which may hold code memory the GPU prefetched before a program was loaded
+        // there. The L2 too when code was loaded since this list was last recorded (seenCode is that recording's).
+        {
+            const bool codeLoaded = device->codeEpoch.load(std::memory_order_relaxed) != seenCode;
+            dkCmdBufBarrier(cmd, DkBarrier_None,
+                            DkInvalidateFlags_Descriptors | DkInvalidateFlags_Shader |
+                                (codeLoaded ? uint32_t(DkInvalidateFlags_L2Cache) : 0u));
+        }
         // sasrt-nx (2026-11-08, Deko3DOptions::tiledCache): on (or off again once it has been on: the A/B halves).
         {
             static bool everOn = false;
@@ -234,8 +242,9 @@ namespace plume {
         const uint64_t c = device->codeEpoch.load(std::memory_order_relaxed);
         const uint64_t epoch = d ^ (c << 40);
         if (epoch != descriptorEpoch) {
+            // blur-nx (2026-11-17): code loaded since: the L2 as well (its prefetched lines; see begin above).
             uint32_t flags = (d != seenDescriptors ? uint32_t(DkInvalidateFlags_Descriptors) : 0u) |
-                             (c != seenCode ? uint32_t(DkInvalidateFlags_Shader) : 0u);
+                             (c != seenCode ? uint32_t(DkInvalidateFlags_Shader | DkInvalidateFlags_L2Cache) : 0u);
             if (!flags)
                 flags = DkInvalidateFlags_Descriptors | DkInvalidateFlags_Shader;
             flushBarriers();

@@ -2316,7 +2316,17 @@ namespace plume {
         }
         std::lock_guard<std::mutex> lock(codeMutex);
         const uint32_t size = uint32_t(dksh.size());
-        if (codeBlocks.empty() || alignUp(codeBlocks.back().second, DK_SHADER_CODE_ALIGNMENT) + size > CodeBlockSize - DK_SHADER_CODE_UNUSABLE_SIZE) {
+        // blur-nx (2026-11-17, the console's crashes loading new maps: dk::Queue::flush raised DkResult_Fail on the render
+        // thread, a GPU exception, each time in a stretch of run-time shader compiles that draws waited for): the GPU
+        // prefetches shader code up to DK_SHADER_CODE_UNUSABLE_SIZE (1 KiB) past the end of the program it runs, into its
+        // L2 (the code is GpuCached). A program loaded later right after it (256 bytes on) could then run from the
+        // prefetched lines, the memory as it was before the program was written: a draw waiting for its variant used it
+        // at once. Each program now starts past the prefetch zone of the one before (and command lists invalidate the L2
+        // after a code load as well: plume_deko3d_commands.cpp).
+        const auto place = [](uint32_t end) {
+            return end ? alignUp(end + DK_SHADER_CODE_UNUSABLE_SIZE, DK_SHADER_CODE_ALIGNMENT) : 0u;
+        };
+        if (codeBlocks.empty() || place(codeBlocks.back().second) + size > CodeBlockSize - DK_SHADER_CODE_UNUSABLE_SIZE) {
             if (size > CodeBlockSize - DK_SHADER_CODE_UNUSABLE_SIZE) {
                 logf("shader %s: %u bytes of DKSH do not fit a code block", what, size);
                 return false;
@@ -2328,7 +2338,7 @@ namespace plume {
             logf("shader code: block %zu (16 MiB)", codeBlocks.size());
         }
         auto &cb = codeBlocks.back();
-        const uint32_t at = alignUp(cb.second, DK_SHADER_CODE_ALIGNMENT);
+        const uint32_t at = place(cb.second);
         memcpy(static_cast<uint8_t *>(dkMemBlockGetCpuAddr(cb.first)) + at, dksh.data(), size);
         // sasrt-nx (2026-11-09, Deko3DOptions::expSphStoreBits): an EXPERIMENT on a vertex program's header bits
         if (g_deko3dOptions.expSphStoreBits) {
