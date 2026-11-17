@@ -2752,6 +2752,13 @@ ViewportState ComputeViewport(const GuestDevice &device, const Targets &t) {
     static u32 count = 0, next = 0;
     for (u32 e = 0; e < count; ++e) {
       if (std::memcmp(key, keys[e], sizeof(key)) == 0) {
+        if (::renut::gpu::host_batch::VerifyOn()) {  // blur-nx (2026-11-18): the kept answer against one made now
+          const ViewportState now = ComputeViewportSlow(device, t);
+          if (std::memcmp(&now, &states[e], sizeof(now)) != 0) {
+            ::renut::gpu::host_batch::VerifyDiffer("#32: a kept viewport differs from the one computed");
+            states[e] = now;
+          }
+        }
         last = states[e];
         std::memcpy(last_key, key, sizeof(key));
         valid = true;

@@ -97,6 +97,9 @@ enum Count : uint32_t {
 };
 extern std::atomic<uint64_t> g_count[kCountCount];
 bool CensusOn();
+// blur_renut_host_batch_verify (off): #3, #13 and #32 checked against the old way, differences logged.
+bool VerifyOn();
+void VerifyDiffer(const char *what);
 // One recording thread a count, or a lost increment between two (a census): a load and a store, no read-modify-write
 // loop (the A57 has no LSE atomics).
 [[gnu::always_inline]] inline void Add(Count c, uint64_t v = 1) {

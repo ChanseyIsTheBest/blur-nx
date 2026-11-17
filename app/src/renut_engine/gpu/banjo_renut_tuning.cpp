@@ -2777,6 +2777,11 @@ REXCVAR_DEFINE_BOOL(blur_renut_mesh_gen_whole_only, true, "Banjo/Enhancements",
                     "(voiding every one of them) only when the copy is a whole buffer's, which alone mesh objects, "
                     "geometry objects and the whole-repeat answer hold; range copies' drops left them all to miss")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(blur_renut_host_batch_verify, false, "Banjo/Debug",
+                    "blur-nx (2026-11-18, the Renut host batch): #3's restored image checked to hold every inherited "
+                    "run of the running device after each op, #13's runs made both ways and compared, #32's kept "
+                    "viewports computed again and compared; differences counted and logged (the first 16)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(blur_renut_diag_batch_census, false, "Banjo/Diagnostics",
                     "blur-nx (2026-11-18, the Renut host batch's census): one 10 s line of counts for the batch's "
                     "questions (inherited bytes, repeated geometry and texture sets, resolves, uploads, fence waits, "
@@ -2819,6 +2824,17 @@ int CleanerPriority() {
 bool CensusOn() {
   static const bool on = REXCVAR_GET(blur_renut_diag_batch_census);
   return on;
+}
+bool VerifyOn() {
+  static const bool on = REXCVAR_GET(blur_renut_host_batch_verify);
+  return on;
+}
+void VerifyDiffer(const char *what) {
+  static std::atomic<uint32_t> logged{0};
+  static std::atomic<uint64_t> total{0};
+  const uint64_t n = total.fetch_add(1, std::memory_order_relaxed) + 1;
+  if (logged.fetch_add(1, std::memory_order_relaxed) < 16 || (n & 1023) == 0)
+    REXLOG_WARN("[renut] blur_renut_host_batch_verify: {} ({} differences so far)", what, n);
 }
 uint64_t Ticks() {
 #if defined(__SWITCH__)

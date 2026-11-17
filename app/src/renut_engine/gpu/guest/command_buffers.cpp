@@ -1499,6 +1499,14 @@ void BuildInheritRuns(HostCommandBuffer &buffer) {
   if (::renut::gpu::host_batch::On(::renut::gpu::host_batch::kInheritWords)) {
     add_words(kFetchBegin, kVertexShaderF);
     add_words(kInheritTailBegin, d3d::kDeviceSnapshotSize);
+    if (::renut::gpu::host_batch::VerifyOn()) {  // blur-nx (2026-11-18): the runs the word loop made against the old loop's
+      std::vector<std::pair<u32, u32>> words_way;
+      words_way.swap(buffer.inherit_runs);
+      add(kFetchBegin, kVertexShaderF);
+      add(kInheritTailBegin, d3d::kDeviceSnapshotSize);
+      if (words_way != buffer.inherit_runs)
+        ::renut::gpu::host_batch::VerifyDiffer("#13: BuildInheritRuns' word runs differ from the old loop's");
+    }
   } else {
     add(kFetchBegin, kVertexShaderF);
     add(kInheritTailBegin, d3d::kDeviceSnapshotSize);
@@ -3194,6 +3202,14 @@ void Replay(const u8 *running, const BufferSet &buffers, u32 command_buffer_va, 
           ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kRestoreOps);
           ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kRestoreBytesAll, buffer.inherit_bytes);
           ::renut::gpu::host_batch::Add(::renut::gpu::host_batch::kRestoreBytesChunk, copied);
+        }
+        if (::renut::gpu::host_batch::VerifyOn()) {  // blur-nx (2026-11-18): every inherited run holds the running device's words
+          for (const auto &[offset, bytes] : buffer.inherit_runs) {
+            if (std::memcmp(state + offset, running + offset, bytes) != 0) {
+              ::renut::gpu::host_batch::VerifyDiffer("#3: an inherited run outside the op's chunks differs from the running device");
+              std::memcpy(state + offset, running + offset, bytes);
+            }
+          }
         }
       } else {
         for (const auto &[offset, bytes] : buffer.inherit_runs)
