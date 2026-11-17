@@ -157,12 +157,36 @@ SHIPPED = {
     # configs/renut_smaa.toml for the user to decide on. Banjo's fur-shell cuts (also its user's calls) act only on Banjo's
     # four fur shaders (render/draw.cpp, by pixel shader hash): inert for Blur, set to the game's own all the same.
     'banjo_renut_smaa': "true  # blur-nx: SMAA after Blur's two composites, with no MSAA by default (the user, 2026-11-12: 'turn off x4 MSAA change it to SMAA')",
-    'banjo_renut_smaa_after_ps': "\"91C0712EC807B3DF,B20CDC973266527B\"  # blur-nx: Blur's two final composites (the tone-mapped 3D image before the HUD; it draws one or the other each frame: their draws a frame add up to 1.0 in every GPU profile block of two races; the first from a race frame's draw log, 2026-11-12). N&B's 981A6A58F2ABFA42 never ran in Blur, so SMAA did nothing. Also the composite the internal resolution scales after (docked: the 3D at 720, the HUD at 1080)",
+    # 2026-11-17 (the user: "SMAA doesn't apply to the car and other 3d elements" in the menus): the menus' composite
+    # A9E86A6D9393D9B8 (a draw log of the event screen in Ryujinx: the opaque full-screen pass before the menus' overlay
+    # E73A2A5EE04E082A and the UI; in no race frame). SMAA had run on no menu frame; now on every one with 3D.
+    'banjo_renut_smaa_after_ps': "\"91C0712EC807B3DF,B20CDC973266527B,A9E86A6D9393D9B8\"  # blur-nx: Blur's two race composites (the tone-mapped 3D image before the HUD; one or the other each frame) and the menus' (A9E86A6D9393D9B8, 2026-11-17: SMAA had run on no menu frame, the car's edges stair-stepped). Also the composite the internal resolution scales after (docked: the 3D at 720, the HUD at 1080)",
     'banjo_renut_fur_shells': '1',
     'banjo_renut_portrait_fur_shells': '1',
     'banjo_renut_fur_shells_percent': '100',
     'banjo_renut_portrait_fur_shells_percent': '100',
+    # 2026-11-17, the 24-hour run (docs/run-24h-1117.md): the first batch's keys; async present off (the user's verdict
+    # after the console A/B, no loss); the trees at MSAA 1x (the user's clips: trees near the camera disappeared and
+    # reappeared; on the 360 at 4x a fading tree goes see-through, the emulated renderer shows it: the GPU's own
+    # coverage dither instead of an alpha test at 0.5; console A/B 30.44 against 30.64 fps); the frame cap (the user:
+    # 30 by default, 60 as an option).
+    'audio_nx_voice_floor': "0.001  # blur-nx (2026-11-17): a voice under -60 dB takes the game's own inaudible path",
+    'audio_nx_skip_silent_rows': "true  # blur-nx (2026-11-17, #197): a mixer child whose rows are all zero is not mixed",
+    'blur_small_alloc_mb': "32  # blur-nx (2026-11-17, #220): the host's small allocations from a 32 MB arena (0: the system allocator)",
+    'audio_nx_skip_silent_fx': "true  # blur-nx (2026-11-17, #197b): a voice silent for 128 frames skips its effect stage",
+    'banjo_async_present': "false  # blur-nx (2026-11-17): the present's binder calls on the game thread (tw2de_nx's helper thread off: the user's verdict, no loss)",
+    'banjo_renut_alpha_to_mask_test': "false  # blur-nx (2026-11-17, the trees): alpha to coverage stays on at MSAA 1x, with the GPU's dither (banjo_deko3d_a2c_dither)",
+    'banjo_deko3d_a2c_dither': "true  # blur-nx (2026-11-17, the trees): a fading tree is a fine dot pattern instead of vanishing at alpha 0.5 (leaf edges dotted too)",
+    'frame_cap': "\"30\"  # blur-nx (2026-11-17, the user: 30 by default, 60 as an option): \"30\" a frame every second refresh of the 60 Hz display, released on the refresh; \"60\" every refresh (the menus at 60, races as fast as they go); \"Off\" no cap",
 }
+# blur-nx (2026-11-17, the user: "turn diagnostics off in the shipping toml", no A/B): renut.toml without the
+# samplers, the GPU traces, the libnx call counts and the stall watchdog (a dump pauses every game thread); the log
+# stays at info (the 10 s [renut] lines, for a report). renut_logs.toml keeps them on, and so do the A/B and test
+# configs, which are made from it.
+DIAG_OFF = {'switch_profile_stacks': 'false', 'switch_perf_count_calls': 'false', 'renut_gpu_profile': '0.0',
+            'banjo_renut_diag_resolve_trace': 'false', 'banjo_renut_diag_gpu_shaders': 'false',
+            'banjo_renut_diag_terrain': 'false', 'banjo_stall_watch_seconds': '0',
+            'banjo_stall_watch_quiet_seconds': '0'}
 PLAY = {'log_level': '"error"', 'banjo_renut_diag_resolve_trace': 'false', 'banjo_renut_diag_gpu_shaders': 'false',
         'banjo_renut_diag_terrain': 'false', 'switch_profile_stacks': 'false', 'banjo_cpu_profiler': 'false',
         'banjo_renut_diag_fast_census': 'false', 'banjo_renut_diag_shadow_census': 'false',
@@ -177,7 +201,9 @@ PLAY = {'log_level': '"error"', 'banjo_renut_diag_resolve_trace': 'false', 'banj
 # EDRAM wipe, 219 the resolve exponent bias, 220 the EDRAM inheritance, 221 the multisampled slice resolves.
 AB = {'banjo_renut_ab_targets': '"25,28,22,26,33,42,45,46,48,70,211,212,213,214,215,216,217,218,219,220,221,1"',
       'banjo_renut_ab_s': '30',
-      'banjo_renut_dynamic_resolution': 'false'}
+      'banjo_renut_dynamic_resolution': 'false',
+      # blur-nx (2026-11-17): uncapped, so an A/B sees a speed difference the shipped 30 fps cap would hide.
+      'frame_cap': '"Off"'}
 VERIFY = {k: 'true' for k in (
     'banjo_renut_fast_draw_verify', 'banjo_renut_resource_objects_verify', 'banjo_renut_fetch_cache_verify',
     'banjo_renut_whole_buffers_verify', 'banjo_renut_persistent_shared_verify', 'banjo_renut_chain_reuse_verify',
@@ -296,6 +322,18 @@ def base_text():
     t = re.sub(r'^katamari_[a-z_]+\s*=.*\n', '', t, flags=re.M)
     t = re.sub(r'# Title update 3 \(2026-10-29\).*?renut_guard\.toml[^\n]*\n', '', t, flags=re.S)
     t = t.replace('sdmc:/switch/katamari-nx/', 'sdmc:/switch/blur-nx/').replace('katamari-nx', 'blur-nx')
+    # blur-nx (2026-11-17): the comments over the two keys the 24-hour run changed (SHIPPED sets the keys).
+    t = re.sub(r'# Package 31 \(2026-10-18, the visual fixes;.*?has the old way\.\n',
+               "# Alpha to coverage with MSAA off (blur-nx, 2026-11-17, the user's clips: trees disappearing and\n"
+               "# reappearing). Blur fades the trees near the camera through alpha to coverage; on the 360 (4x) a fading tree\n"
+               "# goes pale and see-through. As an alpha test at 0.5 (package 31's way, true here) a tree vanished at half its\n"
+               "# fade and came back; with banjo_deko3d_a2c_dither the GPU's own coverage dither draws it as a fine dot pattern.\n",
+               t, count=1, flags=re.S)
+    t = re.sub(r'# Frame pacing \(your "it likes 20 if it cannot hold 30"\):.*?puts the game\'s own pacing back\.\n',
+               '# Frame rate cap (blur-nx, 2026-11-17, the user: 30 by default, 60 as an option): frame_cap "30", "60" or\n'
+               "# \"Off\". The game does not wait for the display's vblanks itself (its present interval was rounded every\n"
+               '# frame to 33 or 50 ms); the cap releases each frame on a refresh of the 60 Hz display.\n',
+               t, count=1, flags=re.S)
     return t
 
 
@@ -309,9 +347,12 @@ def main():
     ap.add_argument('--out', default=os.path.join(ROOT, 'dist', 'switch', 'blur-nx'))
     a = ap.parse_args()
     shipped = apply(base_text(), SHIPPED)
-    write(os.path.join(a.out, 'renut.toml'), 'the shipped settings, with logs (720 lines both modes, the game\'s MSAA)',
-          shipped)
-    write(os.path.join(a.out, 'renut_play.toml'), 'the shipped settings with the diagnostics off', apply(shipped, PLAY))
+    write(os.path.join(a.out, 'renut.toml'), 'the shipped settings (720 lines both modes, no MSAA + SMAA, the 30 fps '
+          'cap; the diagnostics off)', apply(shipped, DIAG_OFF))
+    write(os.path.join(a.out, 'renut_logs.toml'), 'the shipped settings with the diagnostics on (samplers, GPU traces: '
+          'for a test run)', shipped)
+    write(os.path.join(a.out, 'renut_play.toml'), 'the shipped settings with the diagnostics off and the log at error',
+          apply(apply(shipped, DIAG_OFF), PLAY))
     write(os.path.join(a.out, 'renut_ab.toml'), 'the shipped settings with an in-run A/B (30 s halves, target 1 as the '
           'do-nothing control)', apply(shipped, AB))
     for name, (keys, what) in CONFIGS.items():

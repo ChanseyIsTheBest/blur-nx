@@ -331,10 +331,11 @@ renut_post_process_precision = "Game"
 # and hid the river water on deko3d). banjo_gpu_blend_skip above is our native renderer's now; this is Renut's.
 # configs/banjo_renut_blendskip_ab.toml turns it on again, switched every 4 s, for a comparison only.
 banjo_renut_blend_skip = false
-# Package 31 (2026-10-18, the visual fixes; docs/deko3d-renderer.md section 12). Alpha to coverage with MSAA off is an
-# alpha test at 0.5, as the native renderer does: the GPU's own dither drew the grass, fur and foliage edges as a checker
-# pattern (the "non-square pixels"). configs/banjo_renut_a2c_dither.toml has the old way.
-banjo_renut_alpha_to_mask_test = true
+# Alpha to coverage with MSAA off (blur-nx, 2026-11-17, the user's clips: trees disappearing and
+# reappearing). Blur fades the trees near the camera through alpha to coverage; on the 360 (4x) a fading tree
+# goes pale and see-through. As an alpha test at 0.5 (package 31's way, true here) a tree vanished at half its
+# fade and came back; with banjo_deko3d_a2c_dither the GPU's own coverage dither draws it as a fine dot pattern.
+banjo_renut_alpha_to_mask_test = false  # blur-nx (2026-11-17, the trees): alpha to coverage stays on at MSAA 1x, with the GPU's dither (banjo_deko3d_a2c_dither)
 # The depth resolve's words carry the stencil, whose bit the depth of field tests to keep the characters sharp (Kazooie
 # blurred in close-ups without it). configs/banjo_renut_words_no_stencil.toml has the old way.
 banjo_renut_depth_words_stencil = true
@@ -522,11 +523,11 @@ banjo_renut_diag_resolve_trace = true
 # 1280x720 pass in ms, with draws a frame), to see where deko3d's GPU time goes. Its timestamps cost a little GPU and
 # render thread time; false gives the plain profile.
 banjo_renut_diag_gpu_shaders = true
-# Frame pacing (your "it likes 20 if it cannot hold 30"): the game no longer waits for the display's vblanks itself
-# (its present interval rounded every frame to 33 or 50 ms); the frame cap holds 30 and a frame rate between 20 and 30
-# shows as it is. configs/banjo_pacing_game.toml puts the game's own pacing back.
+# Frame rate cap (blur-nx, 2026-11-17, the user: 30 by default, 60 as an option): frame_cap "30", "60" or
+# "Off". The game does not wait for the display's vblanks itself (its present interval was rounded every
+# frame to 33 or 50 ms); the cap releases each frame on a refresh of the 60 Hz display.
 target_refreshRate = -1
-frame_cap = "Off"
+frame_cap = "30"  # blur-nx (2026-11-17, the user: 30 by default, 60 as an option): "30" a frame every second refresh of the 60 Hz display, released on the refresh; "60" every refresh (the menus at 60, races as fast as they go); "Off" no cap
 
 # ---- Controls per player (2026-10-21, from sa2-nx). Keep these sections at the END of the file: in TOML every line
 # after a [section] header belongs to that section. ----
@@ -603,8 +604,13 @@ audio_stereo_mix = true  # blur-nx: the game mixes stereo (5.1 23.4 -> 25.2 fps 
 audio_switch_pump_pairs = true  # blur-nx: M-43, two audio frames every 10.7 ms (+5.3 ms latency; with stereo 25.2 -> 25.4 fps)
 audio_stereo_frame_gain = 1.38  # blur-nx: +2.8 dB on the stereo race frames (the 5.1 mix's level; the user, 2026-11-13)
 pacman_vblank_display_sync = false  # blur-nx: off (17.7 -> 20.8 fps on the console); configs/renut_vblank_sync.toml: on
-banjo_renut_smaa_after_ps = "91C0712EC807B3DF,B20CDC973266527B"  # blur-nx: Blur's two final composites (the tone-mapped 3D image before the HUD; it draws one or the other each frame: their draws a frame add up to 1.0 in every GPU profile block of two races; the first from a race frame's draw log, 2026-11-12). N&B's 981A6A58F2ABFA42 never ran in Blur, so SMAA did nothing. Also the composite the internal resolution scales after (docked: the 3D at 720, the HUD at 1080)
+banjo_renut_smaa_after_ps = "91C0712EC807B3DF,B20CDC973266527B,A9E86A6D9393D9B8"  # blur-nx: Blur's two race composites (the tone-mapped 3D image before the HUD; one or the other each frame) and the menus' (A9E86A6D9393D9B8, 2026-11-17: SMAA had run on no menu frame, the car's edges stair-stepped). Also the composite the internal resolution scales after (docked: the 3D at 720, the HUD at 1080)
+audio_nx_voice_floor = 0.001  # blur-nx (2026-11-17): a voice under -60 dB takes the game's own inaudible path
+audio_nx_skip_silent_rows = true  # blur-nx (2026-11-17, #197): a mixer child whose rows are all zero is not mixed
+blur_small_alloc_mb = 32  # blur-nx (2026-11-17, #220): the host's small allocations from a 32 MB arena (0: the system allocator)
+audio_nx_skip_silent_fx = true  # blur-nx (2026-11-17, #197b): a voice silent for 128 frames skips its effect stage
 banjo_async_present = false
+banjo_deko3d_a2c_dither = true  # blur-nx (2026-11-17, the trees): a fading tree is a fine dot pattern instead of vanishing at alpha 0.5 (leaf edges dotted too)
 
 [input_p1]
 a = ""
