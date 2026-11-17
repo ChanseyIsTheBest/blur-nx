@@ -519,6 +519,12 @@ REXCVAR_DEFINE_BOOL(banjo_deko3d_compile_wait_boost, true, "Banjo/Enhancements",
                     "(appletSetCpuBoostMode FastLoad: CPU 1785 MHz, the GPU at 76.8 MHz, which has nothing new to do "
                     "while the frame waits), normal again the moment the compile is done. Background compiles and "
                     "those the pipeline prebuild waits for never boost. The deko3d report line counts the boosts");
+REXCVAR_DEFINE_BOOL(banjo_deko3d_diag_gpu_fault, false, "Banjo/Diagnostics",
+                    "deko3d renderer (blur-nx, 2026-11-17, the map-load crashes): every draw and dispatch noted in a ring, and "
+                    "every submission waited for and the queue checked, so the first submission the GPU faults in is logged "
+                    "with its draws ('GPU FAULT DIAG' lines: pipelines by Renut's vs/ps hashes, counts, targets). The CPU "
+                    "waits for the GPU at every kick: a test, not for play. Read at start")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(banjo_deko3d_fast_first_compile, true, "Banjo/Enhancements",
                     "deko3d renderer (mk9-nx 2026-10-24; port 56): a shader compile a draw waits for (a generic variant "
                     "missing from the DKSH cache; the game stopped) is a single back-end pass, about a quarter of a "
@@ -1836,6 +1842,7 @@ int Deko3DCompileCore() {
 int Deko3DCompilePriority() { return REXCVAR_GET(banjo_deko3d_compile_priority); }
 bool Deko3DCompileWaitBoostOn() { return REXCVAR_GET(banjo_deko3d_compile_wait_boost); }
 bool Deko3DFastFirstCompileOn() { return REXCVAR_GET(banjo_deko3d_fast_first_compile); }  // port 56
+bool Deko3DDiagGpuFaultOn() { return REXCVAR_GET(banjo_deko3d_diag_gpu_fault); }  // blur-nx (2026-11-17)
 bool Deko3DAsyncCacheReadsOn() { return REXCVAR_GET(banjo_deko3d_async_cache_reads); }
 int Deko3DBackgroundCompileShare() {
   return std::clamp<int32_t>(REXCVAR_GET(banjo_deko3d_background_compile_share), 1, 100);

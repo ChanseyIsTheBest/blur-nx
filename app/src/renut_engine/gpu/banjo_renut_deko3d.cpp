@@ -496,6 +496,7 @@ void InstallShaderCache() {
   options.backgroundCompileShare = Deko3DBackgroundCompileShare();  // 2026-10-23
   options.compileWaitBoost = Deko3DCompileWaitBoostOn();  // 2026-10-23
   options.fastFirstCompile = Deko3DFastFirstCompileOn();  // port 56 (mk9-nx)
+  options.diagGpuFault = Deko3DDiagGpuFaultOn();  // blur-nx (2026-11-17, the map-load crashes)
   options.asyncCacheReads = Deko3DAsyncCacheReadsOn();     // 2026-10-23
   options.userClipEnable = Deko3DUserClipEnable();  // renut-ultimate, from rr6-nx (2026-11-05)
   options.depthResolve = Deko3DDepthResolveOn();  // sasrt-nx (2026-10-21)

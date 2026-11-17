@@ -493,6 +493,7 @@ namespace plume {
         // banjo-nx (2026-10-28, per-draw night): the device's two numbers as of the last drop (flushDescriptorInvalidate
         // drops only the caches whose number moved).
         uint64_t seenDescriptors = 0, seenCode = 0;
+        uint64_t recordSerial = 0;  // blur-nx (2026-11-17, Deko3DOptions::diagGpuFault): one more at each begin()
         const Deko3DFramebuffer *framebuffer = nullptr;
         // sasrt-nx (2026-10-21, Deko3DOptions::depthResolve): the bound depth target is compressed and may hold tiles
         // the texture unit cannot read (resolveBoundDepth).
@@ -1239,6 +1240,11 @@ namespace plume {
         // sasrt-nx (2026-11-08, sasrt_deko3d_diag_barriers): count the barriers emitted by their causes
         // (Deko3DStats::barrierWhy, Deko3DBarrierWhy). A diagnostic: one array add per barrier.
         bool diagBarriers = false;
+        // blur-nx (2026-11-17, the map-load crashes: dk::Queue::flush raised DkResult_Fail after the GPU faulted): every
+        // draw and dispatch noted in a ring, and every submission waited for (3 s at most) and the queue's state checked,
+        // so the first submission the GPU faults in is logged with its draws (pipeline names: Renut's vs/ps hashes). A
+        // diagnostic: the CPU waits for the GPU at every kick.
+        bool diagGpuFault = false;
         // renut-ultimate (2026-11-10, port 59, from LostOdysseyRecomp ff013164; lo_deko3d_descriptor_cache): a sampled image
         // descriptor is made once per view (or per texture for its default view) and copied at later writes, instead of
         // dkImageDescriptorInitialize at every write.

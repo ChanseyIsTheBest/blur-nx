@@ -27,6 +27,61 @@ namespace plume {
 
     static constexpr uint32_t alignUp(uint32_t v, uint32_t a) { return (v + a - 1) / a * a; }
 
+    // blur-nx (2026-11-17, Deko3DOptions::diagGpuFault): the last draws and dispatches recorded (any list, any thread),
+    // each with its list and that list's recording serial, so a faulting submission's own can be picked out.
+    namespace {
+        struct DiagDraw {
+            const void *list = nullptr;
+            uint64_t serial = 0;
+            uint32_t kind = 0, count = 0, instances = 0, first = 0, width = 0, height = 0, colorCount = 0;
+            int colorFormat = -1, depthFormat = -1;
+            char pipeline[56] = {};
+        };
+        constexpr uint32_t kDiagRingSize = 4096;
+        DiagDraw g_diagRing[kDiagRingSize];
+        std::atomic<uint64_t> g_diagNext{0};
+        std::atomic<uint64_t> g_diagSubmissions{0};
+    }  // namespace
+    static void diagRecord(const Deko3DCommandList *cl, uint32_t kind, const Deko3DPipeline *p, uint32_t count,
+                           uint32_t instances, uint32_t first) {
+        DiagDraw &d = g_diagRing[g_diagNext.fetch_add(1, std::memory_order_relaxed) % kDiagRingSize];
+        d.list = cl;
+        d.serial = cl->recordSerial;
+        d.kind = kind;
+        d.count = count;
+        d.instances = instances;
+        d.first = first;
+        const Deko3DFramebuffer *f = cl->framebuffer;
+        d.width = f ? f->width : 0;
+        d.height = f ? f->height : 0;
+        d.colorCount = f ? f->colorCount : 0;
+        d.colorFormat = f && f->colorCount && f->colorTextures[0] ? int(f->colorTextures[0]->desc.format) : -1;
+        d.depthFormat = f && f->depthTexture ? int(f->depthTexture->desc.format) : -1;
+        const size_t n = p ? std::min(p->name.size(), sizeof(d.pipeline) - 1) : 0;
+        if (n)
+            memcpy(d.pipeline, p->name.data(), n);
+        d.pipeline[n] = 0;
+    }
+    static void diagDump(const char *why, const void *const *lists, const uint64_t *serials, uint32_t count) {
+        const uint64_t next = g_diagNext.load(std::memory_order_relaxed);
+        const uint64_t from = next > kDiagRingSize ? next - kDiagRingSize : 0;
+        uint32_t shown = 0;
+        for (uint64_t i = from; i < next; i++) {
+            const DiagDraw &d = g_diagRing[i % kDiagRingSize];
+            bool mine = false;
+            for (uint32_t l = 0; l < count; l++)
+                mine = mine || (d.list == lists[l] && d.serial == serials[l]);
+            if (!mine)
+                continue;
+            ++shown;
+            logf("GPU FAULT DIAG %s: #%u %s %s count %u inst %u first %u; target %ux%u (%u colour, format %d), depth %d",
+                 why, shown, d.kind == 2 ? "dispatch" : d.kind == 1 ? "indexed" : "draw", d.pipeline, d.count,
+                 d.instances, d.first, d.width, d.height, d.colorCount, d.colorFormat, d.depthFormat);
+        }
+        logf("GPU FAULT DIAG %s: %u draws and dispatches of the submission's list(s) in the ring (it holds %u)", why,
+             shown, kDiagRingSize);
+    }
+
     // The push constants' UBO binding in every stage, and the address window's storage binding (tools/deko3d_glsl.py).
     static constexpr uint32_t PushUboSlot = 5;
     static constexpr uint32_t TexSizeUboSlot = 3;  // banjo-nx (2026-10-19, txq)
@@ -101,6 +156,7 @@ namespace plume {
         // transient memory is free again. dkCmdBufClear rewinds into the memory fed last, so the first block is fed
         // explicitly (SwitchWakerHD: deko3d 0.5.0's clear keeps the old position).
         dkCmdBufClear(cmd);
+        ++recordSerial;  // blur-nx (2026-11-17, Deko3DOptions::diagGpuFault)
         pendingBarrier = false;  // banjo-nx (2026-10-19): nothing held over from the list before
         pendingBarrierMode = DkBarrier_None;
         pendingBarrierInvalidate = 0;
@@ -574,6 +630,8 @@ namespace plume {
             Deko3DTraceToken("X");
         dispatchSinceIdle = true;  // sasrt-nx (2026-11-08, leanBarrierSkip)
         workSinceFragmentWait = true;  // sasrt-nx (2026-11-08, leanBarrierSkip)
+        if (Deko3DGetOptions().diagGpuFault)  // blur-nx (2026-11-17)
+            diagRecord(this, 2, computePipeline, x * y * z, 1, 0);
         dkCmdBufDispatchCompute(cmd, x, y, z);
     }
 
@@ -822,6 +880,8 @@ namespace plume {
         // sasrt-nx (2026-11-08, sasrt_gpu_export_list_topology): Deko3DSetNextPrimitive's, once
         const DkPrimitive drawPrim = nextPrimitive ? DkPrimitive(nextPrimitive - 1) : graphicsPipeline->primitive;
         nextPrimitive = 0;
+        if (Deko3DGetOptions().diagGpuFault)  // blur-nx (2026-11-17)
+            diagRecord(this, 0, graphicsPipeline, vertexCount, instanceCount, startVertex);
         dkCmdBufDraw(cmd, drawPrim, vertexCount, instanceCount, startVertex, startInstance);
         if (discard) {
             const uint32_t on = (4u << 29) | (1u << 16) | (0u << 13) | 0x0DFu;
@@ -862,6 +922,8 @@ namespace plume {
             dkCmdBufReplayCmds(cmd, &off, 1);
         }
         workSinceFragmentWait = true;  // sasrt-nx (2026-11-08, leanBarrierSkip)
+        if (Deko3DGetOptions().diagGpuFault)  // blur-nx (2026-11-17)
+            diagRecord(this, 1, graphicsPipeline, indexCount, instanceCount, startIndex);
         dkCmdBufDrawIndexed(cmd, prim, indexCount, instanceCount, startIndex, baseVertex, startInstance);
         if (discard) {
             const uint32_t on = (4u << 29) | (1u << 16) | (0u << 13) | 0x0DFu;
@@ -2237,8 +2299,36 @@ namespace plume {
             dkQueueSignalFence(device->queue, &f->fence, true);
             f->pending = true;
         }
+        // blur-nx (2026-11-17, Deko3DOptions::diagGpuFault): this submission waited for and the queue checked, so the
+        // one the GPU faults in is logged with its own draws before the next flush raises the error.
+        const bool diag = Deko3DGetOptions().diagGpuFault;
+        DkFence diagFence{};
+        const void *diagLists[8] = {};
+        uint64_t diagSerials[8] = {};
+        const uint32_t diagCount = std::min<uint32_t>(count, 8);
+        if (diag) {
+            for (uint32_t i = 0; i < diagCount; i++) {
+                const Deko3DCommandList *cl = static_cast<const Deko3DCommandList *>(commandLists[i]);
+                diagLists[i] = cl;
+                diagSerials[i] = cl ? cl->recordSerial : 0;
+            }
+            dkQueueSignalFence(device->queue, &diagFence, false);
+        }
         device->noteSubmission();
         dkQueueFlush(device->queue);
+        if (diag) {
+            const uint64_t n = g_diagSubmissions.fetch_add(1, std::memory_order_relaxed) + 1;
+            const DkResult r = dkFenceWait(&diagFence, 3'000'000'000ll);
+            const bool failed = dkQueueIsInErrorState(device->queue);
+            if (failed || r != DkResult_Success) {
+                logf("GPU FAULT DIAG: submission %llu (%u list(s)): fence %d, the queue %s", (unsigned long long)n, count,
+                     int(r), failed ? "IN AN ERROR STATE" : "fine (the GPU was slow)");
+                if (failed) {
+                    diagDump("faulting submission", diagLists, diagSerials, diagCount);
+                    logf("GPU FAULT DIAG: the next flush raises the error");
+                }
+            }
+        }
         device->checkGuards();
         device->collectRetired();
     }
