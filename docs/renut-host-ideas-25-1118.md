@@ -122,3 +122,56 @@ not lower the GPU's 28.5 ms.
 - **Toml only:** #31 joins the other toml A/B (#1, #2, #14, #15).
 - **The census build:** #28 and #35.
 - **Then the fixes:** #26 (the largest, one build of its own), #27, #29.
+
+## The batch (2026-11-18, the user: "do 1-24 26-35 work independently for 12 hours try to do everything in one big batch")
+
+Commits 73747e99 (the batch) and b07d28c3 (its verify). Everything is in one build. Each change has its own key, on
+by default where it is exact, and an in-run A/B target from 230 (gpu/host_batch.h). The census is one key, off by
+default: `blur_renut_diag_batch_census`, one 10 s line. The verify is another: `blur_renut_host_batch_verify`, which
+checks #3, #13 and #32 against the old way.
+
+The user also asked: "if you come across any ideas along the way to improve performance on renut please implement
+them as well". The batch has one: #36.
+
+| # | What was done | Key (A/B target) | Default |
+|---|---|---|---|
+| 1, 2 | NewOp builds no resource objects and no slot extents while replays inherit | blur_renut_record_skip_unused (230) | on |
+| 3 | The inherited words are put back only in the chunks the op applied; the census counts the bytes both ways | blur_renut_inherit_by_chunk (231) | on |
+| 4 | The last full whole-buffer answer is reused within a kick and frame (same shader, layout, streams and index buffer; each copy checked present and proven this kick) | blur_renut_whole_repeat (232) | on |
+| 5 | Census: the same texture set as the call before, or as one of the 16 before | (census) | - |
+| 6 | Census: the resolves' time, and how much of it goes on finding the destination | (census) | - |
+| 7, 24 | Census: the texture uploads, with the 8 most uploaded textures (address, size, format) | (census) | - |
+| 8 | Census: the Game Master's fence waits, their time, and how many kicked their own work | (census) | - |
+| 9 | Checked, not changed: `last.valid` is changed in six places; a parallel group mask would save an 8-word loop beside the copy and the push themselves | - | - |
+| 10 | Checked, not changed: each of plume's six per-draw calls already returns at its first test (a combined mask saves 2-3 loads a draw, <0.03 ms a frame) | - | - |
+| 11 | The ring cleaner runs at 0x2D on the background core (above the game threads), and follows the A/B half | blur_renut_ring_cleaner_priority (233) | 0x2D |
+| 12 | Census: the conversions by kind (whole, range, Draw*UP). The premise was wrong: Begin*Vertices data is 28 KB a frame, not the 0.44 ms | (census) | - |
+| 13 | BuildInheritRuns works a 32-bit word of the bitmap at a time | blur_renut_inherit_runs_words (234) | on |
+| 14 | `ultimate_renut_replay_inherit_same = false` (0 of 131,072 replays matched) | toml | false |
+| 15 | `sasrt_gpu_skip_inert_draws = false` (0 draws skipped) | toml | false |
+| 16 | The fast pipeline cache is two-way (the older way is replaced) | blur_renut_fast_pipeline_two_way (235) | on |
+| 17 | The texture slot memo is two-way | blur_renut_texture_memo_two_way (236) | on |
+| 18 | A provisional entry with this draw's inputs is looked up again with its kept key (no MakeKey) | blur_renut_provisional_key_kept (237) | on |
+| 19 | Census: the fast draws with no field changed | (census) | - |
+| 20, 21 | Census: op vectors that grew; ops that captured stack headers | (census) | - |
+| 22 | Checked, not changed: a deferred capture is taken at Begin and queued at End, out of the delta chain's order; its copy is ~65 us a frame | - | - |
+| 23 | The replay's prefetch stages 55 and 56 are in the A/B list | (A/B 55, 56) | as before |
+| 26 | Checked, not changed: with the profile, GCC lays out the untaken blocks after the hot ones and puts never-run functions in .text.unlikely. FastDrawLocked's samples span its first ~19 KB of 38 KB; a hand split moves no hot code, and the compiler's partition broke LTO (11-16) | - | - |
+| 27 | No ImGui frame while no overlay shows (the dialogs answer WantsFrame; the Switch's buttons are still read for the shortcuts' state) | ui_skip_hidden_dialogs | on |
+| 28 | Census: wakes by kind and their time, and the record lock's waits on the Game Master. Also an option: runs and resolves wake the render thread as draws do | blur_renut_wake_batch_all (238) | off (A/B) |
+| 29 | Census: the immediate draws and their queueing time | (census) | - |
+| 30 | Checked, not changed: a replay reads the float constants its buffer did not set (8 KB of the 12.9 KB) and the inherited runs; only the 1.1 KB head could be left out | - | - |
+| 31 | `banjo_renut_tags_check = 256` (0 unmarked chunks in 9,408 checks a 10 s) | toml | 256 |
+| 32 | ComputeViewport keeps eight answers | blur_renut_viewport_memo (239) | on |
+| 33 | Checked, not changed: GetHostSurfaceLocked has a memo before the map, and the pipeline and shader lookups reach their maps only on memo misses | - | - |
+| 34 | Checked, not changed: the pushes are needed; joining the three calls saves only their call overhead | - | - |
+| 35 | Census: the native render, sampler and viewport setter calls | (census) | - |
+| 36 | Found on the way: a cached copy's drop raises the mesh objects' generation only when it is a whole copy (DropCachedCopy / DropCachedIndices bumped it for every range copy too: 16,562 mesh misses "of an older generation" a 10 s) | blur_renut_mesh_gen_whole_only (240) | on |
+
+The tomls (tools/make_blur_tomls.py, dist, and the built-in defaults, regenerated) carry #14, #15 and #31. The
+built-in defaults had lacked 11-17's shipping decisions (the cap, the tree dither, SMAA in the menus, the audio
+keys): they match the dist's play toml again.
+
+Also in this window (the user's request): the NRO's title is "blur", its icon is the user's cover art (256x256), and
+the author is ChanseyIsTheBest (32492262). The NRO's path is unchanged, so the forwarder's id and the four-core NPDM
+stay the same.
