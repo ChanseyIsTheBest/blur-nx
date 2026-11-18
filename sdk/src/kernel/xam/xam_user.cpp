@@ -34,6 +34,10 @@
 #include <rex/system/xtypes.h>
 
 REXCVAR_DEFINE_UINT32(user_language, 1, "Kernel", "User's language ID");
+REXCVAR_DEFINE_BOOL(xam_guest_signin, true, "Kernel",
+                    "When the game opens the sign-in screen, every further connected controller (2 to 4) is signed "
+                    "in as a guest of the profile, as choosing a guest on the console does. Off: only controller 1 "
+                    "has a profile, and a game that wants one per local player takes no second player");
 // blur-nx (2026-11-18, the user: "language (set it to system language by default)"): the player's setting by name. A
 // game without the language shows its own fallback (Blur, like Beautiful Katamari, English), as on an Xbox 360 set to it.
 REXCVAR_DEFINE_STRING(language, "System", "Kernel",
@@ -105,10 +109,6 @@ uint32_t EffectiveLanguage() {
   return language;
 }
 }  // namespace rex::system
-REXCVAR_DEFINE_BOOL(xam_guest_signin, true, "Kernel",
-                    "When the game opens the sign-in screen, every further connected controller (2 to 4) is signed "
-                    "in as a guest of the profile, as choosing a guest on the console does. Off: only controller 1 "
-                    "has a profile, and a game that wants one per local player takes no second player");
 
 namespace rex {
 namespace kernel {
