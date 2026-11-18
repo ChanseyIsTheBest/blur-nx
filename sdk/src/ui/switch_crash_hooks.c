@@ -10,7 +10,8 @@
  * the definition of abort has to reach the link before the one in libc.a to
  * replace it.
  *
- *   stderr  -> <NRO folder>/logs/rex/rex_stderr.log, unbuffered, rewritten on every boot
+ *   stderr  -> <NRO folder>/logs/rex/rex_stderr.log, unbuffered, rewritten on every boot; blur-nx (2026-11-18):
+ *              opened at the first write to stderr, so a run that writes nothing there leaves no file
  *   abort() -> <NRO folder>/logs/rex/rex_crash.log with the stack, and error 2345-0101
  *   exit()  -> the same, error 2345-0103. The orderly shutdown does not go through exit()
  *              (see windowed_app_main_switch.cpp), so getting here means some library
@@ -24,7 +25,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
+#include <sys/iosupport.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include <switch.h>
 
@@ -80,6 +84,52 @@ static void RexSwitchExitHook(void) {
 }
 
 /*
+ * blur-nx (2026-11-18, the user: "final nro just make sure all logging is off"; crash reports only): stderr goes to a
+ * device of its own ("rexstderr:"), which opens rex_stderr.log at its first write. Before, the file was made (empty) at
+ * every boot, so a release with every log off still wrote it each start; what reaches stderr before a crash (Mesa's,
+ * libnx's, an uncaught exception's message) still lands there, as before. A failed open drops what is written, as
+ * stderr did with no file.
+ */
+static int g_rex_stderr_fd = -1;
+static int g_rex_stderr_failed;
+
+static ssize_t RexStderrWrite(struct _reent* r, void* fd, const char* ptr, size_t len) {
+    (void)r;
+    (void)fd;
+    if (g_rex_stderr_fd < 0 && !g_rex_stderr_failed) {
+        char path[FS_MAX_PATH];
+        snprintf(path, sizeof(path), "%srex_stderr.log", g_rex_log_dir);
+        g_rex_stderr_fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+        if (g_rex_stderr_fd < 0) g_rex_stderr_failed = 1;
+    }
+    if (g_rex_stderr_fd < 0) return (ssize_t)len;
+    return write(g_rex_stderr_fd, ptr, len);
+}
+
+static int RexStderrOpen(struct _reent* r, void* file, const char* path, int flags, int mode) {
+    (void)r;
+    (void)file;
+    (void)path;
+    (void)flags;
+    (void)mode;
+    return 0;
+}
+
+static int RexStderrClose(struct _reent* r, void* fd) {
+    (void)r;
+    (void)fd;
+    return 0;
+}
+
+static const devoptab_t g_rex_stderr_device = {
+    .name = "rexstderr",
+    .structSize = sizeof(int),
+    .open_r = RexStderrOpen,
+    .close_r = RexStderrClose,
+    .write_r = RexStderrWrite,
+};
+
+/*
  * Priority 101, the first one allowed: before any static constructor of the
  * SDK, which can also die. The SD is already mounted: __appInit runs before the
  * constructors.
@@ -87,10 +137,14 @@ static void RexSwitchExitHook(void) {
 __attribute__((constructor(101)))
 static void RexSwitchCrashHooksInit(void) {
     RexSwitchInitLogDir();
-    char path[FS_MAX_PATH];
-    snprintf(path, sizeof(path), "%srex_stderr.log", g_rex_log_dir);
-    if (freopen(path, "w", stderr)) {
+    if (AddDevice(&g_rex_stderr_device) >= 0 && freopen("rexstderr:/", "w", stderr)) {
         setvbuf(stderr, NULL, _IONBF, 0);
+    } else {
+        char path[FS_MAX_PATH];  /* the device refused: the file at once, as before */
+        snprintf(path, sizeof(path), "%srex_stderr.log", g_rex_log_dir);
+        if (freopen(path, "w", stderr)) {
+            setvbuf(stderr, NULL, _IONBF, 0);
+        }
     }
     atexit(RexSwitchExitHook);
 }
