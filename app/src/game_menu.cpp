@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -392,12 +393,13 @@ void AddGameMenuFonts(ImFontAtlas* atlas) {
 
 // ---- The dialog -----------------------------------------------------------------------------------------------------
 
-GameMenuDialog::GameMenuDialog(rex::ui::ImGuiDrawer* drawer, std::filesystem::path config_path, rex::Runtime* runtime,
-                               rex::ui::ImmediateDrawer* immediate_drawer)
+GameMenuDialog::GameMenuDialog(rex::ui::ImGuiDrawer* drawer, std::filesystem::path config_path,
+                               std::function<rex::Runtime*()> runtime,
+                               std::function<rex::ui::ImmediateDrawer*()> immediate_drawer)
     : rex::ui::ImGuiDialog(drawer),
       config_path_(std::move(config_path)),
-      runtime_(runtime),
-      immediate_drawer_(immediate_drawer) {
+      runtime_(std::move(runtime)),
+      immediate_drawer_(std::move(immediate_drawer)) {
   rex::ui::RegisterBind("bind_game_menu", "F8", "Open or close the game menu (A+B+X+Y+L+R on the Switch)",
                         [this] { Toggle(); });
 }
@@ -524,7 +526,8 @@ void GameMenuDialog::Save() {
 }
 
 rex::system::AchievementManager* GameMenuDialog::Achievements() const {
-  return runtime_ && runtime_->kernel_state() ? &runtime_->kernel_state()->achievements() : nullptr;
+  rex::Runtime* runtime = runtime_ ? runtime_() : nullptr;
+  return runtime && runtime->kernel_state() ? &runtime->kernel_state()->achievements() : nullptr;
 }
 
 bool GameMenuDialog::AnyButtonDown() const {
@@ -632,9 +635,11 @@ void GameMenuDialog::OnDraw(ImGuiIO& io) {
     PickTextFont(io);
     const float width = ImGui::GetContentRegionAvail().x;
     DrawTabs(width);
-    // The list fills what the footer leaves.
-    const float footer = ImGui::GetFontSize() * 3.6f;
-    const float list = std::max(row_height_, ImGui::GetContentRegionAvail().y - footer);
+    // The list fills what the footer leaves (its height from its own text: the help, the * note, the buttons).
+    const float footer = FooterHeight(width);
+    float list = std::max(row_height_, ImGui::GetContentRegionAvail().y - footer);
+    if (tab_ != kAchievements)
+      list = std::max(1.0f, std::floor(list / row_height_)) * row_height_;  // whole rows
     ImGui::BeginChild("##list", ImVec2(0.0f, list), ImGuiChildFlags_None,
                       ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollbar);
     if (!font)
@@ -646,7 +651,7 @@ void GameMenuDialog::OnDraw(ImGuiIO& io) {
     else
       DrawSettingsRows(controls_[tab_ - kP1], true, tab_ - kP1);
     ImGui::EndChild();
-    DrawFooter();
+    DrawFooter(footer);
   }
   ImGui::End();
   ImGui::PopStyleVar(4);
@@ -660,9 +665,8 @@ void GameMenuDialog::DrawTabs(float width) {
   const float font = ImGui::GetFontSize();
   const float height = font * 1.9f;
   const ImVec2 origin = ImGui::GetCursorScreenPos();
-  // L and R at the ends, the tabs between them, as the mockup: names split by bars.
-  const char* left_hint = "L";
-  const char* right_hint = "R";
+  // L and R at the ends, the tabs between them, as the mockup: names split by bars. The names in the rows' font when
+  // they fit between L and R, else in the smaller text's (the console's first test: P3 and P4 ran off the right).
   const float hint_w = font * 1.6f;
   auto hint = [&](float x, const char* t) {
     const ImVec2 a(x, origin.y + height * 0.14f), b(x + hint_w, origin.y + height * 0.86f);
@@ -670,21 +674,33 @@ void GameMenuDialog::DrawTabs(float width) {
     const ImVec2 ts = ImGui::CalcTextSize(t);
     dl->AddText(ImVec2(a.x + (hint_w - ts.x) * 0.5f, origin.y + (height - ts.y) * 0.5f), U32(kTextDim), t);
   };
-  hint(origin.x, left_hint);
-  hint(origin.x + width - hint_w, right_hint);
-  float total = 0.0f;
-  const float sep = font * 1.4f;
-  for (int i = 0; i < kTabCount; ++i)
-    total += ImGui::CalcTextSize(kTabNames[i]).x + (i ? sep : 0.0f);
-  const float pad = font * 0.5f;
-  float x = origin.x + std::max(hint_w + font * 0.5f, (width - total) * 0.5f);
+  hint(origin.x, "L");
+  hint(origin.x + width - hint_w, "R");
+  const float room = width - 2.0f * (hint_w + font * 0.6f);
+  ImFont* tab_font = ImGui::GetFont();
+  float tab_size = font;
+  float sep = font * 1.1f, pad = font * 0.45f;
+  auto total_of = [&](ImFont* f, float size, float s) {
+    float total = 0.0f;
+    for (int i = 0; i < kTabCount; ++i)
+      total += f->CalcTextSizeA(size, FLT_MAX, 0.0f, kTabNames[i]).x + (i ? s : 0.0f);
+    return total;
+  };
+  if (total_of(tab_font, tab_size, sep) > room) {
+    tab_font = g_text_font;
+    tab_size = g_text_size;
+    sep = tab_size * 1.1f;
+    pad = tab_size * 0.45f;
+  }
+  const float total = total_of(tab_font, tab_size, sep);
+  float x = origin.x + hint_w + font * 0.6f + std::max(0.0f, (room - total) * 0.5f);
   for (int i = 0; i < kTabCount; ++i) {
     if (i) {
       const ImVec2 bar(x + sep * 0.5f, origin.y + height * 0.22f);
       dl->AddLine(bar, ImVec2(bar.x, origin.y + height * 0.78f), U32(kGreenDim), 2.0f);
       x += sep;
     }
-    const ImVec2 ts = ImGui::CalcTextSize(kTabNames[i]);
+    const ImVec2 ts = tab_font->CalcTextSizeA(tab_size, FLT_MAX, 0.0f, kTabNames[i]);
     const ImVec2 a(x - pad, origin.y + height * 0.1f), b(x + ts.x + pad, origin.y + height * 0.9f);
     ImGui::SetCursorScreenPos(a);
     ImGui::PushID(i);
@@ -696,13 +712,13 @@ void GameMenuDialog::DrawTabs(float width) {
     ImGui::PopID();
     if (i == tab_)
       dl->AddRectFilled(a, b, U32(kGreen), 6.0f);
-    dl->AddText(ImVec2(x, origin.y + (height - ts.y) * 0.5f), i == tab_ ? U32(kBlack, 1.0f / kBlack.w) : U32(kText),
-                kTabNames[i]);
+    dl->AddText(tab_font, tab_size, ImVec2(x, origin.y + (height - ts.y) * 0.5f),
+                i == tab_ ? U32(kBlack, 1.0f / kBlack.w) : U32(kText), kTabNames[i]);
     x += ts.x;
   }
   // The thick line under the tabs.
-  dl->AddRectFilled(ImVec2(origin.x - 4.0f, origin.y + height + 2.0f), ImVec2(origin.x + width + 4.0f, origin.y + height + 6.0f),
-                    U32(kGreen));
+  dl->AddRectFilled(ImVec2(origin.x - 4.0f, origin.y + height + 2.0f),
+                    ImVec2(origin.x + width + 4.0f, origin.y + height + 6.0f), U32(kGreen));
   ImGui::SetCursorScreenPos(ImVec2(origin.x, origin.y + height + 6.0f + font * 0.5f));
   ImGui::Dummy(ImVec2(width, 0.0f));
 }
@@ -732,7 +748,10 @@ void GameMenuDialog::DrawSettingsRows(std::vector<Setting>& rows, bool controls,
       selected = int(i);
     }
     if (sel && scroll_to_row_) {
-      ImGui::SetScrollHereY(0.5f);
+      // Whole rows: the chosen one in the middle where the list allows.
+      const int visible = std::max(1, int(ImGui::GetWindowHeight() / row_height_ + 0.01f));
+      const int first = std::clamp(int(i) - visible / 2, 0, std::max(0, int(rows.size()) - visible));
+      ImGui::SetScrollY(float(first) * row_height_);
       scroll_to_row_ = false;
     }
     ImGui::PopID();
@@ -795,8 +814,12 @@ void GameMenuDialog::DrawAchievements() {
     ImGui::TextColored(kTextDim, "No achievements: the game's data is not loaded yet.");
     return;
   }
-  if (!icons_ && immediate_drawer_ && runtime_)
-    icons_ = std::make_unique<rex::ui::AchievementIconCache>(immediate_drawer_, runtime_);
+  if (!icons_) {
+    rex::ui::ImmediateDrawer* immediate = immediate_drawer_ ? immediate_drawer_() : nullptr;
+    rex::Runtime* runtime = runtime_ ? runtime_() : nullptr;
+    if (immediate && runtime)
+      icons_ = std::make_unique<rex::ui::AchievementIconCache>(immediate, runtime);
+  }
   const auto list = manager->ListAchievements();
   int unlocked = 0, earned = 0, total = 0;
   for (const auto& a : list) {
@@ -843,7 +866,9 @@ void GameMenuDialog::DrawAchievements() {
     if (ImGui::IsItemClicked() && state_ == State::kOpen)
       selected = int(i);
     if (sel && scroll_to_row_) {
-      ImGui::SetScrollHereY(0.5f);
+      const int visible = std::max(1, int(ImGui::GetWindowHeight() / row_h + 0.01f));
+      const int first = std::clamp(int(i) - visible / 2, 0, std::max(0, int(list.size()) - visible));
+      ImGui::SetScrollY(float(first) * row_h);
       scroll_to_row_ = false;
     }
     ImGui::PopID();
@@ -881,34 +906,65 @@ void GameMenuDialog::DrawAchievements() {
   ImGui::EndChild();
 }
 
-void GameMenuDialog::DrawFooter() {
+namespace {
+const char* const kNote = "* Must restart the game to change these settings";
+const char* const kKeysList = "Up/Down: choose   Left/Right: change   L/R: tabs   +: close";
+const char* const kKeysScroll = "Up/Down: scroll   L/R: tabs   +: close";
+}  // namespace
+
+// The chosen row's help (and whether it is the four-core warning).
+static const std::string* HelpOf(int tab, const int* rows, const std::vector<GameMenuDialog::Setting>& settings,
+                                 const std::vector<GameMenuDialog::Setting>* controls, bool* warning) {
+  if (warning)
+    *warning = false;
+  if (tab == 0 && rows[0] < int(settings.size())) {
+    if (warning)
+      *warning = settings[size_t(rows[0])].key == "four_core_mode";
+    return &settings[size_t(rows[0])].help;
+  }
+  if (tab >= 2 && tab < 6 && rows[tab] < int(controls[tab - 2].size()))
+    return &controls[tab - 2][size_t(rows[tab])].help;
+  return nullptr;
+}
+
+// The footer: the chosen row's help (wrapped, room for two lines on every tab so the list does not jump), then the *
+// note (the Settings tab) and the buttons: on one line when they fit side by side, else on two (the console's first
+// test: they overlapped).
+float GameMenuDialog::FooterHeight(float width) const {
+  const float font = ImGui::GetFontSize();
+  const float line = g_text_size * 1.3f;
+  const std::string* help = HelpOf(tab_, row_, settings_, controls_, nullptr);
+  float h = font * 0.6f + std::max(line * 2.0f, help ? TextSize(help->c_str(), width - font * 0.6f).y : 0.0f);
+  const char* keys = tab_ == kAchievements ? kKeysScroll : kKeysList;
+  const bool note = tab_ == kSettings;
+  const bool one_line = !note || TextSize(kNote).x + TextSize(keys).x + font * 1.5f <= width;
+  h += line * (one_line ? 1.0f : 2.0f) + font * 0.35f;
+  return h;
+}
+
+void GameMenuDialog::DrawFooter(float height) {
   ImDrawList* dl = ImGui::GetWindowDrawList();
   const float width = ImGui::GetContentRegionAvail().x;
   const float font = ImGui::GetFontSize();
+  const float line = g_text_size * 1.3f;
   const ImVec2 p = ImGui::GetCursorScreenPos();
   dl->AddLine(ImVec2(p.x - 4.0f, p.y + font * 0.3f), ImVec2(p.x + width + 4.0f, p.y + font * 0.3f), U32(kGreenDim), 2.0f);
-  // The chosen row's help.
-  std::string help;
   bool warning = false;
-  if (tab_ == kSettings && row_[tab_] < int(settings_.size())) {
-    help = settings_[size_t(row_[tab_])].help;
-    warning = settings_[size_t(row_[tab_])].key == "four_core_mode";
-  }
-  else if (tab_ >= kP1 && row_[tab_] < int(controls_[tab_ - kP1].size()))
-    help = controls_[tab_ - kP1][size_t(row_[tab_])].help;
-  if (!help.empty())
-    dl->AddText(g_text_font, g_text_size, ImVec2(p.x + font * 0.3f, p.y + font * 0.65f),
-                U32(warning ? kWarn : kTextDim), help.c_str(), nullptr, width - font * 0.6f);
-  // The note for the * settings, and the buttons.
-  const float y = p.y + font * 2.15f;
-  if (tab_ == kSettings)
-    dl->AddText(g_text_font, g_text_size, ImVec2(p.x + font * 0.3f, y), U32(kGreen),
-                "* Must restart the game to change these settings");
-  const char* keys = tab_ == kAchievements ? "Up/Down: scroll    L/R: tabs    +: close"
-                                           : "Up/Down: choose    Left/Right: change    L/R: tabs    +: close";
-  const float kw = TextSize(keys).x;
-  dl->AddText(g_text_font, g_text_size, ImVec2(p.x + width - kw - font * 0.3f, y), U32(kTextDim), keys);
-  ImGui::Dummy(ImVec2(width, font * 3.0f));
+  const std::string* help = HelpOf(tab_, row_, settings_, controls_, &warning);
+  if (help && !help->empty())
+    dl->AddText(g_text_font, g_text_size, ImVec2(p.x + font * 0.3f, p.y + font * 0.6f),
+                U32(warning ? kWarn : kTextDim), help->c_str(), nullptr, width - font * 0.6f);
+  // The * note and the buttons, from the bottom up.
+  const char* keys = tab_ == kAchievements ? kKeysScroll : kKeysList;
+  const bool note = tab_ == kSettings;
+  const bool one_line = !note || TextSize(kNote).x + TextSize(keys).x + font * 1.5f <= width;
+  const float keys_y = p.y + height - font * 0.2f - line;
+  dl->AddText(g_text_font, g_text_size, ImVec2(p.x + width - TextSize(keys).x - font * 0.3f, keys_y), U32(kTextDim),
+              keys);
+  if (note)
+    dl->AddText(g_text_font, g_text_size, ImVec2(p.x + font * 0.3f, one_line ? keys_y : keys_y - line), U32(kGreen),
+                kNote);
+  ImGui::Dummy(ImVec2(width, height));
 }
 
 }  // namespace blur

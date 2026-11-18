@@ -135,7 +135,8 @@ public:
         drawer->AddDialog(profiler_dialog_.get());
         // blur-nx (2026-11-18, the user's request): the game menu. Attached for good (its constructor adds it), it
         // asks for no ImGui frame while closed (WantsFrame), so the drawer builds none for it then.
-        game_menu_ = std::make_unique<blur::GameMenuDialog>(drawer, config_path(), runtime(), immediate_drawer());
+        game_menu_ = std::make_unique<blur::GameMenuDialog>(drawer, config_path(), [this] { return runtime(); },
+                                                            [this] { return immediate_drawer(); });
 #if !REX_PLATFORM_SWITCH
         path_wizard_ = new PathSetupWizard(drawer);
         drawer->AddDialog(path_wizard_);

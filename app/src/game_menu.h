@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -46,9 +47,10 @@ void AddGameMenuFonts(ImFontAtlas* atlas);
 
 class GameMenuDialog : public rex::ui::ImGuiDialog {
  public:
-  // The achievements are looked up when drawn (the kernel, which holds them, comes after the dialogs).
-  GameMenuDialog(rex::ui::ImGuiDrawer* drawer, std::filesystem::path config_path, rex::Runtime* runtime,
-                 rex::ui::ImmediateDrawer* immediate_drawer);
+  // The runtime and the immediate drawer are asked for when drawn: the dialogs are made before the runtime (the
+  // console's first test showed "not loaded" for the achievements: the runtime given then was null).
+  GameMenuDialog(rex::ui::ImGuiDrawer* drawer, std::filesystem::path config_path,
+                 std::function<rex::Runtime*()> runtime, std::function<rex::ui::ImmediateDrawer*()> immediate_drawer);
   ~GameMenuDialog() override;
 
   // The F8 bind (the UI thread): opens the menu, or closes it when open.
@@ -91,11 +93,12 @@ class GameMenuDialog : public rex::ui::ImGuiDialog {
   void DrawTabs(float width);
   void DrawSettingsRows(std::vector<Setting>& rows, bool controls, int player);
   void DrawAchievements();
-  void DrawFooter();
+  void DrawFooter(float height);
+  float FooterHeight(float width) const;
 
   std::filesystem::path config_path_;
-  rex::Runtime* runtime_ = nullptr;
-  rex::ui::ImmediateDrawer* immediate_drawer_ = nullptr;
+  std::function<rex::Runtime*()> runtime_;
+  std::function<rex::ui::ImmediateDrawer*()> immediate_drawer_;
   std::unique_ptr<rex::ui::AchievementIconCache> icons_;
 
   State state_ = State::kClosed;
