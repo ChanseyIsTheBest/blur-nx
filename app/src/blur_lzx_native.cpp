@@ -36,6 +36,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <list>
 #include <memory>
@@ -60,6 +61,16 @@ REXCVAR_DEFINE_INT32(cpu_lzx_native, 0, "CPU",
 REXCVAR_DEFINE_INT32(cpu_lzx_cache_kb, 0, "CPU",
                      "cpu_lzx_native: kilobytes of decoded LZX buffers kept for a buffer decoded again (its compressed "
                      "bytes compared in full; exact). 0: none (the repeats are still counted)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+// blur-nx (2026-11-18, the web installer: the records of the shaders the game keeps in its LZX-compressed paks): a host
+// folder; every buffer call whose output holds a shader container (10 2A 11 at a 4-aligned offset) is written there as
+// <n>.in (the compressed bytes) and <n>.out (the decoded ones), with a line in index.txt (n, the input and output sizes,
+// the window size, the slots). The guest's decoder runs (cpu_lzx_native is not used then). The dump is game data: it
+// stays on the machine that made it (tools/blur_shader_records.py reads it). "": off.
+REXCVAR_DEFINE_STRING(blur_diag_xmem_dump, "", "Blur/Diagnostics",
+                      "PC diagnostics: a folder to write every LZX buffer whose output holds a shader container into "
+                      "(the web installer's records; game data, never shared). Empty: off")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REX_EXTERN(__imp__sub_829CC028);
@@ -614,6 +625,42 @@ void Report() {
 REX_HOOK_RAW(sub_829CC028) {
   static const int mode = REXCVAR_GET(cpu_lzx_native);
   const u32 ctx_va = ctx.r3.u32, dst = ctx.r4.u32, p_size = ctx.r5.u32, src = ctx.r6.u32, src_size = ctx.r7.u32;
+  // blur-nx (2026-11-18): blur_diag_xmem_dump (above): the guest's decode, then the buffer written when it holds a shader.
+  static const std::string dump_dir = REXCVAR_GET(blur_diag_xmem_dump);
+  if (!dump_dir.empty()) {
+    const u8* c = ::banjo::hot::Raw(base, ctx_va);
+    const bool buffer_ctx = !(Be32(c + 8) & 1);
+    const u32 window = Be32(c + 24);
+    const int slots = c[20 + 11957];
+    const u8* in = ::banjo::hot::Raw(base, src);
+    std::vector<u8> input(in, in + src_size);
+    __imp__sub_829CC028(ctx, base);
+    const u32 out_size = Be32(::banjo::hot::Raw(base, p_size));
+    const u8* out = ::banjo::hot::Raw(base, dst);
+    bool shader = false;
+    for (u32 o = 0; o + 3 <= out_size && !shader; o += 4)
+      shader = out[o] == 0x10 && out[o + 1] == 0x2A && out[o + 2] == 0x11;
+    if (shader && buffer_ctx && ctx.r3.u32 == 0) {
+      static std::mutex m;
+      static int n = 0;
+      std::lock_guard<std::mutex> lock(m);
+      ++n;
+      const std::string stem = dump_dir + "/" + std::to_string(n);
+      if (FILE* f = std::fopen((stem + ".in").c_str(), "wb")) {
+        std::fwrite(input.data(), 1, input.size(), f);
+        std::fclose(f);
+      }
+      if (FILE* f = std::fopen((stem + ".out").c_str(), "wb")) {
+        std::fwrite(out, 1, out_size, f);
+        std::fclose(f);
+      }
+      if (FILE* f = std::fopen((dump_dir + "/index.txt").c_str(), "a")) {
+        std::fprintf(f, "%d %u %u %u %d\n", n, src_size, out_size, window, slots);
+        std::fclose(f);
+      }
+    }
+    return;
+  }
   if (mode == 0 || src_size == 0) {
     __imp__sub_829CC028(ctx, base);
     return;
