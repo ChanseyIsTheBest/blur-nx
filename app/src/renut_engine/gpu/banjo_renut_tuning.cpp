@@ -251,8 +251,7 @@ REXCVAR_DEFINE_INT32(banjo_renut_portrait_fur_shells_percent, 100, "Banjo/Enhanc
 // (banjo_renut_smaa) smooths the edges instead. A game sets 4 (its own) or 2 in its toml.
 REXCVAR_DEFINE_INT32(msaa_level, 1, "Katamari/Graphics",
                      "Samples per pixel of the game's MSAA targets: 1 (off, the base's default: SMAA smooths the edges "
-                     "instead), 2 or 4 (the game's own). Fewer: rougher edges, less GPU work")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+                     "instead), 2 or 4 (the game's own). Fewer: rougher edges, less GPU work");
 // blur-nx (2026-11-12): the player's blur.toml option, defined in app/src/blur_keys.cpp (MsaaLevel reads it).
 REXCVAR_DECLARE(bool, disable_msaa);
 REXCVAR_DEFINE_INT32(banjo_renut_portrait_msaa_samples, 0, "Banjo/Enhancements",
@@ -311,7 +310,7 @@ REXCVAR_DEFINE_INT32(banjo_renut_render_height_handheld, 720, "Banjo/Enhancement
 REXCVAR_DEFINE_INT32(banjo_renut_render_height_docked, 720, "Banjo/Enhancements",
                      "NOT exact, the user's request (2026-10-21): banjo_renut_render_height_handheld for docked mode "
                      "(864 = 1536x864, 1.2x the game's; 900 = 1600x900; with banjo_renut_display_height_docked = 1080 "
-                     "the HUD at 1920x1080). Read at start")
+                     "the HUD at 1920x1080). From the next frame on deko3d (blur-nx 2026-11-18), else read at start")
     .range(480, 1080);
 REXCVAR_DEFINE_INT32(banjo_renut_display_height_docked, 720, "Banjo/Enhancements",
                      "The display's resolution when docked on deko3d (2026-10-21; the swapchain change from sa2-nx "

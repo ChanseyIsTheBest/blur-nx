@@ -371,18 +371,18 @@ std::vector<Setting> MakeSettings(const std::string& file) {
   add(T_LANGUAGE, "language", true, languages, 0, Tr(H_LANGUAGE));
   add(T_FRAMERATE, "frame_cap", false, {Q("30 fps", "30"), Q("60 fps", "60"), Q(Tr(C_OFF), "Off")}, 0,
       Tr(H_FRAMERATE));
-  add(T_HANDHELD, "banjo_renut_render_height_handheld", true,
+  add(T_HANDHELD, "banjo_renut_render_height_handheld", false,
       {C("960x540", "540", "540"), C("1024x576", "576", "576"), C("1088x612", "612", "612"),
        C("1152x648", "648", "648"), C("1216x684", "684", "684"), C("1280x720", "720", "720")},
       5, Tr(H_HANDHELD));
-  add(T_DOCKED, "banjo_renut_render_height_docked", true,
+  add(T_DOCKED, "banjo_renut_render_height_docked", false,
       {C("1280x720", "720", "720"), C("1408x792", "792", "792"), C("1536x864", "864", "864"),
        C("1600x900", "900", "900"), C("1664x936", "936", "936"), C("1728x972", "972", "972"),
        C("1792x1008", "1008", "1008"), C("1920x1080", "1080", "1080")},
       5, Tr(H_DOCKED));
   add(T_RUMBLE, "input_rumble", false, on_off(), 0, Tr(H_RUMBLE), /*always_in_file=*/false);
   add(T_SMAA, "banjo_renut_smaa", false, on_off(), 0, Tr(H_SMAA));
-  add(T_MSAA, "msaa_level", true, {C(Tr(C_OFF), "1", "1"), C("2x", "2", "2"), C("4x", "4", "4")}, 0, Tr(H_MSAA));
+  add(T_MSAA, "msaa_level", false, {C(Tr(C_OFF), "1", "1"), C("2x", "2", "2"), C("4x", "4", "4")}, 0, Tr(H_MSAA));
   // blur-nx (2026-11-18, the user: "make 4 core mode an option ... on by default and a warning that it is highly
   // reccomended to be left on").
   add(T_FOURCORE, "four_core_mode", true, on_off(), 0, Tr(H_FOURCORE));
