@@ -34,8 +34,8 @@ Roboto, Karla or Cousine).
 The game menu: hold A+B+X+Y+L+R together during the game (L and R first; or the buttons input_menu_combo names). Up/Down choose, Left/Right change, L/R switch tabs, and +
 closes it; the game takes no input while it is up. Tabs: Settings (the thirteen, and rumble), Achievements (the game's own
 list, names, gamerscores and images, read from your default.xex), and P1-P4 Controls (the Switch button that presses
-each Xbox 360 button, per player). Settings marked * (language, the resolutions, MSAA, four-core mode, the menu font) take effect
-at the next start; the others at once. The menu writes your changes into blur.toml when it closes.
+each Xbox 360 button, per player). Settings marked * (language, the resolutions, MSAA, four-core mode) take effect at the next
+start; the others at once. The menu writes your changes into blur.toml when it closes.
 
 Test settings: any key of a full toml (the repository's dist/switch/blur-nx/renut.toml and configs/) copied into
 blur.toml overrides the built-in one. The test builds (BLUR_BUILTIN_CONFIG=OFF) read a full renut.toml instead.

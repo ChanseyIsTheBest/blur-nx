@@ -42,13 +42,12 @@ int RexSwitchApplyFourCoreMode(int on);  // threading_switch.cpp: the forwarder'
 }
 #endif
 
-// blur-nx (2026-11-18): the menu's colour (at once) and font (baked at start: the Switch's ImGui atlas is fixed).
+// blur-nx (2026-11-18): the menu's colour and font, both at once (the font: the atlas made again between frames).
 REXCVAR_DEFINE_STRING(menu_color, "Green", "UI",
                       "The game menu's colour: Green, Yellow, Red, Blue, Purple, Pink, Orange, White or Rainbow");
 REXCVAR_DEFINE_STRING(menu_font, "System", "UI",
                       "The game menu's font: System (the console's own), Pixel (the debug overlay's ProggyTiny), "
-                      "Roboto, Karla or Cousine. Read at start")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+                      "Roboto, Karla or Cousine. The menu changes it at once (the ImGui drawer's RequestFontRebuild)");
 
 // blur_keys.cpp: the frame cap from the next frame, and the one in force.
 void BlurSetFrameCapLive(int fps);
@@ -351,7 +350,7 @@ std::vector<Setting> MakeSettings() {
       {Q("Green", "Green"), Q("Yellow", "Yellow"), Q("Red", "Red"), Q("Blue", "Blue"), Q("Purple", "Purple"),
        Q("Pink", "Pink"), Q("Orange", "Orange"), Q("White", "White"), Q("Rainbow", "Rainbow")},
       0, "The colour of this menu.");
-  add("Menu font", "menu_font", true,
+  add("Menu font", "menu_font", false,
       {Q("System", "System"), Q("Pixel", "Pixel"), Q("Roboto", "Roboto"), Q("Karla", "Karla"), Q("Cousine", "Cousine")},
       0, "The font of this menu: the console's own, the debug overlay's pixel font, or three others.");
   return s;
@@ -592,6 +591,11 @@ void GameMenuDialog::Apply(Setting& s) {
   const Choice& c = s.choices[size_t(s.value)];
   if (s.key == "frame_cap") {
     BlurSetFrameCapLive(c.raw == "Off" ? 0 : std::atoi(c.raw.c_str()));
+    return;
+  }
+  if (s.key == "menu_font") {  // the atlas made again before the next frame, with this font
+    rex::cvar::SetFlagByName(s.key, c.raw);
+    imgui_drawer()->RequestFontRebuild();
     return;
   }
   if (s.key == "input_menu_combo") {  // the driver's own copy (the key's string is read at start only)

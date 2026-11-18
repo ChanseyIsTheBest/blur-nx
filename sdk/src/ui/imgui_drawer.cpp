@@ -195,38 +195,7 @@ void ImGuiDrawer::Initialize() {
   nx::ConfigureNavigation(io);
 #endif
 
-  // Setup the font glyphs.
-  ImFontConfig font_config;
-  font_config.OversampleH = font_config.OversampleV = 1;
-  font_config.PixelSnapH = true;
-  static const ImWchar font_glyph_ranges[] = {
-      0x0020,
-      0x00FF,  // Basic Latin + Latin Supplement
-      0,
-  };
-  io.Fonts->AddFontFromMemoryCompressedBase85TTF(kProggyTinyCompressedDataBase85, 10.0f,
-                                                 &font_config, font_glyph_ranges);
-
-#if REX_PLATFORM_WIN32
-  // TODO(benvanik): jp font on other platforms?
-  // https://github.com/Koruri/kibitaki looks really good, but is 1.5MiB.
-  const char* jp_font_path = "C:\\Windows\\Fonts\\msgothic.ttc";
-  if (std::filesystem::exists(jp_font_path)) {
-    ImFontConfig jp_font_config;
-    jp_font_config.MergeMode = true;
-    jp_font_config.OversampleH = jp_font_config.OversampleV = 1;
-    jp_font_config.PixelSnapH = true;
-    jp_font_config.FontNo = 0;
-    io.Fonts->AddFontFromFileTTF(jp_font_path, 12.0f, &jp_font_config,
-                                 io.Fonts->GetGlyphRangesJapanese());
-  } else {
-    REXLOG_WARN("Unable to load Japanese font; JP characters will be boxes");
-  }
-#endif
-
-  if (font_setup_) {
-    font_setup_(io.Fonts);
-  }
+  AddFontsToAtlas();  // blur-nx (2026-11-18): also RebuildFonts's
 
   auto& style = ImGui::GetStyle();
   ApplyDefaultStyle(style);
@@ -355,6 +324,59 @@ std::optional<ImGuiKey> ImGuiDrawer::VirtualKeyToImGuiKey(VirtualKey vkey) {
   }
 }
 
+void ImGuiDrawer::AddFontsToAtlas() {
+  ImGuiIO& io = GetIO();
+  // Setup the font glyphs.
+  ImFontConfig font_config;
+  font_config.OversampleH = font_config.OversampleV = 1;
+  font_config.PixelSnapH = true;
+  static const ImWchar font_glyph_ranges[] = {
+      0x0020,
+      0x00FF,  // Basic Latin + Latin Supplement
+      0,
+  };
+  io.Fonts->AddFontFromMemoryCompressedBase85TTF(kProggyTinyCompressedDataBase85, 10.0f,
+                                                 &font_config, font_glyph_ranges);
+
+#if REX_PLATFORM_WIN32
+  // TODO(benvanik): jp font on other platforms?
+  // https://github.com/Koruri/kibitaki looks really good, but is 1.5MiB.
+  const char* jp_font_path = "C:\\Windows\\Fonts\\msgothic.ttc";
+  if (std::filesystem::exists(jp_font_path)) {
+    ImFontConfig jp_font_config;
+    jp_font_config.MergeMode = true;
+    jp_font_config.OversampleH = jp_font_config.OversampleV = 1;
+    jp_font_config.PixelSnapH = true;
+    jp_font_config.FontNo = 0;
+    io.Fonts->AddFontFromFileTTF(jp_font_path, 12.0f, &jp_font_config,
+                                 io.Fonts->GetGlyphRangesJapanese());
+  } else {
+    REXLOG_WARN("Unable to load Japanese font; JP characters will be boxes");
+  }
+#endif
+
+  if (font_setup_) {
+    font_setup_(io.Fonts);
+  }
+}
+
+void ImGuiDrawer::RebuildFonts() {
+  font_rebuild_ = false;
+  ImGui::SetCurrentContext(internal_state_);
+  ImGuiIO& io = ImGui::GetIO();
+  if (io.Fonts->Locked) {  // inside a frame: the next Draw does it
+    font_rebuild_ = true;
+    return;
+  }
+  io.Fonts->Clear();
+  AddFontsToAtlas();
+  io.Fonts->TexID = ImTextureID{};
+  if (font_texture_) {
+    retired_font_textures_.emplace_back(std::move(font_texture_), 4);  // the GPU may still read it for a frame or two
+  }
+  // SetupFontTexture (the caller's next step) builds the atlas and uploads it.
+}
+
 void ImGuiDrawer::SetupFontTexture() {
   if (font_texture_ || !immediate_drawer_) {
     return;
@@ -417,6 +439,19 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
   if (!immediate_drawer_) {
     // A drawer target has been attached, but an immediate drawer hasn't yet.
     return;
+  }
+
+  // blur-nx (2026-11-18): font textures a rebuild replaced, freed once they are a few frames old; a requested rebuild
+  // now, between frames (the game menu's font option).
+  for (auto it = retired_font_textures_.begin(); it != retired_font_textures_.end();) {
+    if (--it->second <= 0) {
+      it = retired_font_textures_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  if (font_rebuild_) {
+    RebuildFonts();
   }
 
   // In detached mode the app's immediate drawer (and the renderer device

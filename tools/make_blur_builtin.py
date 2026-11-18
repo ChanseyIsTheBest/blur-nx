@@ -81,7 +81,7 @@ input_menu_combo = "A+B+X+Y+L+R"
 menu_color = "Green"
 
 # The game menu's font: "System" (the console's own), "Pixel" (the debug overlay's pixel font), "Roboto", "Karla" or
-# "Cousine". A change takes effect at the next start.
+# "Cousine".
 menu_font = "System"
 '''
 
