@@ -401,6 +401,10 @@ std::vector<Setting> MakeSettings(const std::string& file) {
        Q(Tr(C_PURPLE), "Purple"), Q(Tr(C_PINK), "Pink"), Q(Tr(C_ORANGE), "Orange"), Q(Tr(C_WHITE), "White"),
        Q(Tr(C_RAINBOW), "Rainbow")},
       0, Tr(H_MENUCOLOR));
+  for (Setting& x : s)  // the render targets are made anew for these: once, when the menu closes
+    if (x.key == "banjo_renut_render_height_handheld" || x.key == "banjo_renut_render_height_docked" ||
+        x.key == "msaa_level")
+      x.apply_on_close = true;
   add(T_MENUFONT, "menu_font", false,
       {Q(Tr(C_SYSTEM), "System"), Q(Tr(C_PIXEL), "Pixel"), Q("Roboto", "Roboto"), Q("Karla", "Karla"),
        Q("Cousine", "Cousine")},
@@ -642,6 +646,10 @@ void GameMenuDialog::Open() {
 }
 
 void GameMenuDialog::BeginClose() {
+  // The heavy live settings (the resolutions, MSAA) take their last choice now, once.
+  for (Setting& s : settings_)
+    if (s.apply_on_close && s.dirty)
+      Apply(s);
   Save();
   state_ = State::kClosing;
   REXLOG_INFO("game menu: closed");
@@ -716,7 +724,8 @@ void GameMenuDialog::Change(Setting& s, int step) {
     return;
   s.value = s.value < 0 ? (step > 0 ? 0 : n - 1) : (s.value + step % n + n) % n;
   s.dirty = true;
-  Apply(s);
+  if (!s.apply_on_close)
+    Apply(s);
 }
 
 void GameMenuDialog::Apply(Setting& s) {

@@ -65,6 +65,7 @@ class GameMenuDialog : public rex::ui::ImGuiDialog {
     std::string label, key, help;
     bool restart = false;          // * (read at start): written for the next start, not applied
     bool always_in_file = true;    // one of the player's file's keys; else written only when not the default
+    bool apply_on_close = false;   // live, but taken when the menu closes (a heavy change: the render targets)
     std::vector<Choice> choices;
     int value = 0;                 // the choice shown (-1: a value of the file's that is none of them, `custom`)
     int running = 0;               // the choice the game runs with (a * setting's value at start)
