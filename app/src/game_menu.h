@@ -97,6 +97,7 @@ class GameMenuDialog : public rex::ui::ImGuiDialog {
   void DrawAchievements();
   void DrawFooter(float height);
   float FooterHeight(float width) const;
+  float FooterKeysHeight() const;  // the footer with the buttons' line alone (the Achievements tab)
 
   std::filesystem::path config_path_;
   std::function<rex::Runtime*()> runtime_;

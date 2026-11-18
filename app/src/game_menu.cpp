@@ -732,7 +732,8 @@ void GameMenuDialog::Apply(Setting& s) {
     imgui_drawer()->RequestFontRebuild();
     return;
   }
-  if (s.key == "input_menu_combo") {  // the driver's own copy (the key's string is read at start only)
+  if (s.key == "input_menu_combo") {  // the driver's own copy (the key's string is read at start only), and the key
+    rex::cvar::SetFlagByName(s.key, c.raw);  // (the row reads it back at the next opening: the first test showed the old)
 #if REX_PLATFORM_SWITCH
     rex::input::nx::SetGameMenuCombo(c.raw);
 #endif
@@ -897,7 +898,9 @@ void GameMenuDialog::OnDraw(ImGuiIO& io) {
       ImGui::SetWindowFontScale(scale);
     const float width = ImGui::GetContentRegionAvail().x;
     DrawTabs(width);
-    ImGui::BeginChild("##list", ImVec2(0.0f, list), ImGuiChildFlags_None,
+    // The Achievements tab has no help: its list takes the footer's help space (the window's height stays).
+    const float footer_here = tab_ == kAchievements ? FooterKeysHeight() : footer;
+    ImGui::BeginChild("##list", ImVec2(0.0f, list + footer - footer_here), ImGuiChildFlags_None,
                       ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollbar);
     if (!font)
       ImGui::SetWindowFontScale(scale);
@@ -908,7 +911,7 @@ void GameMenuDialog::OnDraw(ImGuiIO& io) {
     else
       DrawSettingsRows(controls_[tab_ - kP1], true, tab_ - kP1);
     ImGui::EndChild();
-    DrawFooter(footer);
+    DrawFooter(footer_here);
   }
   ImGui::End();
   ImGui::PopStyleVar(4);
@@ -1212,6 +1215,10 @@ float GameMenuDialog::FooterHeight(float width) const {
   taller(controls_[0]);
   const bool one_line = TextSize(kNote).x + TextSize(kKeysList).x + font * 1.5f <= width;
   return font * 0.55f + help_h + line * (one_line ? 1.0f : 2.0f);
+}
+
+float GameMenuDialog::FooterKeysHeight() const {
+  return ImGui::GetFontSize() * 0.55f + g_text_size * 1.3f;
 }
 
 void GameMenuDialog::DrawFooter(float height) {
