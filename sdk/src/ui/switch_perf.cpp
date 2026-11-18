@@ -120,6 +120,9 @@ constexpr size_t kMaxSamples = 1 << 15;
 constexpr size_t kFrames = 10;
 // 0-32 renderer/audio counters (see RexSwitchPerfAdd); 40-55 host-runtime overhead (include/rex/sys_counters.h).
 constexpr unsigned kCounterCount = 64;
+// blur-nx (2026-11-18): false when the title's log_level is "off" (ProfilerMain, after its warm-up): no report file.
+std::atomic<bool> g_report_file{true};
+
 // In <NRO folder>/logs/rex/ (switch_crash_hooks.c computes it at startup).
 std::string ReportPath() {
   return std::string(RexSwitchLogDir()) + "rex_profile.log";
@@ -529,7 +532,8 @@ void Report(u64 elapsed_ticks, u64 tick_freq, u64 counters_last[kCounterCount],
   std::sort(order.begin(), order.end(),
             [](size_t a, size_t b) { return g_slots[a].cpu > g_slots[b].cpu; });
 
-  FILE* f = std::fopen(ReportPath().c_str(), "a");
+  // blur-nx (2026-11-18, the user: "make sure all logging is off"): no report file with log_level "off" (g_report_file).
+  FILE* f = g_report_file.load(std::memory_order_relaxed) ? std::fopen(ReportPath().c_str(), "a") : nullptr;
   if (!f) {
     g_sample_count = 0;
     return;
@@ -1147,11 +1151,16 @@ void ProfilerMain(void*) {
     if (ms >= 1 && ms <= 100) sample_interval_ns = u64(ms) * 1000000ULL;
   }
 
+  // blur-nx (2026-11-18, the user: "make sure all logging is off"): with the title's log_level "off" (a player's build)
+  // this thread writes no rex_profile.log, as the logger makes no file then (logging.cpp) and deko3d.log is not opened.
+  // The overlay's FPS and resolution (TicOverlay, shared memory) go on; only the SD card file is left out.
+  if (rex::cvar::GetFlagByName("log_level") == "off") g_report_file.store(false, std::memory_order_relaxed);
+
   u64 counters_last[kCounterCount]{};
   for (unsigned i = 0; i < kCounterCount; ++i) {
     counters_last[i] = CounterRead(i);
   }
-  if (FILE* f = std::fopen(ReportPath().c_str(), "w")) {
+  if (FILE* f = g_report_file.load(std::memory_order_relaxed) ? std::fopen(ReportPath().c_str(), "w") : nullptr) {
     std::fprintf(f, "image 0x%016" PRIx64 ", code up to 0x%016" PRIx64 "\n\n", g_base,
                  g_text_hi);
     std::fprintf(f, "Stack sampling: %s (%u ms)\n", sample_stacks ? "active" : "disabled",
