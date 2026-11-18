@@ -277,6 +277,13 @@ std::vector<Setting> MakeSettings() {
       "Single Joy-Cons are held sideways, one per player.");
   add("Joy-Con sideways stick", "input_joycon_sideways_stick", false, OnOff(), 0,
       "A sideways Joy-Con's stick turned to match the grip.");
+  // blur-nx (2026-11-18, the user: "add an option to the config please exposed to the user to change the button config
+  // combo to open the menu"): input_menu_combo; any other set in blur.toml shows as it is written.
+  add("Menu buttons", "input_menu_combo", false,
+      {Q("A+B+X+Y+L+R", "A+B+X+Y+L+R"), Q("L+R+Minus", "L+R+MINUS"), Q("L+R+Plus", "L+R+PLUS"),
+       Q("ZL+ZR+Minus", "ZL+ZR+MINUS"), Q("L stick + R stick", "LSTICK+RSTICK")},
+      0, "The buttons that open this menu, held together (+ closes it); from now on. Any other set: input_menu_combo in "
+         "blur.toml.");
   return s;
 }
 
@@ -485,6 +492,12 @@ void GameMenuDialog::Apply(Setting& s) {
   const Choice& c = s.choices[size_t(s.value)];
   if (s.key == "frame_cap") {
     BlurSetFrameCapLive(c.raw == "Off" ? 0 : std::atoi(c.raw.c_str()));
+    return;
+  }
+  if (s.key == "input_menu_combo") {  // the driver's own copy (the key's string is read at start only)
+#if REX_PLATFORM_SWITCH
+    rex::input::nx::SetGameMenuCombo(c.raw);
+#endif
     return;
   }
   if (!rex::cvar::SetFlagByName(s.key, c.raw))

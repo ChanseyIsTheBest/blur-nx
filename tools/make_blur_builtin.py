@@ -27,13 +27,14 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # rumble into blur.toml only when the player changes it from the default.
 PLAYER_KEYS = ('language', 'frame_cap', 'banjo_renut_render_height_handheld', 'banjo_renut_render_height_docked',
                'banjo_renut_smaa', 'msaa_level', 'input_xbox_layout', 'input_joycon_sideways',
-               'input_joycon_sideways_stick', 'four_core_mode')
+               'input_joycon_sideways_stick', 'four_core_mode', 'input_menu_combo')
 PLAYER_TABLES = ()
 FINAL = {'log_level': '"off"'}
 
 PLAYER_HEAD = '''# Blur for the Nintendo Switch (blur-nx): your settings. Everything else is built into the game.
-# Change them here, or in the game menu: hold A+B+X+Y+L+R during the game, and + closes it. Language, the resolutions
-# and MSAA (marked * in the menu) take effect at the next start. Delete this file and the game writes it again.
+# Change them here, or in the game menu: hold A+B+X+Y+L+R during the game (input_menu_combo below), and + closes it.
+# Language, the resolutions, MSAA and four-core mode (marked * in the menu) take effect at the next start. Delete this
+# file and the game writes it again.
 
 # The game's language: "System" (the console's own), "English", "French", "German", "Italian", "Spanish", "Polish",
 # "Russian", "Japanese", "Korean", "Portuguese", "Chinese (Simplified)" or "Chinese (Traditional)". A language the
@@ -70,6 +71,11 @@ input_joycon_sideways_stick = true
 # Four-core mode: the game uses all four CPU cores when started from its Home menu icon (the Sphaira forwarder).
 # HIGHLY RECOMMENDED: leave it on (false is much slower). A change takes effect at the next start.
 four_core_mode = true
+
+# The buttons that open the game menu, held together: two or more of A B X Y L R ZL ZR PLUS MINUS LSTICK RSTICK UP
+# DOWN LEFT RIGHT SL SR, joined by + (for example "L+R+MINUS"). + closes the menu. Hold the shoulders first: while
+# they are held, the combo's other buttons do not reach the game.
+input_menu_combo = "A+B+X+Y+L+R"
 '''
 
 

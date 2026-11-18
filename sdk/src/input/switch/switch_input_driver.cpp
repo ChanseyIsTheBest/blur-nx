@@ -74,6 +74,14 @@ REX_INPUT_MAP_CVARS(p3, "Player 3");
 REX_INPUT_MAP_CVARS(p4, "Player 4");
 #undef REX_INPUT_MAP_CVARS
 
+// blur-nx (2026-11-18, the user: "add an option to the config please exposed to the user to change the button config
+// combo to open the menu"): the game menu's buttons (DispatchMenuShortcuts), and the gate in Poll follows them.
+REXCVAR_DEFINE_STRING(input_menu_combo, "A+B+X+Y+L+R", "Input",
+                      "The Switch buttons that open the game menu, held together: two or more of A B X Y L R ZL ZR PLUS "
+                      "MINUS LSTICK RSTICK UP DOWN LEFT RIGHT SL SR, joined by + (for example \"L+R+MINUS\"). A name "
+                      "not known, or a single button, keeps A+B+X+Y+L+R. While two or more of its L, R, ZL and ZR are "
+                      "held, its other buttons do not reach the game");
+
 // Single Joy-Cons (one per player, for multiplayer) are held sideways: the system is told so (it then turns the
 // stick for that grip), and the four buttons under the player's right thumb become the face buttons. SL and SR are
 // the triggers (ZL / ZR), the minus or plus button is Start, the stick is the left
@@ -255,6 +263,33 @@ void BuildButtonTables() {
   }
   std::lock_guard<std::mutex> lock(g_tables_mutex);
   g_tables = tables;
+}
+
+// blur-nx (2026-11-18): the game menu's buttons (input_menu_combo; SetGameMenuCombo): 0 until Setup sets them.
+std::atomic<uint64_t> g_game_menu_combo{0};
+
+// "A+B+X+Y+L+R" -> their buttons; 0 when a name is unknown or there are fewer than two.
+uint64_t ParseMenuCombo(const std::string& text) {
+  uint64_t mask = 0;
+  std::string token;
+  int count = 0;
+  bool bad = false;
+  auto flush = [&]() {
+    if (token.empty()) return;
+    uint64_t m = 0;
+    if (!SwitchButtonByName(token, m) || m == 0) bad = true;
+    mask |= m;
+    ++count;
+    token.clear();
+  };
+  for (char c : text) {
+    if (c == '+' || c == ',' || c == ' ' || c == '\t')
+      flush();
+    else
+      token += c;
+  }
+  flush();
+  return bad || count < 2 || std::popcount(mask) < 2 ? 0 : mask;
 }
 
 // The presses of a single Joy-Con held sideways, as a two-handed controller reports the same places (the right face
@@ -623,6 +658,12 @@ X_STATUS SwitchInputDriver::Setup() {
     slots_[i] = std::move(slot);
   }
   BuildButtonTables();
+  // blur-nx (2026-11-18): the game menu's buttons.
+  if (!SetGameMenuCombo(REXCVAR_GET(input_menu_combo))) {
+    REXLOG_WARN("input_menu_combo = \"{}\": not two or more known buttons; A+B+X+Y+L+R",
+                REXCVAR_GET(input_menu_combo));
+    SetGameMenuCombo("A+B+X+Y+L+R");
+  }
   hidPermitVibration(true);
   initialized_ = true;
   return X_STATUS_SUCCESS;
@@ -815,14 +856,16 @@ void SwitchInputDriver::Poll(size_t index) {
     RouteRecording(held, left, right);
   }
   DispatchMenuShortcuts(slot, held);
-  // blur-nx (2026-11-18): the game menu's chord (A+B+X+Y+L+R). While L and R are both held, A, B, X and Y do not reach
-  // the game: held first, L and R keep the face buttons of the chord from it (the menu's first console test pressed the
-  // face buttons first, and the game took one of them: its camera changed). L+R with a face button is no game input
-  // here; the face buttons reach the game again when L or R is let go.
+  // blur-nx (2026-11-18): the game menu's buttons (input_menu_combo, A+B+X+Y+L+R by default). While the combo's
+  // shoulders and triggers (two or more of its L, R, ZL, ZR) are all held, its other buttons do not reach the game:
+  // held first, they keep the rest of the combo from it (by default: L and R held, A, B, X and Y are the menu's). They
+  // reach the game again when one of those is let go.
   {
-    constexpr uint64_t kShoulders = HidNpadButton_L | HidNpadButton_R;
-    if ((held & kShoulders) == kShoulders)
-      held &= ~uint64_t(HidNpadButton_A | HidNpadButton_B | HidNpadButton_X | HidNpadButton_Y);
+    constexpr uint64_t kHeldFirst = HidNpadButton_L | HidNpadButton_R | HidNpadButton_ZL | HidNpadButton_ZR;
+    const uint64_t combo = g_game_menu_combo.load(std::memory_order_relaxed);
+    const uint64_t first = combo & kHeldFirst;
+    if (std::popcount(first) >= 2 && (held & first) == first)
+      held &= ~(combo & ~first);
   }
   X_INPUT_GAMEPAD gamepad{};
   ButtonTable table;  // blur-nx (2026-11-18): a copy (the game menu may rebuild the maps meanwhile)
@@ -966,9 +1009,8 @@ void SwitchInputDriver::DispatchMenuShortcuts(Slot& slot, uint64_t held) {
    * as the menus above). The menu closes itself on + and owns every button meanwhile (rex::ui::GameInputBlocked).
    */
   const uint64_t kBitGameMenu = uint64_t(1) << 10;
-  constexpr uint64_t kGameMenu = HidNpadButton_A | HidNpadButton_B | HidNpadButton_X | HidNpadButton_Y |
-                                 HidNpadButton_L | HidNpadButton_R;
-  const bool game_menu_now = (held & kGameMenu) == kGameMenu;
+  const uint64_t kGameMenu = g_game_menu_combo.load(std::memory_order_relaxed);  // input_menu_combo
+  const bool game_menu_now = kGameMenu != 0 && (held & kGameMenu) == kGameMenu;
   const bool game_menu_before = (slot.menu_shortcuts & kBitGameMenu) != 0;
   if (game_menu_now && !game_menu_before) {
     auto press = [] {
@@ -979,7 +1021,7 @@ void SwitchInputDriver::DispatchMenuShortcuts(Slot& slot, uint64_t held) {
     if (!window || !window->app_context().CallInUIThread(press)) {
       press();
     }
-    REXLOG_INFO("menu shortcut: the game menu (A+B+X+Y+L+R)");
+    REXLOG_INFO("menu shortcut: the game menu (input_menu_combo)");
   }
   slot.menu_shortcuts =
       game_menu_now ? (slot.menu_shortcuts | kBitGameMenu) : (slot.menu_shortcuts & ~kBitGameMenu);
@@ -1304,5 +1346,15 @@ X_RESULT SwitchInputDriver::GetDeviceKeystroke(DeviceId id, uint32_t flags,
 
 // blur-nx (2026-11-18, the game menu): the button maps built again from input_p1_* ... input_p4_* (set them first).
 void RebuildButtonMaps() { BuildButtonTables(); }
+
+// blur-nx (2026-11-18): the game menu's buttons from now on (input_menu_combo's form); false (nothing changed) when the
+// text is not two or more known buttons.
+bool SetGameMenuCombo(const std::string& text) {
+  const uint64_t mask = ParseMenuCombo(text);
+  if (mask == 0) return false;
+  g_game_menu_combo.store(mask, std::memory_order_relaxed);
+  REXLOG_INFO("game menu buttons: {}", text);
+  return true;
+}
 
 }  // namespace rex::input::nx
