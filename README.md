@@ -19,7 +19,7 @@ fixes and optimisations of the other ports.
 
 1. Open the installer page: **https://chanseyisthebest.github.io/blur-nx-installer/**
 2. Choose your game (the disc image or an extracted folder), then title update 2 (its Xbox 360 package, or the folder
-   it was extracted to), then any DLC packages, and press **Create blur-nx.zip**. Everything runs in your browser and
+   it was extracted to), and press **Create blur-nx.zip**. Everything runs in your browser and
    your game files stay on your computer. The page makes the game's shaders for the Switch from your own files, and
    packs the level files with LZ4 (the rest of Blur's data is compressed already).
 3. If you have an older blur-nx, delete its `switch/blur-nx/game_root` folder. Then extract `blur-nx.zip` to the root of
@@ -41,7 +41,7 @@ the game to open the game menu: the settings, the game's achievements and each p
   88 % of frames on time, 1 % lows about 18 fps (2026-11-18, handheld, four cores).
 - **Faster:** the release NRO is built with link-time optimisation and a profile (PGO) from a race on the console, the
   hottest game functions as checked machine copies and hand-written natives, and the base's renderer and CPU work.
-- **Not tested:** split-screen multiplayer, the DLC. Online play needs Xbox LIVE and is not supported.
+- **Not tested:** split-screen multiplayer. Online play needs Xbox LIVE and is not supported.
 - **Known:** at very low frame rates (about 15 fps, seen only in instrumented test builds) the picture can ghost; at the
   release's frame rate it does not.
 
