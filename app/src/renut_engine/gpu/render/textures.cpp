@@ -136,7 +136,11 @@ REXCVAR_DEFINE_BOOL(banjo_renut_untile_helpers, true, "Banjo/Renut",
                     "38 ms on the render thread alone). The same bytes. false: the render thread alone, as before")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 // Port 168 (from fnxf_xiii, its note of 2026-11-05): see ParkLocked.
-REXCVAR_DEFINE_BOOL(banjo_renut_texture_park, true, "Banjo/Renut",
+// blur-nx (2026-11-18, the base sync): off by default. On, Blur's console races showed ghosting, colour fringes and grain
+// over the whole picture from the start (Barcelona Oval and Amboy, both training races of the merged build); the six keys
+// the sync turned on, all off: clean; this one alone off: clean. The PC (Vulkan) race looked right. Sent to RR6 to be
+// off in the base too (docs/off-by-default.md).
+REXCVAR_DEFINE_BOOL(banjo_renut_texture_park, false, "Banjo/Renut",
                     "A host texture replaced at its address by another description is kept (up to 64, 96 MB, all "
                     "dropped when memory or the bindless table runs low) and taken back when that address asks for the "
                     "same layout and content again, instead of uploading it again (fnxf_xiii: 35 uploads of 36.7 MB in "
