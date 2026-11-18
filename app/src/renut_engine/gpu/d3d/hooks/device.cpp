@@ -1281,18 +1281,11 @@ void D3DDevice_SetGammaRamp_hook(u32 device_va, u32 /*flags*/, u32 ramp_va) {
   SetGammaRamp(d, ramp);
 }
 
-// Port 173 (from rehatched-nx, its commit 9d93d896): XDK 2.0.9407 (and 11164, docs/xdk-notes.md) keeps the Flags
-// argument, (D3DDevice*, DWORD Flags, ramp): the two-argument hooks would read Flags as the ramp's address. Not bound
-// here (Katamari's build dropped Flags); a port at such an XDK binds these at the two functions' addresses in place of
-// the two-argument hooks (BANJO_RENUT_HOOK(sub_<address>, D3DDevice_SetGammaRamp_flags_hook), and the PWL one).
-void D3DDevice_SetGammaRamp_hook(u32 device_va, u32 ramp_va);
-void D3DDevice_SetPWLGamma_hook(u32 device_va, u32 pwl_va);
-[[maybe_unused]] void D3DDevice_SetGammaRamp_flags_hook(u32 device_va, u32 /*flags*/, u32 ramp_va) {
-  D3DDevice_SetGammaRamp_hook(device_va, ramp_va);
-}
-[[maybe_unused]] void D3DDevice_SetPWLGamma_flags_hook(u32 device_va, u32 /*flags*/, u32 pwl_va) {
-  D3DDevice_SetPWLGamma_hook(device_va, pwl_va);
-}
+// Port 173 (from rehatched-nx, its commit 9d93d896) adds D3DDevice_SetGammaRamp_flags_hook and _SetPWLGamma_flags_hook
+// for XDKs that keep the Flags argument, wrapping two-argument hooks. Left out here (blur-nx, the base sync of
+// 2026-11-18): Blur's XDK 2.0.11164 has the Flags form, and its two hooks above and below already take it (bound at
+// 8223FBB0 and 8223FC80 since 2026-11-10); the port's declarations of two-argument hooks of the same names made those
+// names overloaded (BANJO_RENUT_HOOK could not pick one) and its wrappers called functions that do not exist here.
 
 // void D3DDevice_SetPWLGamma(D3DDevice*, const D3DPWLGAMMA*) [0x8261FAD0]
 // (TU3's build dropped the unused Flags between them)
