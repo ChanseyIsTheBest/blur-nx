@@ -1012,7 +1012,16 @@ void SwitchInputDriver::DispatchMenuShortcuts(Slot& slot, uint64_t held) {
   const uint64_t kGameMenu = g_game_menu_combo.load(std::memory_order_relaxed);  // input_menu_combo
   const bool game_menu_now = kGameMenu != 0 && (held & kGameMenu) == kGameMenu;
   const bool game_menu_before = (slot.menu_shortcuts & kBitGameMenu) != 0;
-  if (game_menu_now && !game_menu_before) {
+  // blur-nx (2026-11-18, RR6's finding in Ryujinx with three pads connected): one press of the combo seen by several
+  // slots at once (the same buttons on more than one pad) sent F8 once per slot in the same millisecond, and the menu
+  // opened and closed again. One dispatch per 500 ms across all slots: a press of the six buttons is one.
+  static std::atomic<int64_t> game_menu_last_ms{INT64_MIN / 2};
+  const int64_t game_menu_now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       std::chrono::steady_clock::now().time_since_epoch())
+                                       .count();
+  int64_t game_menu_prev_ms = game_menu_last_ms.load(std::memory_order_relaxed);
+  if (game_menu_now && !game_menu_before && game_menu_now_ms - game_menu_prev_ms >= 500 &&
+      game_menu_last_ms.compare_exchange_strong(game_menu_prev_ms, game_menu_now_ms, std::memory_order_relaxed)) {
     auto press = [] {
       rex::ui::KeyEvent keystroke(nullptr, rex::ui::VirtualKey::kF8, 1, false, false, false, false, false);
       rex::ui::ProcessKeyEvent(keystroke);

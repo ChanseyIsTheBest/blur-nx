@@ -27,7 +27,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # rumble into blur.toml only when the player changes it from the default.
 PLAYER_KEYS = ('language', 'frame_cap', 'banjo_renut_render_height_handheld', 'banjo_renut_render_height_docked',
                'banjo_renut_smaa', 'msaa_level', 'input_xbox_layout', 'input_joycon_sideways',
-               'input_joycon_sideways_stick', 'four_core_mode', 'input_menu_combo', 'menu_color', 'menu_font')
+               'input_joycon_sideways_stick', 'four_core_mode', 'input_menu_combo', 'menu_color', 'menu_font',
+               'menu_background_opacity')
 PLAYER_TABLES = ()
 FINAL = {'log_level': '"off"'}
 
@@ -84,6 +85,9 @@ menu_color = "Green"
 # The game menu's font: "System" (the console's own), "Pixel" (the debug overlay's pixel font), "Roboto", "Karla" or
 # "Cousine".
 menu_font = "System"
+
+# How solid the game menu's black background is, in percent: 0 (clear) to 100 (solid), in steps of 10.
+menu_background_opacity = 80
 '''
 
 

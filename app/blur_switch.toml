@@ -51,3 +51,6 @@ menu_color = "Green"
 # The game menu's font: "System" (the console's own), "Pixel" (the debug overlay's pixel font), "Roboto", "Karla" or
 # "Cousine".
 menu_font = "System"
+
+# How solid the game menu's black background is, in percent: 0 (clear) to 100 (solid), in steps of 10.
+menu_background_opacity = 80
