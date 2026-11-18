@@ -104,7 +104,7 @@ void RecordDraw(double ms) { Store(Series::kDraw, ms); }
 void RecordLimiterWait(double ms) {
   Store(Series::kLimiterWait, ms);
   if (ms > 0.0)
-    renut::frame_stats::OnGameThreadWait(ms);
+    renut::frame_stats::OnGameThreadWait(ms, 3);  // blur-nx (2026-11-18): its own source (had been counted a fence)
 }
 void SetGpuFrameMs(double ms) { Store(Series::kGpuFrame, ms); }
 void SetRenderThreadMs(double ms) { Store(Series::kRenderThread, ms); }

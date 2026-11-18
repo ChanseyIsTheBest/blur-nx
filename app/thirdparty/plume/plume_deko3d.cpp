@@ -188,6 +188,8 @@ namespace plume {
 
     static std::atomic<bool> g_imageBestFit{true};  // sasrt-nx (2026-11-09 night; port 58): Deko3DSetImageBestFit
     void Deko3DSetImageBestFit(bool on) { g_imageBestFit.store(on, std::memory_order_relaxed); }
+    static std::atomic<bool> g_imageSpare{true};  // blur-nx (2026-11-18): Deko3DSetImageSpareChunk
+    void Deko3DSetImageSpareChunk(bool on) { g_imageSpare.store(on, std::memory_order_relaxed); }
 
     void Deko3DSetRegionBestFit(bool on) {  // sasrt-nx (2026-11-09 night; port 58): plume_deko3d.h
         std::lock_guard<std::mutex> lock(g_regionMutex);
@@ -1226,6 +1228,12 @@ namespace plume {
     static uint64_t g_boostSince = 0;
 
     Deko3DDevice::~Deko3DDevice() {
+        {  // blur-nx (2026-11-18): the spare-chunk thread stopped first (it makes blocks and adds chunks)
+            std::unique_lock<std::mutex> lock(spareMutex);
+            spareStop = true;
+            spareWake.notify_all();
+            spareDone.wait_for(lock, std::chrono::seconds(2), [this] { return !spareRunning; });
+        }
         {
             std::lock_guard<std::mutex> lock(g_boostMutex);  // banjo-nx (2026-10-23): never left in boost mode
             if (g_boostActive)
@@ -1522,6 +1530,96 @@ namespace plume {
         }
     }
 
+    // blur-nx (2026-11-18, for 1 % lows, every port: Deko3DSetImageSpareChunk). The image heap's spare chunk: asked for
+    // (heapMutex held) after an image took room in the shared chunks, when none of them is empty; made on a thread of
+    // its own, outside every lock, and added under heapMutex. One at a time (spareMaking), so at most one is made ahead.
+    static void *spareThreadEntry(void *arg) {
+        static_cast<Deko3DDevice *>(arg)->spareWorker();
+        return nullptr;
+    }
+
+    void Deko3DDevice::wantSpareLocked() {
+        if (!g_imageSpare.load(std::memory_order_relaxed))
+            return;
+        for (const Chunk &c : chunks)
+            if (c.block && !c.dedicated && c.freeList.size() == 1 && c.freeList[0].first == 0 && c.freeList[0].second == c.size)
+                return;  // an empty shared chunk: the spare is there
+        std::lock_guard<std::mutex> lock(spareMutex);
+        if (spareStop || spareWanted || spareMaking)
+            return;
+        spareWanted = true;
+        if (!spareStarted) {
+            spareStarted = true;
+            pthread_attr_t attr;
+            pthread_attr_init(&attr);
+            pthread_attr_setstacksize(&attr, 256u << 10);
+            pthread_t thread;
+            spareRunning = pthread_create(&thread, &attr, spareThreadEntry, this) == 0;
+            pthread_attr_destroy(&attr);
+            if (spareRunning)
+                pthread_detach(thread);
+            else
+                logf("image heap: the spare-chunk thread did not start");
+        }
+        spareWake.notify_one();
+    }
+
+    void Deko3DDevice::spareWorker() {
+        // The uam thread's place: off the render thread's core, below the game's threads (the priority the process
+        // allows at or above the asked one, as compileWorker takes it).
+        if (g_deko3dOptions.compileCore >= 0)
+            svcSetThreadCoreMask(CUR_THREAD_HANDLE, g_deko3dOptions.compileCore, 1u << g_deko3dOptions.compileCore);
+        s32 asked = g_deko3dOptions.compilePriority, priority = -1;
+        if (asked > 0) {
+            u64 allowed = 0;
+            if (R_SUCCEEDED(svcGetInfo(&allowed, InfoType_PriorityMask, CUR_PROCESS_HANDLE, 0)) && allowed != 0) {
+                s32 p = std::min<s32>(asked, 63);
+                while (p > 0 && !(allowed & (1ull << p)))
+                    p--;
+                asked = p > 0 ? p : asked;
+            }
+            svcSetThreadPriority(CUR_THREAD_HANDLE, u32(asked));
+        }
+        svcGetThreadPriority(&priority, CUR_THREAD_HANDLE);
+        logf("image heap: the spare-chunk thread started (core %d, priority 0x%X; Deko3DSetImageSpareChunk)",
+             g_deko3dOptions.compileCore, uint32_t(priority));
+        std::unique_lock<std::mutex> lock(spareMutex);
+        for (;;) {
+            spareWake.wait(lock, [this] { return spareStop || spareWanted; });
+            if (spareStop)
+                break;
+            spareWanted = false;
+            spareMaking = true;
+            lock.unlock();
+            DkMemBlock block = nullptr;
+            const uint64_t t0 = armGetSystemTick();
+            if (!heapRoomShort() && g_imageSpare.load(std::memory_order_relaxed)) {
+                t_inImageAlloc = true;  // no empty chunks given back to make a spare one
+                block = makeBlock(ImageChunkSize, DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image, "image heap chunk (ahead)");
+                t_inImageAlloc = false;
+            }
+            const double ms = double(armTicksToNs(armGetSystemTick() - t0)) / 1e6;
+            if (block) {
+                size_t n = 0;
+                {
+                    std::lock_guard<std::mutex> heap(heapMutex);
+                    Chunk c;
+                    c.block = block;
+                    c.size = ImageChunkSize;
+                    c.freeList.push_back({0, ImageChunkSize});
+                    chunks.push_back(std::move(c));
+                    n = chunks.size();
+                }
+                logf("image heap: chunk %zu of %u MiB made ahead in %.1f ms (Deko3DSetImageSpareChunk)", n,
+                     ImageChunkSize >> 20, ms);
+            }
+            lock.lock();
+            spareMaking = false;
+        }
+        spareRunning = false;
+        spareDone.notify_all();
+    }
+
     bool Deko3DDevice::imageAlloc(uint32_t size, uint32_t alignment, Deko3DImageAlloc &out, bool dedicated) {
         size = alignUp(size, 256);
         alignment = std::max<uint32_t>(alignment, 256);
@@ -1599,6 +1697,7 @@ namespace plume {
                     out.offset = at;
                     out.size = size;
                     out.chunk = int32_t(bc);
+                    wantSpareLocked();  // blur-nx (2026-11-18): the next chunk made ahead if none is empty now
                     return true;
                 }
             }
@@ -1620,12 +1719,14 @@ namespace plume {
                     out.offset = at;
                     out.size = size;
                     out.chunk = int32_t(ci);
+                    wantSpareLocked();  // blur-nx (2026-11-18): the next chunk made ahead if none is empty now
                     return true;
                 }
             }
             if (pass == 0) {
                 uint32_t chunkSize = std::max(ImageChunkSize, alignUp(size + alignment, DK_MEMBLOCK_ALIGNMENT));
                 Chunk c;
+                const uint64_t made_at = armGetSystemTick();  // blur-nx (2026-11-18): how long this thread waited
                 t_inImageAlloc = true;  // banjo-nx (2026-10-28): makeBlock leaves the image heap to this thread
                 c.block = makeBlock(chunkSize, DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image, "image heap chunk");
                 // banjo-nx (2026-10-28, the console's OOM): the empty chunks back, then the image's own size.
@@ -1643,7 +1744,8 @@ namespace plume {
                 c.size = chunkSize;
                 c.freeList.push_back({0, chunkSize});
                 chunks.push_back(std::move(c));
-                logf("image heap: chunk %zu of %u MiB", chunks.size(), chunkSize >> 20);
+                logf("image heap: chunk %zu of %u MiB, made at once in %.1f ms (the heap's lock held)", chunks.size(),
+                     chunkSize >> 20, double(armTicksToNs(armGetSystemTick() - made_at)) / 1e6);
             }
         }
         return false;

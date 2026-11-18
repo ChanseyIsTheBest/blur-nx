@@ -427,6 +427,12 @@ REXCVAR_DEFINE_BOOL(sasrt_image_best_fit, true, "SASRT/GPU",
                     "An image goes to the smallest free range it fits among the image heap's shared chunks (the first "
                     "that fit before): fewer holes, and chunks that empty go back to the GPU region")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// blur-nx (2026-11-18, for 1 % lows, every port): plume_deko3d.h, Deko3DSetImageSpareChunk.
+REXCVAR_DEFINE_BOOL(blur_renut_image_spare_chunk, true, "SASRT/GPU",
+                    "The image heap keeps one empty 32 MB chunk ready, made ahead on a thread of its own (the uam "
+                    "thread's core and priority): a texture that finds no room in the chunks takes it, instead of "
+                    "making a chunk where it is (20-38 ms on Blur's console, 4-5 times a race, the heap's lock held)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 // sasrt-nx (2026-11-09; port 58): plume_deko3d.h, Deko3DSetDedicatedTargets.
 // sasrt-nx (2026-11-11, port 79; the stutter hunt, run slow2: 55 of the race's 60 frames over 60 ms followed a dynamic-resolution
 // step, each step ~33 dedicated blocks made in one frame and the old ones destroyed two frames later). plume_deko3d.h,
@@ -591,6 +597,7 @@ void ApplyPlume() {
   plume::Deko3DSetTargetBlockCacheMb(uint32_t(REXCVAR_GET(sasrt_target_block_cache_mb)));  // sasrt-nx (2026-11-11)
   plume::Deko3DSetRegionBestFit(REXCVAR_GET(sasrt_region_best_fit));      // sasrt-nx (2026-11-09 night; port 58)
   plume::Deko3DSetImageBestFit(REXCVAR_GET(sasrt_image_best_fit));        // sasrt-nx (2026-11-09 night; port 58)
+  plume::Deko3DSetImageSpareChunk(REXCVAR_GET(blur_renut_image_spare_chunk));  // blur-nx (2026-11-18, 1 % lows)
 #endif
 }
 

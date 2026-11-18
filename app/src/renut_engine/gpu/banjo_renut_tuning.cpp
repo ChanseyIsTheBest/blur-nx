@@ -1507,6 +1507,7 @@ void StatsGameFrame() {
     REXLOG_INFO("[renut] {}", deko3d::Report());
 #endif
   REXLOG_INFO("[renut] {}", renut::frame_stats::WaitReport());  // blur-nx (2026-11-13, #37's census)
+  REXLOG_INFO("[renut] {}", renut::frame_stats::PacingReport());  // blur-nx (2026-11-18, for 1 % lows)
   {  // blur-nx (2026-11-13, #47's census; banjo_renut_lean_diagnostics' draws)
     const uint64_t draws = g_const_draws.exchange(0, std::memory_order_relaxed);
     const uint64_t regs = g_const_registers.exchange(0, std::memory_order_relaxed);
