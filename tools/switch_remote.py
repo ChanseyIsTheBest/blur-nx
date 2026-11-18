@@ -22,6 +22,7 @@ card or write memory. The Album is read-only; /atmosphere is not read. Every con
   get REMOTE [LOCAL]         ftp download (a folder: every file in it, one level)
   put LOCAL REMOTE           ftp upload
   rm REMOTE                  ftp delete (a file)
+  mv REMOTE NEW              ftp rename inside the port's folder (2026-11-18)
   raw "CMD ..."              a sys-botbase command as it is, the reply printed
   album-ls [PATH]            the Album, read only: /Nintendo/Album... or /emuMMC/<folder>/Nintendo/Album...
   album-get REMOTE [LOCAL]   one Album file downloaded (read only; nothing in the Album is written or deleted)
@@ -381,9 +382,11 @@ def main():
         remote = sd_path('logs/rex/stall_dump')
         ftp_retry(host, lambda f: f.storbinary('STOR ' + remote, io.BytesIO(b'')))
         print('requested a stall dump:', remote, time.strftime('%H:%M:%S'))
-    elif cmd in ('ls', 'get', 'put', 'rm'):
-        # Refused before any connection is made: the card path is rest[1] for put, rest[0] for the others.
+    elif cmd in ('ls', 'get', 'put', 'rm', 'mv'):
+        # Refused before any connection is made: the card path is rest[1] for put, rest[0] for the others (both for mv).
         sd_path(rest[1] if cmd == 'put' else (rest[0] if rest else ''))
+        if cmd == 'mv':
+            sd_path(rest[1])
         if cmd == 'ls':
             lines = []
             ftp_retry(host, lambda f: (f.cwd(sd_path(rest[0] if rest else '')), f.retrlines('LIST', lines.append)))
@@ -415,6 +418,12 @@ def main():
         elif cmd == 'rm':
             ftp_retry(host, lambda f: f.delete(sd_path(rest[0])))
             print('deleted', sd_path(rest[0]))
+        elif cmd == 'mv':
+            # blur-nx (2026-11-18): a rename inside the port's folder (both paths checked), in place of a delete:
+            # the A/B of packed and raw game files sets the raw ones aside and puts them back.
+            src, dst = sd_path(rest[0]), sd_path(rest[1])
+            ftp_retry(host, lambda f: f.rename(src, dst))
+            print('renamed', src, '->', dst)
     else:
         sys.exit('unknown command ' + cmd)
 
