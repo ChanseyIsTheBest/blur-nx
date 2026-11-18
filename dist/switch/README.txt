@@ -5,6 +5,11 @@ A ReXGlue static recompilation, built from renut_nx_ultimate_base (banjo-nx's SD
 and the ports' fixes) with reNut's Direct3D-level renderer on plume's deko3d back end (no NVK, no PM4 ring, no EDRAM
 model). Your own game files are needed; nothing of the game is in this package except the recompiled code.
 
+Install it with the web installer (https://chanseyisthebest.github.io/blur-nx-installer/): it makes blur-nx.zip from
+your disc, title update 2 and any DLC, in your browser. Extract the zip to the root of the SD card, then in Sphaira
+find Blur, press X, choose Install Forwarder, set Address Space to 39-bit, choose Create Forwarder, and start the game
+from the Home Screen.
+
 Credits: reNut's renderer by masterspike52 (its author permits its reuse in these ports), renut_nx_ultimate_base and
 the ports its fixes come from (katamari-nx, banjo-nx, sa2-nx, rr6-nx, sasrt-nx, kameo-nx and the others),
 NetherSX2_nx by NaGaa95 (the four-core layout, MIT), battd_nx (the GPU arena), bejeweled3-nx and the zuma ports (the
@@ -13,13 +18,20 @@ hot-function method). GPL-3.0 where the sources are.
 SD card layout
 --------------
 sdmc:/switch/blur-nx/blur-nx.nro        the program
+sdmc:/switch/blur-nx/deko3d_glsl.bin    the game's shaders, made by the installer from your files
+sdmc:/switch/blur-nx/deko3d_shaders.bin the same compiled for the Switch, and pipeline_list.bin, the pipelines the game
+                                        builds at start (the installer's "Compile the shaders" option)
 sdmc:/switch/blur-nx/blur.toml          your settings (fourteen of them; written at the first start, see "Settings")
-sdmc:/switch/blur-nx/game_root/         the disc's files: default.xex and the rest of the disc (extract your ISO; the
-                                        ISO itself is not read). Title update 2's default.xexp goes next to
-                                        default.xex.
+sdmc:/switch/blur-nx/game_root/         the disc's files: default.xex and the rest of the disc (the ISO itself is not
+                                        read). Title update 2's default.xexp goes next to default.xex. The level
+                                        files are packed with LZ4 (NAME.lz4b; the game reads them as NAME).
 sdmc:/switch/blur-nx/update/            title update 2's other files (mounted as UPDATE:, as the console does)
 sdmc:/switch/blur-nx/dlc/               optional DLC packages (Xbox 360 LIVE files), installed at the first start;
                                         not tested with any
+sdmc:/switch/blur-nx/logs/              logs: none in normal play; logs/rex/rex_crash.log after a crash
+
+Bug reports: add log_level = "info" at the top of blur.toml, play until the problem happens, and include the logs/
+folder.
 
 Settings
 --------
@@ -45,7 +57,7 @@ A console profile
 -----------------
 Add switch_profile_stacks = true and log_level = "info" to blur.toml (configs/renut_profile.toml): the sampler writes
 sdmc:/switch/blur-nx/logs/rex/rex_profile.log, one report every 10 s. Play a few minutes of a race, then send that
-file and logs/renut_001.log. With blur-nx.elf (this NRO's own ELF, in the package) the samples map to functions:
+file and logs/renut_001.log. With the ELF of this NRO's build (below) the samples map to functions:
 the machine copies (tools/switch_hot_bulk.py --merge) and any hand-written native are made from it.
 
 Cores
@@ -57,4 +69,5 @@ main.npdm, or set four_core_mode = false (the game removes the file it wrote), t
 
 Profiling files
 ---------------
-blur-nx.elf and the source snapshot (source_<commit>.tgz) are the ones this NRO was built from.
+The samples map to functions with the ELF of the same build: build the release's commit from source
+(https://github.com/ChanseyIsTheBest/blur-nx, docs/building.md).

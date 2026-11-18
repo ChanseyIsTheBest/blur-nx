@@ -1,6 +1,6 @@
 # The base's documentation
 
-The pages in this folder: where to start, what each page is, and how they are kept. The [repository's README](../README.md)
+The pages in this folder: where to start, what each page is, and how they are kept. The [base's README](base-README.md)
 is the summary of the base itself.
 
 The base builds Beautiful Katamari as checked in, so the names and numbers in these pages are Katamari's unless a page
