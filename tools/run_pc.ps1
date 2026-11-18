@@ -7,8 +7,10 @@
 # swapchain, which a minimised window does not get.
 # -OutRoot (2026-11-11): the run's folder elsewhere (C:\blur-nx-test\pc_runs for the big ones: the request's rule). A PC
 # profile (--banjo_pc_profile_s=N in -Extra) is moved there from app\out\pc\logs\pc_profile.log at the end.
+# -Game (2026-11-18): another game folder (the web installer's game_root, with its .lz4b files), in place of
+# D:/blur/game (passing --game_data_root in -Extra too would be the CLI error above).
 param([int]$Seconds = 90, [string]$Name = "run", [int]$Every = 15, [string]$Extra = "", [switch]$Visible, [int]$Max = 60,
-      [string]$OutRoot = "")
+      [string]$OutRoot = "", [string]$Game = "D:/blur/game")
 $root = Split-Path -Parent $PSScriptRoot
 $dir = Join-Path $root "app\out\pc"
 $exe = Join-Path $dir "renut.exe"
@@ -18,7 +20,7 @@ $log = Join-Path $logs "$Name.log"
 Remove-Item $log -ErrorAction SilentlyContinue
 $min = if ($Visible) { "false" } else { "true" }
 $args = @("--log_file=$log", "--audio_mute=true", "--window_start_minimized=$min", "--fullscreen=false",
-          "--game_data_root=D:/blur/game", "--update_data_root=D:/blur/tu", "--user_data_root=$root/out/pc_user",
+          "--game_data_root=$Game", "--update_data_root=D:/blur/tu", "--user_data_root=$root/out/pc_user",
           "--nfsmw_captura_cada_s=$Every", "--nfsmw_captura_max=$Max", "--log_file_writer=false") +
         @($Extra -split ' ' | Where-Object { $_ })
 $style = if ($Visible) { "Normal" } else { "Minimized" }
