@@ -36,6 +36,10 @@ address below is Angry Birds'; a port finds its own (tools/xdk_sigmatch.py, the 
 - **Forms with Flags.** D3DVertexShader_Bind is the first release's (pShader, Flags, pDecl, pStreamStrides, Index):
   bind `D3DVertexShader_Bind_flags_hook` (port 173), not the three-argument hook. SetGammaRamp and SetPWLGamma keep
   Flags, (D3DDevice*, Flags, ramp): bind `D3DDevice_SetGammaRamp_flags_hook` and `D3DDevice_SetPWLGamma_flags_hook`.
+  A port whose own hooks of those names already take Flags (blur-nx at XDK 2.0.11164) leaves out port 173's
+  block of two-argument `D3DDevice_SetGammaRamp_hook` / `D3DDevice_SetPWLGamma_hook` declarations and their
+  Flags wrappers (d3d/hooks/device.cpp): with both, the names are overloaded and BANJO_RENUT_HOOK does not
+  compile (Blur's 909f520b).
 - **D3DVertexDeclaration_GetDeclaration.** A game that asks for a declaration's elements gets zeros from the XDK's
   own (Renut's declarations are records with no elements in their guest block), and a search for D3DDECL_END runs
   off the stack (Angry Birds' crash at the end of level 1). Bind `D3DVertexDeclaration_GetDeclaration_hook` (port 173).

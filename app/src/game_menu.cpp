@@ -52,6 +52,11 @@ REXCVAR_DEFINE_STRING(menu_color, "Green", "UI",
 REXCVAR_DEFINE_STRING(menu_font, "System", "UI",
                       "The game menu's font: System (the console's own), Pixel (the debug overlay's ProggyTiny), "
                       "Roboto, Karla or Cousine. The menu changes it at once (the ImGui drawer's RequestFontRebuild)");
+// Port 180 (the user, 2026-11-18: the black background's opacity as an option, in the toml and in the menu under the
+// font and the colour): the window's black, read at every frame.
+REXCVAR_DEFINE_INT32(menu_background_opacity, 80, "UI",
+                     "The game menu's black background, in percent opaque: 0 (the game shows through) to 100; 80 by "
+                     "default (the user's choice; the menu's first look was 97). The menu changes it at once");
 
 // blur_keys.cpp: the frame cap from the next frame, and the one in force.
 void BlurSetFrameCapLive(int fps);
@@ -204,6 +209,12 @@ void SetTheme(const std::string& name, double time) {
 }
 
 ImU32 U32(const ImVec4& c, float alpha = 1.0f) { return ImGui::GetColorU32(ImVec4(c.x, c.y, c.z, c.w * alpha)); }
+
+// Port 180: the window's black at menu_background_opacity (0-100 %; 80 by default, kBlack's own alpha was 0.97).
+ImVec4 BackgroundBlack() {
+  const int percent = std::clamp(int(REXCVAR_GET(menu_background_opacity)), 0, 100);
+  return ImVec4(kBlack.x, kBlack.y, kBlack.z, float(percent) / 100.0f);
+}
 
 // ---- The player's file, key by key ----------------------------------------------------------------------------------
 
@@ -409,6 +420,13 @@ std::vector<Setting> MakeSettings(const std::string& file) {
       {Q(Tr(C_SYSTEM), "System"), Q(Tr(C_PIXEL), "Pixel"), Q("Roboto", "Roboto"), Q("Karla", "Karla"),
        Q("Cousine", "Cousine")},
       0, Tr(H_MENUFONT));
+  // Port 180 (the user, 2026-11-18): menu_background_opacity, under the colour and the font; Right: more solid.
+  {
+    std::vector<Choice> opacity;
+    for (int p = 0; p <= 100; p += 10)
+      opacity.push_back(C(std::to_string(p) + " %", std::to_string(p), std::to_string(p)));
+    add(T_MENUOPACITY, "menu_background_opacity", false, std::move(opacity), 8, Tr(H_MENUOPACITY));  // 80 %
+  }
   return s;
 }
 
@@ -886,7 +904,7 @@ void GameMenuDialog::OnDraw(ImGuiIO& io) {
                           ImGuiCond_Always);
   ImGui::SetNextWindowSize(ImVec2(win_w, win_h), ImGuiCond_Always);
   ImGui::SetNextWindowFocus();
-  ImGui::PushStyleColor(ImGuiCol_WindowBg, kBlack);
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, BackgroundBlack());  // port 180: menu_background_opacity
   ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
   ImGui::PushStyleColor(ImGuiCol_Border, kAccent);
   ImGui::PushStyleColor(ImGuiCol_Text, kText);

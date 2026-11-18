@@ -59,13 +59,19 @@ extern "C" char *fake_heap_end;  // libnx: the end of the malloc heap
 // renut-ultimate: the host shaders this file makes itself (sasrt-nx's 16-bit fixed-point resolve).
 #include "host_shaders/resolve_clamp_ps.spirv.h"
 #include "host_shaders/depth_restore_ps.spirv.h"
+#include "host_shaders/smaa_vs.spirv.h"  // port 179 (banjo_renut_edram_carry): the UI upscale's bilinear pass
+#include "host_shaders/ui_upscale_ps.spirv.h"
 #if defined(PLUME_DEKO3D)
 #include "host_shaders/resolve_clamp_ps.deko3d.h"
 #include "host_shaders/depth_restore_ps.deko3d.h"
+#include "host_shaders/smaa_vs.deko3d.h"
+#include "host_shaders/ui_upscale_ps.deko3d.h"
 #endif
 #if defined(_WIN32)
 #include "host_shaders/resolve_clamp_ps.dxil.h"
 #include "host_shaders/depth_restore_ps.dxil.h"
+#include "host_shaders/smaa_vs.dxil.h"
+#include "host_shaders/ui_upscale_ps.dxil.h"
 #endif
 #if defined(PLUME_DEKO3D)
 #include <plume_deko3d.h>  // banjo-nx (2026-10-17): Deko3DBindMemExport
@@ -448,6 +454,23 @@ REXCVAR_DEFINE_BOOL(vivapinata_shader_earlykill, true, "Banjo/Enhancements",
                     "after what it needs, the colour arithmetic it does not need after it (constant 977 = 1, "
                     "tools/deko3d_glsl_opt.py earlykill): a discarded pixel skips that arithmetic, the same pixels. Off: "
                     "the test last, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+// Port 179 (from fnxf_xiii, its render/draw.cpp of 2026-10-31 and 2026-11-01): CarryEdramBeforeDrawLocked. A heuristic,
+// so off by default (the user's rule for keys that can change a game's picture): a game that shows black or noise where
+// the console shows the frame before turns it on in its toml.
+REXCVAR_DEFINE_BOOL(banjo_renut_edram_carry, false, "Banjo/Renut",
+                    "From fnxf_xiii: a colour target first drawn in a frame without being cleared in it starts with the "
+                    "picture of the target last written over the same EDRAM base in an earlier frame (the same format, at "
+                    "least as large, single-sampled), scaled to fit: the console's EDRAM kept that picture there, a host "
+                    "target only what it drew itself. Not with blur_renut_edram_inherit (the exact, tile-by-tile rule). "
+                    "false: such a target holds what it last drew, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(banjo_renut_diag_edram_carry_always, false, "Banjo/Renut",
+                    "banjo_renut_edram_carry, a test: every target's first draw in a frame takes the picture of the "
+                    "other colour target written last (the same format, at least as large), whatever its EDRAM base, "
+                    "frame and order, and the first 16 checks are logged. The picture can be wrong: it checks that the "
+                    "carry's pass runs, on a game that never needs it")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DECLARE(bool, banjo_renut_neon_compare);  // banjo-nx (2026-10-20, from sa2-nx): backend/queued.cpp
@@ -2648,6 +2671,165 @@ void InheritEdramBeforeDrawLocked(const Targets &t, u32 color_mask, const u32 *b
       g_bound.layout = false;
       g_bound.viewport_set = false;
     }
+  }
+}
+
+// Port 179 (from fnxf_xiii, its render/draw.cpp EdramCarryLocked of 2026-10-31 and 2026-11-01; banjo_renut_edram_carry,
+// off by default). On the console a colour target is a view of EDRAM, which keeps what was last written there: a game that
+// draws into a target without clearing it leaves the pixels its geometry misses as the EDRAM held them, often another
+// target's picture from the frame before. Here each view is a host image of its own that holds only what it drew (black
+// at first: sasrt_renut_deko3d_clear_new). FINAL FANTASY XIII's Vestige, behind the crystal: no geometry there and the
+// scene's colour never cleared, so the console showed the last frame's picture (a soft light) and fnxf_xiii bright noise
+// or black. So: a colour target first drawn in a frame without a clear of it in that frame, where a different target of
+// the same EDRAM base and host format, at least as large (a smaller one does not cover this one's EDRAM), was written
+// after it in an earlier frame, starts with that target's picture scaled to its size (bilinear: smaa_vs and
+// ui_upscale_ps, the UI upscale's pass). Once a target and frame at most, across frames only (within a frame the game's
+// passes resolve what they need), single-target draws only. The base's, not fnxf_xiii's: the source single-sampled (it
+// is sampled as a 2D texture), the targets an alias clear reaches counted as cleared, a colour-only framebuffer of its
+// own rather than the draw's, and nothing while blur_renut_edram_inherit is on. Called by both draw paths before
+// BindTargets (the fast path whatever it then binds, so every draw marks its targets); the draw's own binds follow
+// (g_bound is reset).
+std::unordered_map<u32, uint64_t> g_carry_last;  // EDRAM base -> the generation of the colour target written there last
+uint64_t g_carry_order = 0;
+// banjo_renut_diag_edram_carry_always: the two colour targets written last, any base (the last first).
+uint64_t g_carry_last_any[2] = {};
+void NoteCarryAny(uint64_t generation) {
+  if (g_carry_last_any[0] != generation) {
+    g_carry_last_any[1] = g_carry_last_any[0];
+    g_carry_last_any[0] = generation;
+  }
+}
+
+inline bool EdramCarryOn() {
+  static const bool on = [] {
+    const bool v = REXCVAR_GET(banjo_renut_edram_carry);
+    if (v)
+      RGPU_INFO("[renut] banjo_renut_edram_carry on{}", REXCVAR_GET(banjo_renut_diag_edram_carry_always)
+                                                             ? ", with banjo_renut_diag_edram_carry_always (a test)"
+                                                             : "");
+    return v;
+  }();
+  return on && !banjo::renut_gpu::EdramInheritOn();
+}
+
+void NoteEdramCarryClearLocked(HostSurface *c) {
+  if (!c || c->depth)
+    return;
+  c->carry_cleared_frame = TextureFrameLocked();
+  c->carry_order = ++g_carry_order;
+  g_carry_last[u32(c->color_info_word) & 0xFFFu] = c->generation;
+  NoteCarryAny(c->generation);
+}
+
+void CarryEdramBeforeDrawLocked(const Targets &t) {
+  auto &s = State();
+  const uint64_t frame = TextureFrameLocked();
+  static const bool always = REXCVAR_GET(banjo_renut_diag_edram_carry_always);
+  for (uint32_t i = 0; i < t.color_count; ++i) {
+    HostSurface *c = t.colors[i];
+    if (!c || c->depth || c->carry_drawn_frame == frame)
+      continue;
+    uint64_t &last = g_carry_last[u32(c->color_info_word) & 0xFFFu];
+    // By generation: a target retired or rebuilt since is not found.
+    const uint64_t source =
+        !always ? last : g_carry_last_any[0] != c->generation ? g_carry_last_any[0] : g_carry_last_any[1];
+    HostSurface *from = source && source != c->generation ? SurfaceByGenerationLocked(source) : nullptr;
+    const bool carry = t.color_count == 1 && (always || c->carry_cleared_frame != frame) && from && from != c &&
+                       !from->depth && from->texture && c->texture && from->format == c->format &&
+                       from->samples == plume::RenderSampleCount::COUNT_1 &&
+                       (always || (from->carry_drawn_frame < frame && from->carry_order > c->carry_order)) &&
+                       from->width >= c->width && from->height >= c->height;
+    if (always) {  // the test logs its first checks: what each target found
+      static u32 checks = 0;
+      if (LogLimited(checks, 16))
+        RGPU_INFO("[renut] banjo_renut_diag_edram_carry_always: {}x{} target {:08X} (format {}, samples {}, base {:03X}, "
+                  "{} targets) {}: {}", c->width, c->height, c->guest_va, u32(c->format), u32(c->samples),
+                  u32(c->color_info_word) & 0xFFFu, t.color_count, carry ? "carried" : "not carried",
+                  from ? fmt::format("from {:08X} ({}x{}, format {}, samples {}, order {} against {})", from->guest_va,
+                                     from->width, from->height, u32(from->format), u32(from->samples), from->carry_order,
+                                     c->carry_order)
+                       : fmt::format("no source (generation {})", source));
+    }
+    c->carry_drawn_frame = frame;
+    c->carry_order = ++g_carry_order;
+    last = c->generation;
+    NoteCarryAny(c->generation);
+    if (!carry)
+      continue;
+    static std::unique_ptr<plume::RenderShader> vs, ps;
+    static bool tried = false;
+    if (!tried) {
+      tried = true;
+      vs = CreateHostShader(s.device.get(), RENUT_HOST_SHADER(smaa_vs), "smaa_vs");
+      ps = CreateHostShader(s.device.get(), RENUT_HOST_SHADER(ui_upscale_ps), "ui_upscale_ps");
+      if (!vs || !ps)
+        RGPU_WARN("[renut] banjo_renut_edram_carry: its shaders could not be made, so nothing is carried");
+    }
+    if (!vs || !ps)
+      return;
+    static std::unordered_map<uint64_t, std::unique_ptr<plume::RenderPipeline>> pipelines;
+    auto &pipeline = pipelines[uint64_t(c->format) | uint64_t(u32(c->samples)) << 32];
+    if (!pipeline) {
+      plume::RenderGraphicsPipelineDesc desc;
+      desc.pipelineLayout = s.utility_layout.get();
+      desc.vertexShader = vs.get();
+      desc.pixelShader = ps.get();
+      desc.multisampling = plume::RenderMultisampling(plume::RenderSampleCounts(c->samples));
+      desc.primitiveTopology = plume::RenderPrimitiveTopology::TRIANGLE_LIST;
+      desc.cullMode = plume::RenderCullMode::NONE;
+      desc.renderTargetCount = 1;
+      desc.renderTargetFormat[0] = c->format;
+      desc.renderTargetBlend[0] = plume::RenderBlendDesc::Copy();
+      desc.depthTargetFormat = plume::RenderFormat::UNKNOWN;
+      pipeline = s.device->createGraphicsPipeline(desc);
+      if (!pipeline)
+        continue;
+      pipeline->setName("renut edram carry");
+    }
+    const uint32_t source_slot = SurfaceSampleSlotLocked(from);
+    if (source_slot == kInvalidDescriptor)
+      continue;
+    // A resolve handed over in this target's image is drawn out first: the carry writes the image.
+    if (c->handed)
+      DepthHandOverBeforeBindLocked(c, nullptr, 0);
+    HostSurface *const colors[] = {c};
+    plume::RenderFramebuffer *framebuffer = GetFramebufferLocked(colors, 1, nullptr);
+    if (!framebuffer)
+      continue;
+    plume::RenderCommandList *cmd = s.command_list;
+    TransitionSurfaceLocked(from, plume::RenderTextureLayout::SHADER_READ);
+    TransitionSurfaceLocked(c, plume::RenderTextureLayout::COLOR_WRITE);
+    cmd->setFramebuffer(framebuffer);
+    g_bound.framebuffer = framebuffer;
+    const uint32_t w = c->scale.Size(c->width), h = c->scale.Size(c->height);  // host pixels
+    cmd->setViewports(plume::RenderViewport(0.0f, 0.0f, float(w), float(h)));
+    cmd->setScissors(plume::RenderRect(0, 0, int32_t(w), int32_t(h)));
+    cmd->setGraphicsPipelineLayout(s.utility_layout.get());
+    cmd->setPipeline(pipeline.get());
+    cmd->setGraphicsDescriptorSet(s.texture_set.get(), 0);
+    cmd->setGraphicsDescriptorSet(s.sampler_set.get(), 1);
+    UtilityPush push{};
+    push.texture_index = source_slot;
+    push.sampler_index = kLinearClampSamplerSlot;
+    cmd->setGraphicsPushConstants(0, &push, 0, sizeof(push));
+    cmd->drawInstanced(3, 1, 0, 0);
+    ++c->writes;  // banjo-nx (banjo_renut_resolve_skip): it holds other pixels now
+    c->write_seq = ++g_surface_write_seq;
+    g_blur_color_write_last = c->write_seq;
+    static uint64_t total = 0;
+    static u32 logged = 0;
+    ++total;
+    if (LogLimited(logged, 8))
+      RGPU_INFO("[renut] {}x{} target {:08X} (EDRAM base {:03X}, samples {}) starts from {:08X}'s picture ({}x{}), as "
+                "the console's EDRAM held it (banjo_renut_edram_carry)", c->width, c->height, c->guest_va,
+                u32(c->color_info_word) & 0xFFFu, u32(c->samples), from->guest_va, from->width, from->height);
+    else if (std::has_single_bit(total))
+      RGPU_INFO("[renut] banjo_renut_edram_carry: {} carries so far", total);
+    // The draw path binds its own layout, pipeline, targets and viewport again.
+    g_bound.framebuffer = nullptr;
+    g_bound.pipeline = nullptr;
+    g_bound.layout = false;
+    g_bound.viewport_set = false;
   }
 }
 
@@ -11544,6 +11726,10 @@ int FastDrawLocked(const u8 *device_state, const DrawCall &call, const ReplayCon
   const u32 fast_dc = f.kp_hot.depth_control;
   const bool fast_depth_writes = ((fast_dc & 2) && (fast_dc & 4)) ||
                                  ((fast_dc & 1) && ((f.kp_hot.stencil_ref_mask >> 16) & 0xFF) != 0);
+  // Port 179 (from fnxf_xiii; banjo_renut_edram_carry, off): before the bind test, so every draw marks its targets this
+  // frame; a carry draws with its own framebuffer and resets g_bound, so the targets are bound again below.
+  if (EdramCarryOn()) [[unlikely]]
+    CarryEdramBeforeDrawLocked(targets);
   if (targets_changed || !g_bound.framebuffer || g_bound.framebuffer != f.bound_framebuffer ||
       f.bind_layout_epoch != g_layout_epoch || f.framebuffer_epoch != FramebufferEpochLocked() ||
       (targets.depth && targets.depth->handed && (fast_depth_writes || !banjo::renut_gpu::DepthHandOverReadOnlyOn())) ||
@@ -13576,6 +13762,9 @@ bool DrawStateLocked(const u8 *device_state, const DrawCall &call, const ReplayC
   // banjo-nx (2026-10-28, banjo_deko3d_depth_handover_readonly): whether this draw writes depth or stencil.
   const bool draw_depth_writes = ((key.depth_control & 2) && (key.depth_control & 4)) ||
                                  ((key.depth_control & 1) && ((key.stencil_ref_mask >> 16) & 0xFF) != 0);
+  // Port 179 (from fnxf_xiii; banjo_renut_edram_carry, off): a target first drawn this frame without a clear.
+  if (pipeline && EdramCarryOn()) [[unlikely]]
+    CarryEdramBeforeDrawLocked(targets);
   // blur-nx (2026-11-11, port 76; its key 220: blur_renut_edram_inherit): what other views wrote over a target this draw
   // keeps in part.
   if (pipeline)
@@ -14748,6 +14937,8 @@ void ClearTargets(const Targets &t, u32 flags, const plume::RenderRect &rect, co
     NoteSiblingClear(*c, host_rect);  // vivapinata-nx (2026-11-11, vivapinata_resolve_from_sibling)
     c->write_seq = ++g_surface_write_seq;  // sasrt-nx: the EDRAM depth restore
     g_blur_color_write_last = c->write_seq;  // blur-nx (2026-11-11, port 76; its key 220)
+    if (EdramCarryOn()) [[unlikely]]
+      NoteEdramCarryClearLocked(c);  // port 179 (from fnxf_xiii; banjo_renut_edram_carry)
     g_clears_whole += is_whole;
     if (repeat)
       ++g_clear_repeats;
@@ -14826,6 +15017,8 @@ void ClearTargets(const Targets &t, u32 flags, const plume::RenderRect &rect, co
     NoteSiblingClear(*alias, alias_host);  // vivapinata-nx (2026-11-11, vivapinata_resolve_from_sibling)
     alias->clear_known = false;  // banjo-nx (banjo_renut_clear_repeat): not followed through aliases
     cmd->clearColor(0, clear_color, &alias_host, 1);
+    if (EdramCarryOn()) [[unlikely]]
+      alias->carry_cleared_frame = TextureFrameLocked();  // port 179: cleared through another view: nothing carried in
   }
 }
 
