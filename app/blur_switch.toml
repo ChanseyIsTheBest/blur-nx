@@ -1,18 +1,29 @@
-# Blur for the Nintendo Switch (blur-nx): your options. Every other setting is built into the game.
-# Delete this file and the game writes it again at the next start.
+# Blur for the Nintendo Switch (blur-nx): your settings. Everything else is built into the game.
+# Change them here, or in the game menu: hold A+B+X+Y+L+R during the game, and + closes it. Language, the resolutions
+# and MSAA (marked * in the menu) take effect at the next start. Delete this file and the game writes it again.
 
-# SMAA edge smoothing on the 3D (the HUD and text stay sharp). Not the game's own picture; costs GPU time.
+# The game's language: "System" (the console's own), "English", "French", "German", "Italian", "Spanish", "Polish",
+# "Russian", "Japanese", "Korean", "Portuguese", "Chinese (Simplified)" or "Chinese (Traditional)". A language the
+# game does not have shows English.
+language = "System"
+
+# Frame rate cap: "30" (a steady pace), "60" or "Off".
+frame_cap = "30"
+
+# The height of the 3D image in handheld mode: 540, 576, 612, 648, 684 or 720 (1280x720). Lower is faster; the HUD
+# and text stay sharp.
+banjo_renut_render_height_handheld = 720
+
+# The height of the 3D image on the TV: 720 (1280x720), 792, 864, 900, 936, 1008 or 1080 (1920x1080). Lower is
+# faster; the HUD and text are drawn at 1080p.
+banjo_renut_render_height_docked = 720
+
+# SMAA edge smoothing on the 3D image (the HUD and text stay sharp). Not the game's own picture; costs GPU time.
 banjo_renut_smaa = true
 
 # The game's own edge smoothing (MSAA, 4x on the Xbox 360): 1 = none (the default, with SMAA above: the fastest),
 # 2 = 2x, 4 = the game's 4x (smoother edges, more GPU time: about 9 % lower frame rate than none).
 msaa_level = 1
-
-# true turns the game's MSAA off whatever msaa_level says.
-disable_msaa = false
-
-# Controller vibration (rumble). false = none.
-input_rumble = true
 
 # Face buttons by position, as on an Xbox pad (the bottom button is A). false = by letter (the Switch's A is A).
 input_xbox_layout = true
@@ -20,41 +31,5 @@ input_xbox_layout = true
 # Single Joy-Cons are held sideways, one per player.
 input_joycon_sideways = true
 
-# Each player's buttons: the Switch buttons that press each Xbox button, for example a = "B, ZR". Empty = the default.
-# Buttons: A B X Y L R ZL ZR PLUS MINUS LSTICK RSTICK UP DOWN LEFT RIGHT SL SR, or NONE.
-
-[input_p1]
-a = ""
-b = ""
-x = ""
-y = ""
-lb = ""
-rb = ""
-lt = ""
-rt = ""
-start = ""
-back = ""
-ls = ""
-rs = ""
-up = ""
-down = ""
-left = ""
-right = ""
-
-[input_p2]
-a = ""
-b = ""
-x = ""
-y = ""
-lb = ""
-rb = ""
-lt = ""
-rt = ""
-start = ""
-back = ""
-ls = ""
-rs = ""
-up = ""
-down = ""
-left = ""
-right = ""
+# A sideways Joy-Con's stick turned to match the grip.
+input_joycon_sideways_stick = true

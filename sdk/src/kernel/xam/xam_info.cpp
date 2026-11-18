@@ -18,6 +18,7 @@
 #include <rex/types.h>
 #include <rex/string.h>
 #include <rex/system/kernel_state.h>
+#include <rex/system/flags.h>  // blur-nx (2026-11-18): EffectiveLanguage
 #include <rex/system/user_module.h>
 #include <rex/system/xenumerator.h>
 #include <rex/system/xthread.h>
@@ -195,7 +196,7 @@ u32 XGetGameRegion_entry() {
 u32 XGetLanguage_entry() {
   // katamari-nx (2026-11-02): the player's language (user_language, as the console's system setting), which this call
   // used to ignore: it always answered English, and this is the only language query Beautiful Katamari makes.
-  return REXCVAR_GET(user_language);
+  return rex::system::EffectiveLanguage();  // blur-nx (2026-11-18): the language key, "System" by default
 }
 
 u32 XamGetCurrentTitleId_entry() {

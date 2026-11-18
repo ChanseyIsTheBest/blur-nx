@@ -4,8 +4,8 @@ from Blur's play toml, so a player's build carries Blur's settings (the pair in 
 its DLC key).
 
   app/blur_switch_defaults.toml  every setting of the play toml but the player's, compiled into the NRO
-  app/blur_switch.toml           the player's blur.toml (written next to the NRO when there is none): the edge smoothing
-                                 choices, the pad options, [input_p1] and [input_p2]
+  app/blur_switch.toml           the player's blur.toml (written next to the NRO when there is none): the nine
+                                 settings of PLAYER_KEYS (2026-11-18)
 
   python tools/make_blur_builtin.py [--play dist/switch/blur-nx/renut_play.toml]
 
@@ -19,25 +19,43 @@ import re
 import tomllib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PLAYER_KEYS = ('banjo_renut_smaa', 'msaa_level', 'disable_msaa', 'input_rumble', 'input_xbox_layout', 'input_joycon_sideways')
-PLAYER_TABLES = ('input_p1', 'input_p2')
+# blur-nx (2026-11-18, the user: "simplify the config to only have language (set it to system language by default)/
+# framerate cap/handheld resolution/docked resolution/SMAA/MSAA/input_xbox layout/input_joycon_sideways/
+# input_joycon_sideways_stick keep all the settings the same as they are for those"): those nine. disable_msaa,
+# input_rumble and the button maps are built in (their values as before); the game menu (A+B+X+Y+L+R) writes a map or
+# rumble into blur.toml only when the player changes it from the default.
+PLAYER_KEYS = ('language', 'frame_cap', 'banjo_renut_render_height_handheld', 'banjo_renut_render_height_docked',
+               'banjo_renut_smaa', 'msaa_level', 'input_xbox_layout', 'input_joycon_sideways',
+               'input_joycon_sideways_stick')
+PLAYER_TABLES = ()
 FINAL = {'log_level': '"off"'}
 
-PLAYER_HEAD = '''# Blur for the Nintendo Switch (blur-nx): your options. Every other setting is built into the game.
-# Delete this file and the game writes it again at the next start.
+PLAYER_HEAD = '''# Blur for the Nintendo Switch (blur-nx): your settings. Everything else is built into the game.
+# Change them here, or in the game menu: hold A+B+X+Y+L+R during the game, and + closes it. Language, the resolutions
+# and MSAA (marked * in the menu) take effect at the next start. Delete this file and the game writes it again.
 
-# SMAA edge smoothing on the 3D (the HUD and text stay sharp). Not the game's own picture; costs GPU time.
+# The game's language: "System" (the console's own), "English", "French", "German", "Italian", "Spanish", "Polish",
+# "Russian", "Japanese", "Korean", "Portuguese", "Chinese (Simplified)" or "Chinese (Traditional)". A language the
+# game does not have shows English.
+language = "System"
+
+# Frame rate cap: "30" (a steady pace), "60" or "Off".
+frame_cap = "30"
+
+# The height of the 3D image in handheld mode: 540, 576, 612, 648, 684 or 720 (1280x720). Lower is faster; the HUD
+# and text stay sharp.
+banjo_renut_render_height_handheld = 720
+
+# The height of the 3D image on the TV: 720 (1280x720), 792, 864, 900, 936, 1008 or 1080 (1920x1080). Lower is
+# faster; the HUD and text are drawn at 1080p.
+banjo_renut_render_height_docked = 720
+
+# SMAA edge smoothing on the 3D image (the HUD and text stay sharp). Not the game's own picture; costs GPU time.
 banjo_renut_smaa = true
 
 # The game's own edge smoothing (MSAA, 4x on the Xbox 360): 1 = none (the default, with SMAA above: the fastest),
 # 2 = 2x, 4 = the game's 4x (smoother edges, more GPU time: about 9 % lower frame rate than none).
 msaa_level = 1
-
-# true turns the game's MSAA off whatever msaa_level says.
-disable_msaa = false
-
-# Controller vibration (rumble). false = none.
-input_rumble = true
 
 # Face buttons by position, as on an Xbox pad (the bottom button is A). false = by letter (the Switch's A is A).
 input_xbox_layout = true
@@ -45,8 +63,8 @@ input_xbox_layout = true
 # Single Joy-Cons are held sideways, one per player.
 input_joycon_sideways = true
 
-# Each player's buttons: the Switch buttons that press each Xbox button, for example a = "B, ZR". Empty = the default.
-# Buttons: A B X Y L R ZL ZR PLUS MINUS LSTICK RSTICK UP DOWN LEFT RIGHT SL SR, or NONE.
+# A sideways Joy-Con's stick turned to match the grip.
+input_joycon_sideways_stick = true
 '''
 
 

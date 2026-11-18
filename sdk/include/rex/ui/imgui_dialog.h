@@ -24,6 +24,11 @@ struct ImGuiIO;
 namespace rex {
 namespace ui {
 
+// blur-nx (2026-11-18, the game menu): while set, the game reads untouched controllers (ReXApp's input gate), whatever
+// the menus' focus: an application's full-screen menu owns every button. Any thread.
+void SetGameInputBlocked(bool blocked);
+bool GameInputBlocked();
+
 class ImGuiDialog {
  public:
   virtual ~ImGuiDialog();

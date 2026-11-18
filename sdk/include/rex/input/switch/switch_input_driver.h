@@ -19,6 +19,10 @@
 
 namespace rex::input::nx {
 
+// blur-nx (2026-11-18, the game menu): the per-player button maps built again from input_p1_* ... input_p4_* (set those
+// first); Poll uses them from its next call. Any thread.
+void RebuildButtonMaps();
+
 // Polls the pads directly from HID shared memory on the calling guest thread.
 // Unlike the SDL driver it needs no window and no UI-thread event pump.
 //

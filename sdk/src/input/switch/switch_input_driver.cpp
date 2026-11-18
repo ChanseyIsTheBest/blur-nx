@@ -78,18 +78,17 @@ REX_INPUT_MAP_CVARS(p4, "Player 4");
 // stick for that grip), and the four buttons under the player's right thumb become the face buttons. SL and SR are
 // the triggers (ZL / ZR), the minus or plus button is Start, the stick is the left
 // stick. false = held upright (the system's default; no remapping).
+// blur-nx (2026-11-18, the game menu): both apply at once (Poll reads them; the hold type is told again on a change).
 REXCVAR_DEFINE_BOOL(input_joycon_sideways, true, "Input",
                     "Single Joy-Cons are held sideways, one per player (face buttons, stick and SL/SR turned "
-                    "accordingly)")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+                    "accordingly)");
 // futari-nx (2026-10-22, guwange-nx's fix): the horizontal hold type turns the buttons' meaning for the system's own
 // menus, but padGetStickPos still gives the stick as the Joy-Con is built (up = towards its L / R button). The stick
 // is turned a quarter here.
 REXCVAR_DEFINE_BOOL(input_joycon_sideways_stick, true, "Input",
                     "With input_joycon_sideways: a single Joy-Con's stick turned a quarter for the sideways grip (left "
                     "Joy-Con: its top points left; right Joy-Con: its top points right); false = as the Joy-Con "
-                    "reports it")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+                    "reports it");
 // sasrt-nx (2026-11-03; port 52): a pad HID reports absent for a moment (a Bluetooth hiccup, a style change) reached the
 // game as a disconnect at once, and Sonic Transformed stops a race for it about once a race; shipped games wait before
 // they say so.
@@ -126,12 +125,15 @@ constexpr uint32_t kRepeatRateMs = 100;
 constexpr uint64_t kDeviceIdTag = 0x4E5800;  // "NX"
 
 // Which Switch buttons press each Xbox 360 button: per player (1 to 4), one table per face-button layout
-// (input_xbox_layout), that player's overrides (input_p1_* ... input_p4_*) applied to both. Built once at Setup.
+// (input_xbox_layout), that player's overrides (input_p1_* ... input_p4_*) applied to both. Built at Setup, and again
+// when the game menu changes a map (RebuildButtonMaps, blur-nx 2026-11-18): under g_tables_mutex, which Poll holds
+// while it copies its player's table.
 struct ButtonTable {
   std::array<uint64_t, 16> buttons{};  // per XInput button bit (X_INPUT_GAMEPAD_*: bit i)
   uint64_t left_trigger = 0, right_trigger = 0;
 };
 std::array<std::array<ButtonTable, 2>, 4> g_tables;  // [player 1 to 4][0 by letter, 1 by position]
+std::mutex g_tables_mutex;
 
 constexpr int BitIndex(uint16_t bit) { return std::countr_zero(bit); }
 
@@ -186,7 +188,8 @@ bool ParseButtonList(const char* cvar, const std::string& list, uint64_t& out) {
 }
 
 void BuildButtonTables() {
-  for (auto& player : g_tables) {
+  std::array<std::array<ButtonTable, 2>, 4> tables;  // blur-nx (2026-11-18): built aside, then swapped in
+  for (auto& player : tables) {
     for (int layout = 0; layout < 2; ++layout) {
       ButtonTable& t = player[layout];
       t = {};
@@ -237,12 +240,12 @@ void BuildButtonTables() {
   const Override overrides[4][16] = {REX_INPUT_OVERRIDES(p1), REX_INPUT_OVERRIDES(p2), REX_INPUT_OVERRIDES(p3),
                                      REX_INPUT_OVERRIDES(p4)};
 #undef REX_INPUT_OVERRIDES
-  for (size_t player = 0; player < g_tables.size(); ++player) {
+  for (size_t player = 0; player < tables.size(); ++player) {
     for (const Override& o : overrides[player]) {
       if (o.value.empty()) continue;
       uint64_t mask = 0;
       if (!ParseButtonList(o.name, o.value, mask)) continue;
-      for (ButtonTable& t : g_tables[player]) {
+      for (ButtonTable& t : tables[player]) {
         if (o.bit == -1) t.left_trigger = mask;
         else if (o.bit == -2) t.right_trigger = mask;
         else t.buttons[o.bit] = mask;
@@ -250,6 +253,8 @@ void BuildButtonTables() {
       REXLOG_INFO("{} = {}", o.name, o.value);
     }
   }
+  std::lock_guard<std::mutex> lock(g_tables_mutex);
+  g_tables = tables;
 }
 
 // The presses of a single Joy-Con held sideways, as a two-handed controller reports the same places (the right face
@@ -782,10 +787,17 @@ void SwitchInputDriver::Poll(size_t index) {
   // A single Joy-Con held sideways (input_joycon_sideways): its presses as a two-handed controller's, and its one
   // stick as the left stick (the right Joy-Con reports its stick as stick 1), turned a quarter for the grip
   // (input_joycon_sideways_stick; the stick values are -32767..32767, so the negation stays in range).
+  {  // blur-nx (2026-11-18): input_joycon_sideways changed in the game menu: the system is told the new hold type
+    static std::atomic<int> told{-1};  // -1: Setup told it (or left the system's upright default)
+    const int want = REXCVAR_GET(input_joycon_sideways) ? 1 : 0;
+    int was = told.load(std::memory_order_relaxed);
+    if (was != want && told.compare_exchange_strong(was, want) && was != -1)
+      hidSetNpadJoyHoldType(want ? HidNpadJoyHoldType_Horizontal : HidNpadJoyHoldType_Vertical);
+  }
   if (index != 0 && REXCVAR_GET(input_joycon_sideways)) {
     const uint32_t style = padGetStyleSet(&slot.pad);
     const uint32_t whole = HidNpadStyleTag_NpadJoyDual | HidNpadStyleTag_NpadFullKey | HidNpadStyleTag_NpadHandheld;
-    static const bool turn = REXCVAR_GET(input_joycon_sideways_stick);
+    const bool turn = REXCVAR_GET(input_joycon_sideways_stick);  // blur-nx (2026-11-18): live (the game menu)
     if (!(style & whole) && (style & HidNpadStyleTag_NpadJoyLeft)) {
       held = SidewaysLeftJoyCon(held);
       // Its top (the L button) points left: the Joy-Con's up is left, its right (the rail) is up.
@@ -804,8 +816,11 @@ void SwitchInputDriver::Poll(size_t index) {
   }
   DispatchMenuShortcuts(slot, held);
   X_INPUT_GAMEPAD gamepad{};
-  const ButtonTable& table = g_tables[slot.ordinal < g_tables.size() ? slot.ordinal : 0]
-                                     [REXCVAR_GET(input_xbox_layout) ? 1 : 0];
+  ButtonTable table;  // blur-nx (2026-11-18): a copy (the game menu may rebuild the maps meanwhile)
+  {
+    std::lock_guard<std::mutex> lock(g_tables_mutex);
+    table = g_tables[slot.ordinal < g_tables.size() ? slot.ordinal : 0][REXCVAR_GET(input_xbox_layout) ? 1 : 0];
+  }
   uint16_t buttons = 0;
   for (int i = 0; i < 16; ++i) {
     if (held & table.buttons[i]) {
@@ -935,6 +950,30 @@ void SwitchInputDriver::DispatchMenuShortcuts(Slot& slot, uint64_t held) {
     }
   }
   slot.menu_shortcuts = applet_now ? (slot.menu_shortcuts | kBitApplet) : (slot.menu_shortcuts & ~kBitApplet);
+
+  /*
+   * blur-nx (2026-11-18, the user: "an imgui overlay opened up with the button combination of A+B+X+Y+L+R and closed
+   * with the start button"): the six held together open the game menu, the application's F8 bind (on the UI thread,
+   * as the menus above). The menu closes itself on + and owns every button meanwhile (rex::ui::GameInputBlocked).
+   */
+  const uint64_t kBitGameMenu = uint64_t(1) << 10;
+  constexpr uint64_t kGameMenu = HidNpadButton_A | HidNpadButton_B | HidNpadButton_X | HidNpadButton_Y |
+                                 HidNpadButton_L | HidNpadButton_R;
+  const bool game_menu_now = (held & kGameMenu) == kGameMenu;
+  const bool game_menu_before = (slot.menu_shortcuts & kBitGameMenu) != 0;
+  if (game_menu_now && !game_menu_before) {
+    auto press = [] {
+      rex::ui::KeyEvent keystroke(nullptr, rex::ui::VirtualKey::kF8, 1, false, false, false, false, false);
+      rex::ui::ProcessKeyEvent(keystroke);
+    };
+    rex::ui::Window* const window = window_ui_.load(std::memory_order_acquire);
+    if (!window || !window->app_context().CallInUIThread(press)) {
+      press();
+    }
+    REXLOG_INFO("menu shortcut: the game menu (A+B+X+Y+L+R)");
+  }
+  slot.menu_shortcuts =
+      game_menu_now ? (slot.menu_shortcuts | kBitGameMenu) : (slot.menu_shortcuts & ~kBitGameMenu);
 }
 
 void SwitchInputDriver::ShowControllerApplet() {
@@ -1253,5 +1292,8 @@ X_RESULT SwitchInputDriver::GetDeviceKeystroke(DeviceId id, uint32_t flags,
   }
   return X_ERROR_EMPTY;
 }
+
+// blur-nx (2026-11-18, the game menu): the button maps built again from input_p1_* ... input_p4_* (set them first).
+void RebuildButtonMaps() { BuildButtonTables(); }
 
 }  // namespace rex::input::nx

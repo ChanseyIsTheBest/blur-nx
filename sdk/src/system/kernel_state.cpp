@@ -327,7 +327,7 @@ void KernelState::LoadAchievementsData() {
   const util::XdbfGameData db = title_xdbf();
   if (db.is_valid()) {
     const XLanguage language =
-        db.GetExistingLanguage(static_cast<XLanguage>(REXCVAR_GET(user_language)));
+        db.GetExistingLanguage(static_cast<XLanguage>(rex::system::EffectiveLanguage()));
     for (const auto& entry : db.GetAchievements()) {
       AchievementInfo info;
       info.id = entry.id;

@@ -183,6 +183,7 @@ endif()
 set(RENUT_SOURCES
     src/main.cpp
     src/blur_keys.cpp
+    src/game_menu.cpp  # blur-nx (2026-11-18): the game menu (A+B+X+Y+L+R on the Switch, F8 on the PC)
     # blur-nx (2026-11-11): blur_diag_cube_writer, a write watch on a guest buffer (Windows PC only; empty elsewhere).
     src/blur_write_watch.cpp
     # blur-nx (2026-11-13, the user: "force the game to stereo"): audio_stereo_mix (tools/stereo_mix.py's patches).

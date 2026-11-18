@@ -19,6 +19,7 @@ readback_memexport_fast = false
 # Package 28b (your choice, 2026-10-17): the game's 2x MSAA off for Renut's renderer (one sample per pixel: aliased
 # edges, less GPU bandwidth); configs/banjo_renut_msaa.toml puts it back. banjo-nx's renderer collapses MSAA itself and
 # its configs keep this false.
+disable_msaa = false  # blur-nx: msaa_level decides (true forces no MSAA whatever it says); every level renders right since 2026-11-13
 
 # Shaders the renderer cannot identify are written here once (raw microcode). Please send this folder back:
 # they get added to banjo_shaders.mesp (new areas of the game may have shaders the PC runs have not seen yet).
@@ -38,6 +39,7 @@ log_file_writer = true
 # four buttons under the right thumb are the face buttons, SL / SR are ZL / ZR, minus or plus is Start.
 # Rumble (2026-11-10, your request): the game's own vibration on every controller that has it (HD rumble on the
 # Joy-Cons and the Pro Controller). false = no vibration.
+input_rumble = true
 # Per-player button maps: the [input_p1] and [input_p2] sections at the end of this file.
 # The game's on-screen keyboard (naming things) opens the Switch's own keyboard (2026-10-21, your request): type with
 # the touch screen or the controller, + or OK accepts, Cancel keeps the old name. false = the old ImGui text box.
@@ -464,8 +466,6 @@ banjo_renut_portrait_msaa_samples = 2
 # whole. Shadow maps and the blur buffers keep the console's sizes. Any height from 360 to 1080 for either mode
 # (rounded to a multiple of 9: 648, 702, 756, 810, 864, 900, ...; read at start). configs/banjo_renut_native_720p.toml
 # is the game's own 720p.
-banjo_renut_render_height_handheld = 720
-banjo_renut_render_height_docked = 720
 banjo_renut_display_height_docked = 1080
 # The upscale: 0 = bilinear (your choice, every config: one sample a pixel, the cheapest), 1 = bicubic Catmull-Rom
 # (sharper, five samples a pixel).
@@ -525,7 +525,6 @@ banjo_renut_diag_gpu_shaders = false
 # "Off". The game does not wait for the display's vblanks itself (its present interval was rounded every
 # frame to 33 or 50 ms); the cap releases each frame on a refresh of the 60 Hz display.
 target_refreshRate = -1
-frame_cap = "30"  # blur-nx (2026-11-17, the user: 30 by default, 60 as an option): "30" a frame every second refresh of the 60 Hz display, released on the refresh; "60" every refresh (the menus at 60, races as fast as they go); "Off" no cap
 
 # ---- Controls per player (2026-10-21, from sa2-nx). Keep these sections at the END of the file: in TOML every line
 # after a [section] header belongs to that section. ----
@@ -616,3 +615,39 @@ banjo_stall_watch_quiet_seconds = 0
 banjo_renut_diag_fast_census = false
 banjo_renut_diag_shadow_census = false
 banjo_renut_diag_unleashed_census = false
+
+[input_p1]
+a = ""
+b = ""
+x = ""
+y = ""
+lb = ""
+rb = ""
+lt = ""
+rt = ""
+start = ""
+back = ""
+ls = ""
+rs = ""
+up = ""
+down = ""
+left = ""
+right = ""
+
+[input_p2]
+a = ""
+b = ""
+x = ""
+y = ""
+lb = ""
+rb = ""
+lt = ""
+rt = ""
+start = ""
+back = ""
+ls = ""
+rs = ""
+up = ""
+down = ""
+left = ""
+right = ""
