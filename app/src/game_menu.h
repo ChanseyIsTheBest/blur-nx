@@ -87,6 +87,8 @@ class GameMenuDialog : public rex::ui::ImGuiDialog {
   void Apply(Setting& s);
   void Save();
   bool AnyButtonDown() const;
+  int UiLanguage() const;  // the game's language's row in game_menu_text.h
+  void Relabel();          // the rows' texts again in the menu's language
   rex::system::AchievementManager* Achievements() const;
   int RowCount() const;
 

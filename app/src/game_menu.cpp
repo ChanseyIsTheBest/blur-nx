@@ -25,7 +25,11 @@
 #include <rex/ui/keybinds.h>
 #include <rex/ui/overlay/achievement_icon_cache.h>
 
-#include "game_menu_fonts.h"  // blur-nx (2026-11-18): Dear ImGui's misc/fonts, embedded by CMake (app/CMakeLists.txt)
+#include "game_menu_fonts.h"
+#include "game_menu_text.h"  // blur-nx (2026-11-18): the menu's text in the Xbox 360's twelve languages
+
+#include <rex/system/flags.h>              // rex::system::EffectiveLanguage
+#include <rex/system/util/xdbf_utils.h>    // the game's own languages (its XDBF)  // blur-nx (2026-11-18): Dear ImGui's misc/fonts, embedded by CMake (app/CMakeLists.txt)
 
 #if REX_PLATFORM_SWITCH
 #include <rex/input/switch/switch_input_driver.h>  // rex::input::nx::RebuildButtonMaps
@@ -69,6 +73,11 @@ ImFont* InAtlas(const ImGuiIO& io, ImFont* font) {
   return font && io.Fonts && io.Fonts->Fonts.contains(font) ? font : nullptr;
 }
 ImFont* MenuFont(const ImGuiIO& io) { return InAtlas(io, io.DisplaySize.y > 900.0f ? g_font_large : g_font_small); }
+// The sizes the fonts are drawn at (the bakes' own, but for Japanese and Chinese, baked at the 720-line sizes only).
+float g_size_main[2] = {22.0f, 33.0f};
+float g_size_text[2] = {18.0f, 27.0f};
+bool g_cjk_sizes_once = false;
+float MenuFontSize(const ImGuiIO& io) { return g_size_main[io.DisplaySize.y > 900.0f ? 1 : 0]; }
 
 // The smaller text's font and size this frame (OnDraw sets them): its own font, else the current one at 0.8.
 ImFont* g_text_font = nullptr;
@@ -76,10 +85,59 @@ float g_text_size = 0.0f;
 void PickTextFont(const ImGuiIO& io) {
   ImFont* own = InAtlas(io, io.DisplaySize.y > 900.0f ? g_font_large_text : g_font_small_text);
   g_text_font = own ? own : ImGui::GetFont();
-  g_text_size = own ? own->LegacySize : ImGui::GetFontSize() * 0.8f;
+  g_text_size = own ? g_size_text[io.DisplaySize.y > 900.0f ? 1 : 0] : ImGui::GetFontSize() * 0.8f;
 }
 ImVec2 TextSize(const char* text, float wrap = 0.0f) {
   return g_text_font->CalcTextSizeA(g_text_size, FLT_MAX, wrap, text);
+}
+
+// ---- The menu's language ----
+
+int g_lang = 0;  // kMenuTextTable's row in use
+
+const char* Tr(int id) {
+  const char* s = kMenuTextTable[g_lang][id];
+  return s ? s : kMenuTextTable[0][id];
+}
+std::string TrS(int id, const char* a) {
+  char b[640];
+  std::snprintf(b, sizeof(b), Tr(id), a);
+  return b;
+}
+std::string TrD(int id, int a) {
+  char b[640];
+  std::snprintf(b, sizeof(b), Tr(id), a);
+  return b;
+}
+std::string TrSD(int id, const char* a, int d) {
+  char b[640];
+  std::snprintf(b, sizeof(b), Tr(id), a, d);
+  return b;
+}
+std::string TrDD(int id, int a, int d) {
+  char b[640];
+  std::snprintf(b, sizeof(b), Tr(id), a, d);
+  return b;
+}
+
+// XLanguage (1 English ... 12 Russian) to the table's row.
+int RowOfXLanguage(uint32_t x) {
+  static const int kRows[] = {0, 0, 8, 2, 1, 4, 3, 9, 11, 7, 10, 5, 6};
+  return x < std::size(kRows) ? kRows[x] : 0;
+}
+
+// The Switch button names the file writes, as the menu shows them.
+std::string ButtonName(const std::string& raw) {
+  if (raw == "PLUS") return "+";
+  if (raw == "MINUS") return "-";
+  if (raw == "LSTICK") return Tr(C_LSTICK);
+  if (raw == "RSTICK") return Tr(C_RSTICK);
+  if (raw == "UP") return Tr(C_DPAD_UP);
+  if (raw == "DOWN") return Tr(C_DPAD_DOWN);
+  if (raw == "LEFT") return Tr(C_DPAD_LEFT);
+  if (raw == "RIGHT") return Tr(C_DPAD_RIGHT);
+  if (raw == "NONE") return Tr(C_NONE);
+  return raw;
 }
 
 // ---- Colours: green and black ---------------------------------------------------------------------------------------
@@ -291,12 +349,12 @@ Choice Q(std::string label, std::string raw) {  // a string key: quoted in the f
 }
 std::vector<Choice> OnOff() { return {C("On", "true", "true"), C("Off", "false", "false")}; }
 
-std::vector<Setting> MakeSettings() {
+std::vector<Setting> MakeSettings(const std::string& file) {
   std::vector<Setting> s;
-  auto add = [&](std::string label, std::string key, bool restart, std::vector<Choice> choices, int def,
-                 std::string help, bool always_in_file = true) {
+  auto add = [&](int label, std::string key, bool restart, std::vector<Choice> choices, int def, std::string help,
+                 bool always_in_file = true) {
     Setting x;
-    x.label = std::move(label);
+    x.label = Tr(label);
     x.key = std::move(key);
     x.restart = restart;
     x.choices = std::move(choices);
@@ -305,109 +363,102 @@ std::vector<Setting> MakeSettings() {
     x.always_in_file = always_in_file;
     s.push_back(std::move(x));
   };
-  add("Language", "language", true,
-      {Q("System", "System"), Q("English", "English"), Q("French", "French"), Q("German", "German"),
-       Q("Italian", "Italian"), Q("Spanish", "Spanish"), Q("Polish", "Polish"), Q("Russian", "Russian"),
-       Q("Japanese", "Japanese"), Q("Korean", "Korean"), Q("Portuguese", "Portuguese"),
-       Q("Chinese (Simplified)", "Chinese (Simplified)"), Q("Chinese (Traditional)", "Chinese (Traditional)")},
-      0, "The game's language. System follows the console's language; a language the game does not have shows English.");
-  add("Framerate cap", "frame_cap", false, {Q("30 fps", "30"), Q("60 fps", "60"), Q("Off", "Off")}, 0,
-      "30 fps keeps a steady pace. 60 fps lets the game go faster where it can (uneven on busy tracks). Off: no cap.");
-  add("Handheld resolution", "banjo_renut_render_height_handheld", true,
+  auto on_off = [] { return std::vector<Choice>{C(Tr(C_ON), "true", "true"), C(Tr(C_OFF), "false", "false")}; };
+  // The languages by their own names (the file's value in English).
+  std::vector<Choice> languages = {Q(Tr(C_SYSTEM), "System")};
+  for (int i = 0; i < kMenuLanguages; ++i)
+    languages.push_back(Q(kMenuLanguageNames[i], kMenuLanguageKeys[i]));
+  add(T_LANGUAGE, "language", true, languages, 0, Tr(H_LANGUAGE));
+  add(T_FRAMERATE, "frame_cap", false, {Q("30 fps", "30"), Q("60 fps", "60"), Q(Tr(C_OFF), "Off")}, 0,
+      Tr(H_FRAMERATE));
+  add(T_HANDHELD, "banjo_renut_render_height_handheld", true,
       {C("960x540", "540", "540"), C("1024x576", "576", "576"), C("1088x612", "612", "612"),
        C("1152x648", "648", "648"), C("1216x684", "684", "684"), C("1280x720", "720", "720")},
-      5, "The size of the 3D image in handheld mode. Lower is faster; the HUD and text stay sharp.");
-  add("Docked resolution", "banjo_renut_render_height_docked", true,
+      5, Tr(H_HANDHELD));
+  add(T_DOCKED, "banjo_renut_render_height_docked", true,
       {C("1280x720", "720", "720"), C("1408x792", "792", "792"), C("1536x864", "864", "864"),
        C("1600x900", "900", "900"), C("1664x936", "936", "936"), C("1728x972", "972", "972"),
        C("1792x1008", "1008", "1008"), C("1920x1080", "1080", "1080")},
-      5, "The size of the 3D image on the TV (1728x972 by default). Lower is faster; the HUD and text are drawn at 1080p.");
-  add("Rumble", "input_rumble", false, OnOff(), 0, "Controller vibration.", /*always_in_file=*/false);
-  add("SMAA", "banjo_renut_smaa", false, OnOff(), 0,
-      "Edge smoothing on the 3D image after the game's own picture (costs a little GPU time).");
-  add("MSAA", "msaa_level", true, {C("Off", "1", "1"), C("2x", "2", "2"), C("4x", "4", "4")}, 0,
-      "The game's own edge smoothing: smoother edges, a lower frame rate (4x: about 9 % lower than Off).");
+      5, Tr(H_DOCKED));
+  add(T_RUMBLE, "input_rumble", false, on_off(), 0, Tr(H_RUMBLE), /*always_in_file=*/false);
+  add(T_SMAA, "banjo_renut_smaa", false, on_off(), 0, Tr(H_SMAA));
+  add(T_MSAA, "msaa_level", true, {C(Tr(C_OFF), "1", "1"), C("2x", "2", "2"), C("4x", "4", "4")}, 0, Tr(H_MSAA));
   // blur-nx (2026-11-18, the user: "make 4 core mode an option ... on by default and a warning that it is highly
   // reccomended to be left on").
-  add("4-core mode", "four_core_mode", true, OnOff(), 0,
-      "Highly recommended to leave on: the game uses all four CPU cores (started from its Home menu icon). Off is "
-      "much slower.");
-  add("Xbox button layout", "input_xbox_layout", false, OnOff(), 0,
-      "Face buttons by position, as on an Xbox 360 pad: the bottom button is A. Off: by letter (the Switch's A is A).");
-  add("Joy-Con sideways", "input_joycon_sideways", false, OnOff(), 0,
-      "Single Joy-Cons are held sideways, one per player.");
-  add("Joy-Con sideways stick", "input_joycon_sideways_stick", false, OnOff(), 0,
-      "A sideways Joy-Con's stick turned to match the grip.");
+  add(T_FOURCORE, "four_core_mode", true, on_off(), 0, Tr(H_FOURCORE));
+  add(T_XBOXLAYOUT, "input_xbox_layout", false, on_off(), 0, Tr(H_XBOXLAYOUT));
+  add(T_SIDEWAYS, "input_joycon_sideways", false, on_off(), 0, Tr(H_SIDEWAYS));
+  add(T_SIDEWAYS_STICK, "input_joycon_sideways_stick", false, on_off(), 0, Tr(H_SIDEWAYS_STICK));
   // blur-nx (2026-11-18, the user: "add an option to the config please exposed to the user to change the button config
-  // combo to open the menu"): input_menu_combo; any other set in blur.toml shows as it is written.
-  add("Menu buttons", "input_menu_combo", false,
-      {Q("A+B+X+Y+L+R", "A+B+X+Y+L+R"), Q("L+R+Minus", "L+R+MINUS"), Q("L+R+Plus", "L+R+PLUS"),
-       Q("ZL+ZR+Minus", "ZL+ZR+MINUS"), Q("L stick + R stick", "LSTICK+RSTICK")},
-      0, "The buttons that open this menu, held together (+ closes it); from now on. Any other set: input_menu_combo in "
-         "blur.toml.");
-  // blur-nx (2026-11-18, the user's requests): the menu's colour (at once) and font (the next start).
-  add("Menu colour", "menu_color", false,
-      {Q("Green", "Green"), Q("Yellow", "Yellow"), Q("Red", "Red"), Q("Blue", "Blue"), Q("Purple", "Purple"),
-       Q("Pink", "Pink"), Q("Orange", "Orange"), Q("White", "White"), Q("Rainbow", "Rainbow")},
-      0, "The colour of this menu.");
-  add("Menu font", "menu_font", false,
-      {Q("System", "System"), Q("Pixel", "Pixel"), Q("Roboto", "Roboto"), Q("Karla", "Karla"), Q("Cousine", "Cousine")},
-      0, "The font of this menu: the console's own, the debug overlay's pixel font, or three others.");
+  // combo to open the menu"): input_menu_combo; any other set in the file shows as it is written.
+  add(T_MENUBUTTONS, "input_menu_combo", false,
+      {Q("A+B+X+Y+L+R", "A+B+X+Y+L+R"), Q("L+R+(-)", "L+R+MINUS"), Q("L+R+(+)", "L+R+PLUS"),
+       Q("ZL+ZR+(-)", "ZL+ZR+MINUS"), Q(Tr(C_STICKS), "LSTICK+RSTICK")},
+      0, TrS(H_MENUBUTTONS, file.c_str()));
+  // blur-nx (2026-11-18, the user's requests): the menu's colour and font, both at once.
+  add(T_MENUCOLOR, "menu_color", false,
+      {Q(Tr(C_GREEN), "Green"), Q(Tr(C_YELLOW), "Yellow"), Q(Tr(C_RED), "Red"), Q(Tr(C_BLUE), "Blue"),
+       Q(Tr(C_PURPLE), "Purple"), Q(Tr(C_PINK), "Pink"), Q(Tr(C_ORANGE), "Orange"), Q(Tr(C_WHITE), "White"),
+       Q(Tr(C_RAINBOW), "Rainbow")},
+      0, Tr(H_MENUCOLOR));
+  add(T_MENUFONT, "menu_font", false,
+      {Q(Tr(C_SYSTEM), "System"), Q(Tr(C_PIXEL), "Pixel"), Q("Roboto", "Roboto"), Q("Karla", "Karla"),
+       Q("Cousine", "Cousine")},
+      0, Tr(H_MENUFONT));
   return s;
 }
 
 struct XboxButton {
-  const char* label;
+  const char* label;      // as it is (A, LB, ...), or
+  int label_id;           // the table's (-1: none)
   const char* suffix;     // input_pN_<suffix>
-  const char* by_letter;  // the default Switch button (by letter / by position)
+  const char* by_letter;  // the default Switch button (as the file names it), by letter / by position
   const char* by_position;
 };
 const XboxButton kXboxButtons[] = {
-    {"A", "a", "A", "B"},
-    {"B", "b", "B", "A"},
-    {"X", "x", "X", "Y"},
-    {"Y", "y", "Y", "X"},
-    {"LB", "lb", "L", "L"},
-    {"RB", "rb", "R", "R"},
-    {"LT", "lt", "ZL", "ZL"},
-    {"RT", "rt", "ZR", "ZR"},
-    {"Start", "start", "+", "+"},
-    {"Back", "back", "-", "-"},
-    {"Left stick click", "ls", "L stick", "L stick"},
-    {"Right stick click", "rs", "R stick", "R stick"},
-    {"D-pad Up", "up", "D-pad Up", "D-pad Up"},
-    {"D-pad Down", "down", "D-pad Down", "D-pad Down"},
-    {"D-pad Left", "left", "D-pad Left", "D-pad Left"},
-    {"D-pad Right", "right", "D-pad Right", "D-pad Right"},
+    {"A", -1, "a", "A", "B"},
+    {"B", -1, "b", "B", "A"},
+    {"X", -1, "x", "X", "Y"},
+    {"Y", -1, "y", "Y", "X"},
+    {"LB", -1, "lb", "L", "L"},
+    {"RB", -1, "rb", "R", "R"},
+    {"LT", -1, "lt", "ZL", "ZL"},
+    {"RT", -1, "rt", "ZR", "ZR"},
+    {nullptr, X_START, "start", "PLUS", "PLUS"},
+    {nullptr, X_BACK, "back", "MINUS", "MINUS"},
+    {nullptr, X_LS, "ls", "LSTICK", "LSTICK"},
+    {nullptr, X_RS, "rs", "RSTICK", "RSTICK"},
+    {nullptr, C_DPAD_UP, "up", "UP", "UP"},
+    {nullptr, C_DPAD_DOWN, "down", "DOWN", "DOWN"},
+    {nullptr, C_DPAD_LEFT, "left", "LEFT", "LEFT"},
+    {nullptr, C_DPAD_RIGHT, "right", "RIGHT", "RIGHT"},
 };
 constexpr const char* kResetKey = "#reset";
 
+const char* XboxButtonName(const XboxButton& b) { return b.label ? b.label : Tr(b.label_id); }
+
 std::vector<Setting> MakeControls(int player) {
-  std::vector<Choice> buttons = {
-      Q("Default", ""),           Q("A", "A"),           Q("B", "B"),           Q("X", "X"),
-      Q("Y", "Y"),                Q("L", "L"),           Q("R", "R"),           Q("ZL", "ZL"),
-      Q("ZR", "ZR"),              Q("+", "PLUS"),        Q("-", "MINUS"),       Q("L stick", "LSTICK"),
-      Q("R stick", "RSTICK"),     Q("D-pad Up", "UP"),   Q("D-pad Down", "DOWN"), Q("D-pad Left", "LEFT"),
-      Q("D-pad Right", "RIGHT"),  Q("SL", "SL"),         Q("SR", "SR"),         Q("None", "NONE"),
-  };
+  std::vector<Choice> buttons = {Q(Tr(C_DEFAULT), "")};
+  for (const char* raw : {"A", "B", "X", "Y", "L", "R", "ZL", "ZR", "PLUS", "MINUS", "LSTICK", "RSTICK", "UP", "DOWN",
+                          "LEFT", "RIGHT", "SL", "SR", "NONE"})
+    buttons.push_back(Q(ButtonName(raw), raw));
   std::vector<Setting> s;
   for (const XboxButton& b : kXboxButtons) {
     Setting x;
-    x.label = std::string("Xbox ") + b.label;
+    x.label = std::string("Xbox ") + XboxButtonName(b);
     x.key = "input_p" + std::to_string(player + 1) + "_" + b.suffix;
     x.restart = false;
     x.always_in_file = false;
     x.choices = buttons;
     x.default_choice = 0;
-    x.help = "The Switch button that presses the Xbox 360 " + std::string(b.label) + " for player " +
-             std::to_string(player + 1) + ".";
+    x.help = TrSD(H_CONTROL, XboxButtonName(b), player + 1);
     s.push_back(std::move(x));
   }
   Setting reset;
-  reset.label = "Reset to defaults";
+  reset.label = Tr(R_RESET);
   reset.key = kResetKey;
-  reset.choices = {C("Press to reset", "", "")};
-  reset.help = "Every button of player " + std::to_string(player + 1) + " back to its default.";
+  reset.choices = {C(Tr(R_PRESS), "", "")};
+  reset.help = TrD(H_RESET, player + 1);
   s.push_back(std::move(reset));
   return s;
 }
@@ -440,7 +491,12 @@ bool Pressed(ImGuiKey a, ImGuiKey b = ImGuiKey_None, ImGuiKey c = ImGuiKey_None,
          (c != ImGuiKey_None && ImGui::IsKeyPressed(c, repeat));
 }
 
-const char* const kTabNames[] = {"Settings", "Achievements", "P1 Controls", "P2 Controls", "P3 Controls", "P4 Controls"};
+// The tabs' names in the menu's language (DrawTabs).
+std::string TabName(int i) {
+  if (i == 0) return Tr(T_TAB_SETTINGS);
+  if (i == 1) return Tr(T_TAB_ACHIEVEMENTS);
+  return TrD(T_TAB_CONTROLS, i - 1);
+}
 
 }  // namespace
 
@@ -452,7 +508,30 @@ void AddGameMenuFonts(ImFontAtlas* atlas) {
   // blur-nx (2026-11-18, the user: "add a couple font options as well for the UI including the debug pixelly font but
   // keep the current as default"): menu_font, baked at start (the Switch's drawer has a fixed atlas). The others are
   // Dear ImGui's own (misc/fonts: game_menu_fonts.h, made by CMake), kept in the NRO.
-  static const ImWchar kRanges[] = {0x0020, 0x00FF, 0x2010, 0x2027, 0x2190, 0x2193, 0x25B2, 0x25C0, 0};
+  // The glyphs: Latin (with Latin Extended-A), Cyrillic, punctuation and the CJK forms the texts use; every character
+  // of the menu's texts in its language at start (the language key, "System" the console's) and the languages' own
+  // names; Japanese and Chinese: their common characters too (the game's achievements in them).
+  static ImVector<ImWchar> s_ranges;
+  {
+    static const ImWchar kBase[] = {0x0020, 0x017F, 0x0400, 0x045F, 0x2010, 0x2027, 0x2190, 0x2193, 0x25B2, 0x25C0,
+                                    0x3000, 0x303F, 0xFF01, 0xFF5E, 0};
+    ImFontGlyphRangesBuilder builder;
+    builder.AddRanges(kBase);
+    const int lang = RowOfXLanguage(rex::system::EffectiveLanguage());
+    for (int i = 0; i < kMenuTextCount; ++i)
+      if (kMenuTextTable[lang][i])
+        builder.AddText(kMenuTextTable[lang][i]);
+    for (const char* n : kMenuLanguageNames)
+      builder.AddText(n);
+    if (lang == 8)
+      builder.AddRanges(atlas->GetGlyphRangesJapanese());
+    if (lang == 10 || lang == 11)
+      builder.AddRanges(atlas->GetGlyphRangesChineseSimplifiedCommon());
+    s_ranges.clear();
+    builder.BuildRanges(&s_ranges);
+    g_cjk_sizes_once = lang >= 8;
+  }
+  const ImWchar* kRanges = s_ranges.Data;
   const std::string& name = REXCVAR_GET(menu_font);
   auto is = [&](const char* n) { return rex::string::compare_case(name.c_str(), n) == 0; };
   ImFontConfig config;
@@ -478,10 +557,10 @@ void AddGameMenuFonts(ImFontAtlas* atlas) {
     sizes[0] = 20.0f, sizes[1] = 30.0f, sizes[2] = 17.0f, sizes[3] = 25.0f;
   }
 #if REX_PLATFORM_SWITCH
+  plInitialize(0 /* PlServiceType_User */);  // for the shared fonts (System, and the merged ones)
   if (!data) {  // System (the default): the console's shared font
     BlurPlFontData font{};
-    if (plInitialize(0 /* PlServiceType_User */) == 0 &&
-        plGetSharedFontByType(&font, 0 /* PlSharedFontType_Standard */) == 0 && font.address && font.size) {
+    if (plGetSharedFontByType(&font, 0 /* PlSharedFontType_Standard */) == 0 && font.address && font.size) {
       data = font.address;
       size = int(font.size);
     }
@@ -492,10 +571,31 @@ void AddGameMenuFonts(ImFontAtlas* atlas) {
     size = int(sizeof(kMenuFontRoboto));
   }
   void* bytes = const_cast<void*>(data);
-  g_font_small = atlas->AddFontFromMemoryTTF(bytes, size, sizes[0], &config, kRanges);
-  g_font_large = atlas->AddFontFromMemoryTTF(bytes, size, sizes[1], &config, kRanges);
-  g_font_small_text = atlas->AddFontFromMemoryTTF(bytes, size, sizes[2], &config, kRanges);
-  g_font_large_text = atlas->AddFontFromMemoryTTF(bytes, size, sizes[3], &config, kRanges);
+  g_size_main[0] = sizes[0], g_size_main[1] = sizes[1], g_size_text[0] = sizes[2], g_size_text[1] = sizes[3];
+  // The console's fonts merged in for the glyphs the chosen one lacks (Cyrillic, CJK, the languages' own names): the
+  // standard (Latin, Cyrillic, Japanese), Korean, and the two Chinese ones.
+  auto add = [&](float px) {
+    ImFont* f = atlas->AddFontFromMemoryTTF(bytes, size, px, &config, kRanges);
+#if REX_PLATFORM_SWITCH
+    for (int type : {0 /* Standard */, 4 /* KO */, 1 /* ChineseSimplified */, 3 /* ChineseTraditional */}) {
+      BlurPlFontData shared{};
+      if (plGetSharedFontByType(&shared, type) != 0 || !shared.address || !shared.size || shared.address == data)
+        continue;
+      ImFontConfig merge = config;
+      merge.MergeMode = true;
+      merge.FontDataOwnedByAtlas = false;
+      merge.PixelSnapH = false;
+      merge.OversampleH = 2;
+      atlas->AddFontFromMemoryTTF(shared.address, int(shared.size), px, &merge, kRanges);
+    }
+#endif
+    return f;
+  };
+  // Japanese and Chinese (thousands of characters) at the 720-line sizes only; a 1080-line display scales them.
+  g_font_small = add(sizes[0]);
+  g_font_small_text = add(sizes[2]);
+  g_font_large = g_cjk_sizes_once ? g_font_small : add(sizes[1]);
+  g_font_large_text = g_cjk_sizes_once ? g_font_small_text : add(sizes[3]);
 }
 
 // ---- The dialog -----------------------------------------------------------------------------------------------------
@@ -525,6 +625,15 @@ void GameMenuDialog::Toggle() {
 }
 
 void GameMenuDialog::Open() {
+  // The menu's language: the game's (the language key's choice, "System" the console's), as the game shows it: its own
+  // data's language for that one (English when the game lacks it). The rows take it at their first open, and again
+  // when it differs (the game's data may load after a first open).
+  const int lang = UiLanguage();
+  if (!loaded_ || lang != g_lang) {
+    g_lang = lang;
+    if (loaded_)
+      Relabel();
+  }
   LoadValues();
   rex::ui::SetGameInputBlocked(true);
   state_ = State::kOpening;
@@ -538,9 +647,34 @@ void GameMenuDialog::BeginClose() {
   REXLOG_INFO("game menu: closed");
 }
 
+int GameMenuDialog::UiLanguage() const {
+  uint32_t lang = rex::system::EffectiveLanguage();
+  rex::Runtime* runtime = runtime_ ? runtime_() : nullptr;
+  if (runtime && runtime->kernel_state()) {
+    const auto db = runtime->kernel_state()->title_xdbf();
+    if (db.is_valid())
+      lang = uint32_t(db.GetExistingLanguage(static_cast<rex::system::XLanguage>(lang)));
+  }
+  return RowOfXLanguage(lang);
+}
+
+void GameMenuDialog::Relabel() {
+  auto copy = [](std::vector<Setting>& to, const std::vector<Setting>& from) {
+    for (size_t i = 0; i < to.size() && i < from.size(); ++i) {
+      to[i].label = from[i].label;
+      to[i].help = from[i].help;
+      for (size_t j = 0; j < to[i].choices.size() && j < from[i].choices.size(); ++j)
+        to[i].choices[j].label = from[i].choices[j].label;
+    }
+  };
+  copy(settings_, MakeSettings(config_path_.filename().string()));
+  for (int p = 0; p < 4; ++p)
+    copy(controls_[p], MakeControls(p));
+}
+
 void GameMenuDialog::LoadValues() {
   if (!loaded_) {
-    settings_ = MakeSettings();
+    settings_ = MakeSettings(config_path_.filename().string());
     for (int p = 0; p < 4; ++p)
       controls_[p] = MakeControls(p);
   }
@@ -681,7 +815,7 @@ void GameMenuDialog::OnDraw(ImGuiIO& io) {
 
   ImFont* font = MenuFont(io);
   if (font)
-    ImGui::PushFont(font, font->LegacySize);
+    ImGui::PushFont(font, MenuFontSize(io));
   const float scale = font ? 1.0f : std::max(1.0f, io.DisplaySize.y / 720.0f) * 1.55f;
 
   // ---- Input (the menu's own: the window takes no ImGui navigation) ----
@@ -728,7 +862,7 @@ void GameMenuDialog::OnDraw(ImGuiIO& io) {
   // Sized to its contents (the user: "get rid of some white space at the bottom"): the tabs, the list in whole rows, the
   // footer; centred. The same height on every tab.
   SetTheme(REXCVAR_GET(menu_color), ImGui::GetTime());
-  const float font_px = font ? font->LegacySize : ImGui::GetFontSize() * scale;
+  const float font_px = font ? MenuFontSize(io) : ImGui::GetFontSize() * scale;
   row_height_ = font_px * 1.75f;
   PickTextFont(io);
   const ImVec2 pad(22.0f, 12.0f);
@@ -806,7 +940,7 @@ void GameMenuDialog::DrawTabs(float width) {
   auto total_of = [&](ImFont* f, float size, float s) {
     float total = 0.0f;
     for (int i = 0; i < kTabCount; ++i)
-      total += f->CalcTextSizeA(size, FLT_MAX, 0.0f, kTabNames[i]).x + (i ? s : 0.0f);
+      total += f->CalcTextSizeA(size, FLT_MAX, 0.0f, TabName(i).c_str()).x + (i ? s : 0.0f);
     return total;
   };
   if (total_of(tab_font, tab_size, sep) > room) {
@@ -823,7 +957,8 @@ void GameMenuDialog::DrawTabs(float width) {
       dl->AddLine(bar, ImVec2(bar.x, origin.y + height * 0.78f), U32(kAccentDim), 2.0f);
       x += sep;
     }
-    const ImVec2 ts = tab_font->CalcTextSizeA(tab_size, FLT_MAX, 0.0f, kTabNames[i]);
+    const std::string name = TabName(i);
+    const ImVec2 ts = tab_font->CalcTextSizeA(tab_size, FLT_MAX, 0.0f, name.c_str());
     const ImVec2 a(x - pad, origin.y + height * 0.1f), b(x + ts.x + pad, origin.y + height * 0.9f);
     ImGui::SetCursorScreenPos(a);
     ImGui::PushID(i);
@@ -836,7 +971,7 @@ void GameMenuDialog::DrawTabs(float width) {
     if (i == tab_)
       dl->AddRectFilled(a, b, U32(kAccent), 6.0f);
     dl->AddText(tab_font, tab_size, ImVec2(x, origin.y + (height - ts.y) * 0.5f),
-                i == tab_ ? U32(kBlack, 1.0f / kBlack.w) : U32(kText), kTabNames[i]);
+                i == tab_ ? U32(kBlack, 1.0f / kBlack.w) : U32(kText), name.c_str());
     x += ts.x;
   }
   // The thick line under the tabs (with Rainbow, the hues along it, turning).
@@ -912,7 +1047,7 @@ void GameMenuDialog::DrawSettingsRows(std::vector<Setting>& rows, bool controls,
     } else if (controls && s.value == 0) {
       // "Default (B)": the Switch button the layout gives this Xbox button.
       const XboxButton& xb = kXboxButtons[i < std::size(kXboxButtons) ? i : 0];
-      value = std::string("Default (") + (by_position ? xb.by_position : xb.by_letter) + ")";
+      value = TrS(C_DEFAULT_OF, ButtonName(by_position ? xb.by_position : xb.by_letter).c_str());
     } else {
       value = s.choices[size_t(s.value)].label;
     }
@@ -928,7 +1063,7 @@ void GameMenuDialog::DrawSettingsRows(std::vector<Setting>& rows, bool controls,
       dl->AddTriangleFilled(ImVec2(rx, cy), ImVec2(rx - h * 1.3f, cy - h), ImVec2(rx - h * 1.3f, cy + h), U32(kAccent));
     }
     if (pending) {
-      const char* tag = "next start";
+      const char* tag = Tr(F_NEXT);
       const ImVec2 tsz = TextSize(tag);
       const float tx = std::min(vx + vs.x + font * 0.6f, p.x + width - tsz.x - pad);
       dl->AddText(g_text_font, g_text_size, ImVec2(tx, ty + (font - g_text_size) * 0.7f), U32(kPending, 0.85f), tag);
@@ -944,7 +1079,7 @@ void GameMenuDialog::DrawAchievements() {
   const float pad = font * 0.7f;
   rex::system::AchievementManager* manager = Achievements();
   if (!manager) {
-    ImGui::TextColored(kTextDim, "No achievements: the game's data is not loaded yet.");
+    ImGui::TextColored(kTextDim, "%s", Tr(A_NOT_LOADED));
     return;
   }
   if (!icons_) {
@@ -963,14 +1098,14 @@ void GameMenuDialog::DrawAchievements() {
     }
   }
   if (list.empty()) {
-    ImGui::TextColored(kTextDim, "No achievements found in the game's data.");
+    ImGui::TextColored(kTextDim, "%s", Tr(A_NONE));
     return;
   }
   // The summary and its bar.
   {
     const ImVec2 p = ImGui::GetCursorScreenPos();
     char line[96];
-    std::snprintf(line, sizeof(line), "%d of %d unlocked", unlocked, int(list.size()));
+    std::snprintf(line, sizeof(line), "%s", TrDD(A_UNLOCKED_OF, unlocked, int(list.size())).c_str());
     dl->AddText(ImVec2(p.x + pad, p.y), U32(kText), line);
     std::snprintf(line, sizeof(line), "%dG / %dG", earned, total);
     const float gw = ImGui::CalcTextSize(line).x;
@@ -1029,7 +1164,7 @@ void GameMenuDialog::DrawAchievements() {
     cl->AddText(ImVec2(p.x + cw - pad - sw, p.y + font * 0.35f), U32(got ? kAccent : kTextDim), score);
     cl->AddText(ImVec2(tx, p.y + font * 0.35f), U32(got ? kText : kTextDim), a.label.c_str());
     const std::string& desc = got ? a.description : a.unachieved_description;
-    const char* tag = got ? "Unlocked" : nullptr;
+    const char* tag = got ? Tr(A_UNLOCKED) : nullptr;
     const float tw = tag ? TextSize(tag).x + pad : 0.0f;
     cl->AddText(g_text_font, g_text_size, ImVec2(tx, p.y + font * 1.55f), U32(kTextDim, got ? 1.0f : 0.8f), desc.c_str(),
                 nullptr, text_w - tw);
@@ -1040,9 +1175,10 @@ void GameMenuDialog::DrawAchievements() {
 }
 
 namespace {
-const char* const kNote = "* Must restart the game to change these settings";
-const char* const kKeysList = "Up/Down: choose   Left/Right: change   L/R: tabs   +: close";
-const char* const kKeysScroll = "Up/Down: scroll   L/R: tabs   +: close";
+// The footer's texts, in the menu's language.
+#define kNote Tr(F_NOTE)
+#define kKeysList Tr(F_KEYS)
+#define kKeysScroll Tr(F_KEYS_SCROLL)
 }  // namespace
 
 // The chosen row's help (and whether it is the four-core warning).
