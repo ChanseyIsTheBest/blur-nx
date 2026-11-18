@@ -1157,7 +1157,7 @@ const char *AbName(int target) {
   case 233: return "the ring cleaner above the game threads (blur_renut_ring_cleaner_priority, #11)";
   case 234: return "BuildInheritRuns a 32-bit word at a time (blur_renut_inherit_runs_words, #13)";
   case 235: return "the fast pipeline cache two-way (blur_renut_fast_pipeline_two_way, #16)";
-  case 236: return "the texture slot memo two-way (blur_renut_texture_memo_two_way, #17)";
+  case 236: return "(removed: #17, the two-way texture memo)";
   case 237: return "a provisional pipeline answer looked up again with its kept key (blur_renut_provisional_key_kept, #18)";
   case 238: return "runs and resolves wake the render thread as draws do (blur_renut_wake_batch_all, #28)";
   case 239: return "eight viewports kept, not one (blur_renut_viewport_memo, #32)";
@@ -2755,15 +2755,6 @@ REXCVAR_DEFINE_BOOL(blur_renut_fast_pipeline_two_way, true, "Banjo/Enhancements"
                     "blur-nx (#16; A/B 235): the fast path's pipeline cache looks in two neighbouring entries (the "
                     "older one replaced on a miss), not one: its conflicts each made the key and looked it up again")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-// 2026-11-18 10:45: OFF. On the console it drew Barcelona Oval's start with ghosting and grain (the car smeared, a
-// red-green copy of the fire beside it, colour fringes); the bisect (1118_bis_*: group 1 off, #17 and #36 off, #17
-// alone off) put it on this key alone. The memo's callers check every word they compare; the likely cause is that the
-// two ways keep entries of earlier frames much longer, and the earlier frame's path (A/B 32: RefreshBindingLocked with
-// the entry's effects) then binds what an earlier frame bound where a texture was resolved into since. Not proven.
-REXCVAR_DEFINE_BOOL(blur_renut_texture_memo_two_way, false, "Banjo/Enhancements",
-                    "blur-nx (#17; A/B 236; OFF: ghosting on the console, see the note above): the texture slot memo "
-                    "looks in two neighbouring entries (the older one replaced on a miss), not one")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(blur_renut_provisional_key_kept, true, "Banjo/Enhancements",
                     "blur-nx (#18; A/B 237): a pipeline cache entry with this draw's inputs from an earlier prebuild "
                     "epoch is looked up again with the key it holds (made from the same inputs), not a new MakeKey")
@@ -2806,7 +2797,6 @@ void LatchSwitches() {
   s.on[kCleanerPriority] = REXCVAR_GET(blur_renut_ring_cleaner_priority) > 0;
   s.on[kInheritWords] = REXCVAR_GET(blur_renut_inherit_runs_words);
   s.on[kPipelineTwoWay] = REXCVAR_GET(blur_renut_fast_pipeline_two_way);
-  s.on[kTextureTwoWay] = REXCVAR_GET(blur_renut_texture_memo_two_way);
   s.on[kProvisionalKey] = REXCVAR_GET(blur_renut_provisional_key_kept);
   s.on[kWakeBatchAll] = REXCVAR_GET(blur_renut_wake_batch_all);
   s.on[kViewportMemo] = REXCVAR_GET(blur_renut_viewport_memo);

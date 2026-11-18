@@ -150,7 +150,7 @@ them as well". The batch has one: #36.
 | 14 | `ultimate_renut_replay_inherit_same = false` (0 of 131,072 replays matched) | toml | false |
 | 15 | `sasrt_gpu_skip_inert_draws = false` (0 draws skipped) | toml | false |
 | 16 | The fast pipeline cache is two-way (the older way is replaced) | blur_renut_fast_pipeline_two_way (235) | on |
-| 17 | The texture slot memo is two-way | blur_renut_texture_memo_two_way (236) | on |
+| 17 | Cut (the user: "If 17 doesn't save much at all just cut it completely"). The two-way texture slot memo drew Barcelona Oval's start with ghosting and grain on the console (the car smeared, a red-green copy of the fire, colour fringes); four short races bisected it to this key alone. Its saving was ~0.1 ms a frame at most (61 conflicts a frame). The code is gone; A/B target 236 stays free. The likely cause, not proven: two ways keep entries of earlier frames far longer, and the earlier frame's path (A/B 32) then rebinds what an earlier frame bound | - | removed |
 | 18 | A provisional entry with this draw's inputs is looked up again with its kept key (no MakeKey) | blur_renut_provisional_key_kept (237) | on |
 | 19 | Census: the fast draws with no field changed | (census) | - |
 | 20, 21 | Census: op vectors that grew; ops that captured stack headers | (census) | - |

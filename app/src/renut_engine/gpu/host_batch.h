@@ -23,7 +23,8 @@ enum Item : uint32_t {
   kCleanerPriority,  // #11: blur_renut_ring_cleaner_priority (the ring cleaner above the game threads)
   kInheritWords,     // #13: blur_renut_inherit_runs_words (BuildInheritRuns a 32-bit word at a time)
   kPipelineTwoWay,   // #16: blur_renut_fast_pipeline_two_way
-  kTextureTwoWay,    // #17: blur_renut_texture_memo_two_way
+  kRemoved17,        // #17 (the two-way texture memo): removed 2026-11-18 (ghosting on the console, a saving
+                     //   of ~0.1 ms a frame at most); its A/B target 236 kept free so the others keep theirs
   kProvisionalKey,   // #18: blur_renut_provisional_key_kept (a provisional answer looked up again with its kept key)
   kWakeBatchAll,     // #28: blur_renut_wake_batch_all (runs and resolves wake the render thread as draws do)
   kViewportMemo,     // #32: blur_renut_viewport_memo (eight viewports kept, not one)

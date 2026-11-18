@@ -3943,24 +3943,7 @@ TextureSlotMemo g_texture_slot_memo[kTextureMemoEntries];
 
 inline TextureSlotMemo &TextureMemoSlot(u32 texture_va, const TextureFetch &fetch) {
   static_assert(kTextureMemoEntries == 1u << 12);
-  const u32 i = ((texture_va ^ (fetch.dword[0] * 0x85EBCA6Bu) ^ fetch.dword[1]) * 0x9E3779B1u) >> 20;
-  // blur-nx (2026-11-18, the Renut host batch's #17, blur_renut_texture_memo_two_way / A/B 236): the entry and its
-  // neighbour, the one holding this texture and fetch words' first two (the hash's inputs), else the one to fill: an
-  // empty one, else the one of the older frame. Every caller checks all the entry's words and epochs itself, so the
-  // answers are those of the entry either way; the race had 17,690 misses to another entry a 10 s (61 a frame), each
-  // the bind's whole way.
-  if (!::renut::gpu::host_batch::On(::renut::gpu::host_batch::kTextureTwoWay))
-    return g_texture_slot_memo[i];
-  TextureSlotMemo &a = g_texture_slot_memo[i], &b = g_texture_slot_memo[i ^ 1u];
-  if (a.va == texture_va && a.device[0] == fetch.dword[0] && a.device[1] == fetch.dword[1])
-    return a;
-  if (b.va == texture_va && b.device[0] == fetch.dword[0] && b.device[1] == fetch.dword[1])
-    return b;
-  if (!a.va && !a.frame)
-    return a;
-  if (!b.va && !b.frame)
-    return b;
-  return a.frame <= b.frame ? a : b;
+  return g_texture_slot_memo[((texture_va ^ (fetch.dword[0] * 0x85EBCA6Bu) ^ fetch.dword[1]) * 0x9E3779B1u) >> 20];
 }
 
 // banjo-nx (2026-10-20, from sa2-nx, banjo_renut_chain_reuse): 'slot_fx' (32 entries, or null) receives each bound slot's effects (its
