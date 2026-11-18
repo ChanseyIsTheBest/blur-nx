@@ -175,3 +175,19 @@ keys): they match the dist's play toml again.
 Also in this window (the user's request): the NRO's title is "blur", its icon is the user's cover art (256x256), and
 the author is ChanseyIsTheBest (32492262). The NRO's path is unchanged, so the forwarder's id and the four-core NPDM
 stay the same.
+
+## For every port, and for 1 % lows (2026-11-18 ~11:05)
+
+The user: "this will be universally good for all ports so keep that in mind and help with 1% lows". The batch's
+keys are on in the code by default (not only in Blur's tomls), except #28's option, which waits for its A/B. #14, #15
+and #31 are Blur's measurements, so they stay in Blur's tomls: another game may use what Blur does not.
+
+| # | What was done | Key | Default |
+|---|---|---|---|
+| 37 | Frame pacing in the 10 s report (frame_stats' PacingReport): the game frames' mean, 1 % and 0.1 % lows, the 50/90/99/99.9th percentiles and the longest, with the render thread's and the GPU's frame times; the window's five slowest frames with the game thread's own waits in them (fences, frames-ahead, the display, the limiter) and the longest render thread and GPU frames reported meanwhile; the histograms' bins (a quarter ms) so a race's figures add up exactly (scratchpad pacing_sum.py). The frame limiter's sleep is its own wait source: it had been counted as a fence, so the capped races' "fence waits" (~120 ms a second) were the limiter's | (always) | on |
+| 38 | The image heap keeps one empty 32 MB chunk ready, made ahead on a thread of its own (the uam thread's core and priority). Making a chunk where a texture needed it took 20-38 ms on the console, with the heap's lock held, seven times in a Barcelona race (1118_hb_census: three in its first 8 s, then about 27, 63, 84 and 163 s in; 1118_ship_sampler the same). The chunk made at once now logs its time | blur_renut_image_spare_chunk (plume: Deko3DSetImageSpareChunk) | on |
+| 39 | A deko3d block that took 4 ms or more to make is logged with its time, the thread's priority and core (64 lines at most) | (always) | on |
+
+The first uncapped pair (the same build, the batch on and off by toml): 31.27 and 31.04 fps, the render thread 16.81
+and 17.53 ms a frame, the GPU 30.19 and 29.36 ms a frame. Blur is held by the GPU here (about 30 ms of a 32 ms frame),
+so the CPU the batch saves shows as headroom, and as fps only in a port the CPU holds.
