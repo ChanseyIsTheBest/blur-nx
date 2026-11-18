@@ -34,6 +34,7 @@ struct BlurPlFontData {
 };
 uint32_t plInitialize(int service_type);
 uint32_t plGetSharedFontByType(BlurPlFontData* font, int shared_font_type);
+int RexSwitchApplyFourCoreMode(int on);  // threading_switch.cpp: the forwarder's NPDM written or removed
 }
 #endif
 
@@ -80,6 +81,7 @@ const ImVec4 kGreenDark(0.050f, 0.230f, 0.105f, 1.00f);
 const ImVec4 kText(0.880f, 1.000f, 0.900f, 1.00f);
 const ImVec4 kTextDim(0.500f, 0.660f, 0.540f, 1.00f);
 const ImVec4 kPending(0.780f, 0.960f, 0.350f, 1.00f);  // a * setting's value for the next start
+const ImVec4 kWarn(1.000f, 0.720f, 0.180f, 1.00f);     // the four-core option's warning, and its Off
 
 ImU32 U32(const ImVec4& c, float alpha = 1.0f) { return ImGui::GetColorU32(ImVec4(c.x, c.y, c.z, c.w * alpha)); }
 
@@ -263,6 +265,11 @@ std::vector<Setting> MakeSettings() {
       "Edge smoothing on the 3D image after the game's own picture (costs a little GPU time).");
   add("MSAA", "msaa_level", true, {C("Off", "1", "1"), C("2x", "2", "2"), C("4x", "4", "4")}, 0,
       "The game's own edge smoothing: smoother edges, a lower frame rate (4x: about 9 % lower than Off).");
+  // blur-nx (2026-11-18, the user: "make 4 core mode an option ... on by default and a warning that it is highly
+  // reccomended to be left on").
+  add("4-core mode", "four_core_mode", true, OnOff(), 0,
+      "Highly recommended to leave on: the game uses all four CPU cores (started from its Home menu icon). Off is "
+      "much slower.");
   add("Xbox button layout", "input_xbox_layout", false, OnOff(), 0,
       "Face buttons by position, as on an Xbox 360 pad: the bottom button is A. Off: by letter (the Switch's A is A).");
   add("Joy-Con sideways", "input_joycon_sideways", false, OnOff(), 0,
@@ -508,6 +515,12 @@ void GameMenuDialog::Save() {
     return;
   const bool ok = UpdateConfigFile(config_path_, edits);
   REXLOG_INFO("game menu: {} setting(s) written to {}{}", edits.size(), config_path_.string(), ok ? "" : ": FAILED");
+#if REX_PLATFORM_SWITCH
+  // The four-core option's file at once (the forwarder's NPDM), so the next start has the cores it says.
+  for (const FileEdit& e : edits)
+    if (e.key == "four_core_mode")
+      REXLOG_INFO("game menu: four-core mode {}: {}", e.toml, RexSwitchApplyFourCoreMode(e.toml == "true" ? 1 : 0));
+#endif
 }
 
 rex::system::AchievementManager* GameMenuDialog::Achievements() const {
@@ -752,9 +765,10 @@ void GameMenuDialog::DrawSettingsRows(std::vector<Setting>& rows, bool controls,
       value = s.choices[size_t(s.value)].label;
     }
     const bool pending = s.restart && s.value != s.running;
+    const bool warn = s.key == "four_core_mode" && s.value != s.default_choice;  // Off: the warning's colour
     const ImVec2 vs = ImGui::CalcTextSize(value.c_str());
     const float vx = p.x + value_x + (value_w - vs.x) * 0.5f;
-    dl->AddText(ImVec2(vx, ty), U32(pending ? kPending : (sel ? kGreen : kText)), value.c_str());
+    dl->AddText(ImVec2(vx, ty), U32(warn ? kWarn : pending ? kPending : (sel ? kGreen : kText)), value.c_str());
     if (sel && s.key != kResetKey) {
       const float cy = p.y + row_height_ * 0.5f, h = font * 0.32f;
       const float lx = p.x + value_x + arrow_w * 0.35f, rx = p.x + value_x + value_w - arrow_w * 0.35f;
@@ -875,13 +889,16 @@ void GameMenuDialog::DrawFooter() {
   dl->AddLine(ImVec2(p.x - 4.0f, p.y + font * 0.3f), ImVec2(p.x + width + 4.0f, p.y + font * 0.3f), U32(kGreenDim), 2.0f);
   // The chosen row's help.
   std::string help;
-  if (tab_ == kSettings && row_[tab_] < int(settings_.size()))
+  bool warning = false;
+  if (tab_ == kSettings && row_[tab_] < int(settings_.size())) {
     help = settings_[size_t(row_[tab_])].help;
+    warning = settings_[size_t(row_[tab_])].key == "four_core_mode";
+  }
   else if (tab_ >= kP1 && row_[tab_] < int(controls_[tab_ - kP1].size()))
     help = controls_[tab_ - kP1][size_t(row_[tab_])].help;
   if (!help.empty())
-    dl->AddText(g_text_font, g_text_size, ImVec2(p.x + font * 0.3f, p.y + font * 0.65f), U32(kTextDim), help.c_str(),
-                nullptr, width - font * 0.6f);
+    dl->AddText(g_text_font, g_text_size, ImVec2(p.x + font * 0.3f, p.y + font * 0.65f),
+                U32(warning ? kWarn : kTextDim), help.c_str(), nullptr, width - font * 0.6f);
   // The note for the * settings, and the buttons.
   const float y = p.y + font * 2.15f;
   if (tab_ == kSettings)

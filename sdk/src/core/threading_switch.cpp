@@ -69,6 +69,14 @@ REXCVAR_DEFINE_STRING(banjo_forwarder_program_id, "05D6EA1333487000", "Banjo/Thr
                       "all four cores (banjo_system_core). Under any other id (a game's, through title takeover) "
                       "nothing is written. Empty: never")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// blur-nx (2026-11-18, the user: "make 4 core mode an option in the settings exposed to users just make it on by default
+// and a warning that it is highly reccomended to be left on"): off, the forwarder's NPDM this program wrote is removed
+// (only that file, byte for byte ours), so the forwarder's next launch has the three cores a homebrew launch gets.
+REXCVAR_DEFINE_BOOL(four_core_mode, true, "Banjo/Threads",
+                    "Four cores (CPU 0-3) when started from the forwarder banjo_forwarder_program_id names: its NPDM is "
+                    "written at start (the forwarder's next launch gets them). Highly recommended. false: that NPDM "
+                    "is removed (if it is the one written here), three cores from the forwarder's next launch")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 // blur-nx (2026-11-12, CPU batch 3; codegen-ideas-3 CG-01): see RexSwitchApplyNamedPriority.
 REXCVAR_DEFINE_STRING(switch_thread_priorities, "", "Threading",
                       "Host priorities for named threads, set when a thread takes its name: a comma-separated list "
@@ -655,7 +663,12 @@ static bool SphairaForwarderOfThisNro(u64 program) {
   return false;
 }
 
-int RexSwitchEnsureForwarderNpdm(void) {
+static int ForwarderNpdm(bool four_cores);
+int RexSwitchEnsureForwarderNpdm(void) { return ForwarderNpdm(REXCVAR_GET(four_core_mode)); }
+// blur-nx (2026-11-18): the game menu's four-core option, applied when the menu closes (the next launch takes it).
+int RexSwitchApplyFourCoreMode(int on) { return ForwarderNpdm(on != 0); }
+
+static int ForwarderNpdm(bool four_cores) {
   const std::string want_text = REXCVAR_GET(banjo_forwarder_program_id);
   if (want_text.empty()) {
     g_npdm_status = "off (banjo_forwarder_program_id empty)";
@@ -683,14 +696,27 @@ int RexSwitchEnsureForwarderNpdm(void) {
   std::snprintf(dir, sizeof(dir), "sdmc:/atmosphere/contents/%016llX/exefs", (unsigned long long)program);
   std::snprintf(path, sizeof(path), "%s/main.npdm", dir);
   // Already there, the same bytes?
+  bool ours = false;
   if (FILE* f = std::fopen(path, "rb")) {
     unsigned char have[sizeof(npdm) + 1];
     const size_t n = std::fread(have, 1, sizeof(have), f);
     std::fclose(f);
-    if (n == sizeof(npdm) && std::memcmp(have, npdm, sizeof(npdm)) == 0) {
+    ours = n == sizeof(npdm) && std::memcmp(have, npdm, sizeof(npdm)) == 0;
+    if (ours && four_cores) {
       g_npdm_status = std::string("in place: ") + path;
       return 1;
     }
+  }
+  // blur-nx (2026-11-18, four_core_mode off): this program's NPDM removed; anything else there is left alone.
+  if (!four_cores) {
+    if (!ours) {
+      g_npdm_status = std::string("off (four_core_mode false; none of ours at ") + path + ")";
+      return 0;
+    }
+    const bool removed = std::remove(path) == 0;
+    g_npdm_status = std::string(removed ? "removed (four_core_mode false; three cores from the forwarder's next launch): "
+                                        : "could NOT be removed: ") + path;
+    return removed ? 3 : -1;
   }
   char part[96];
   for (const char* sub : {"sdmc:/atmosphere", "sdmc:/atmosphere/contents"}) mkdir(sub, 0777);

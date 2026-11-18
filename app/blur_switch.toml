@@ -33,3 +33,7 @@ input_joycon_sideways = true
 
 # A sideways Joy-Con's stick turned to match the grip.
 input_joycon_sideways_stick = true
+
+# Four-core mode: the game uses all four CPU cores when started from its Home menu icon (the Sphaira forwarder).
+# HIGHLY RECOMMENDED: leave it on (false is much slower). A change takes effect at the next start.
+four_core_mode = true

@@ -13,7 +13,7 @@ hot-function method). GPL-3.0 where the sources are.
 SD card layout
 --------------
 sdmc:/switch/blur-nx/blur-nx.nro        the program
-sdmc:/switch/blur-nx/blur.toml          your settings (nine of them; written at the first start, see "Settings")
+sdmc:/switch/blur-nx/blur.toml          your settings (ten of them; written at the first start, see "Settings")
 sdmc:/switch/blur-nx/game_root/         the disc's files: default.xex and the rest of the disc (extract your ISO; the
                                         ISO itself is not read). Title update 2's default.xexp goes next to
                                         default.xex.
@@ -23,16 +23,16 @@ sdmc:/switch/blur-nx/dlc/               optional DLC packages (Xbox 360 LIVE fil
 
 Settings
 --------
-The build has every setting built in but nine, which are in blur.toml next to the NRO (written at the first start;
+The build has every setting built in but ten, which are in blur.toml next to the NRO (written at the first start;
 delete it to get the defaults back): language ("System", the console's own, by default), the frame rate cap (30),
-the handheld and docked resolutions of the 3D image (720 lines each), SMAA (on), MSAA (off), the Xbox button layout,
-and the two sideways Joy-Con options.
+the handheld and docked resolutions of the 3D image (720 lines each), SMAA (on), MSAA (off), four-core mode (on:
+highly recommended to leave on), the Xbox button layout, and the two sideways Joy-Con options.
 
 The game menu: hold A+B+X+Y+L+R together during the game. Up/Down choose, Left/Right change, L/R switch tabs, and +
-closes it; the game takes no input while it is up. Tabs: Settings (the nine, and rumble), Achievements (the game's own
+closes it; the game takes no input while it is up. Tabs: Settings (the ten, and rumble), Achievements (the game's own
 list, names, gamerscores and images, read from your default.xex), and P1-P4 Controls (the Switch button that presses
-each Xbox 360 button, per player). Settings marked * (language, the resolutions, MSAA) take effect at the next start;
-the others at once. The menu writes your changes into blur.toml when it closes.
+each Xbox 360 button, per player). Settings marked * (language, the resolutions, MSAA, four-core mode) take effect at
+the next start; the others at once. The menu writes your changes into blur.toml when it closes.
 
 Test settings: any key of a full toml (the repository's dist/switch/blur-nx/renut.toml and configs/) copied into
 blur.toml overrides the built-in one. The test builds (BLUR_BUILTIN_CONFIG=OFF) read a full renut.toml instead.
@@ -46,10 +46,10 @@ the machine copies (tools/switch_hot_bulk.py --merge) and any hand-written nativ
 
 Cores
 -----
-The port runs on four cores when launched from its Sphaira forwarder (05A5D8E1BAA3E000, the forwarder of
+The port runs on four cores (four_core_mode, on by default) when launched from its Sphaira forwarder (05A5D8E1BAA3E000, the forwarder of
 sdmc:/switch/blur-nx/blur-nx.nro): the NRO writes that forwarder's four-core NPDM
 (NetherSX2_nx's layout, CPU 0-3) to sdmc:/atmosphere/contents/<id>/exefs/main.npdm at the next start. Delete that
-main.npdm to go back to three cores.
+main.npdm, or set four_core_mode = false (the game removes the file it wrote), to go back to three cores.
 
 Profiling files
 ---------------

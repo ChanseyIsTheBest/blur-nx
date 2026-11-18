@@ -21,12 +21,13 @@ import tomllib
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # blur-nx (2026-11-18, the user: "simplify the config to only have language (set it to system language by default)/
 # framerate cap/handheld resolution/docked resolution/SMAA/MSAA/input_xbox layout/input_joycon_sideways/
-# input_joycon_sideways_stick keep all the settings the same as they are for those"): those nine. disable_msaa,
+# input_joycon_sideways_stick keep all the settings the same as they are for those"): those nine; and (the user, the
+# same day: "make 4 core mode an option in the settings exposed to users just make it on by default") four_core_mode. disable_msaa,
 # input_rumble and the button maps are built in (their values as before); the game menu (A+B+X+Y+L+R) writes a map or
 # rumble into blur.toml only when the player changes it from the default.
 PLAYER_KEYS = ('language', 'frame_cap', 'banjo_renut_render_height_handheld', 'banjo_renut_render_height_docked',
                'banjo_renut_smaa', 'msaa_level', 'input_xbox_layout', 'input_joycon_sideways',
-               'input_joycon_sideways_stick')
+               'input_joycon_sideways_stick', 'four_core_mode')
 PLAYER_TABLES = ()
 FINAL = {'log_level': '"off"'}
 
@@ -65,6 +66,10 @@ input_joycon_sideways = true
 
 # A sideways Joy-Con's stick turned to match the grip.
 input_joycon_sideways_stick = true
+
+# Four-core mode: the game uses all four CPU cores when started from its Home menu icon (the Sphaira forwarder).
+# HIGHLY RECOMMENDED: leave it on (false is much slower). A change takes effect at the next start.
+four_core_mode = true
 '''
 
 
