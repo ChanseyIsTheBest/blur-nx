@@ -258,9 +258,9 @@ std::vector<Setting> MakeSettings() {
       5, "The size of the 3D image in handheld mode. Lower is faster; the HUD and text stay sharp.");
   add("Docked resolution", "banjo_renut_render_height_docked", true,
       {C("1280x720", "720", "720"), C("1408x792", "792", "792"), C("1536x864", "864", "864"),
-       C("1600x900", "900", "900"), C("1664x936", "936", "936"), C("1792x1008", "1008", "1008"),
-       C("1920x1080", "1080", "1080")},
-      0, "The size of the 3D image on the TV. Lower is faster; the HUD and text are drawn at 1080p.");
+       C("1600x900", "900", "900"), C("1664x936", "936", "936"), C("1728x972", "972", "972"),
+       C("1792x1008", "1008", "1008"), C("1920x1080", "1080", "1080")},
+      5, "The size of the 3D image on the TV (1728x972 by default). Lower is faster; the HUD and text are drawn at 1080p.");
   add("Rumble", "input_rumble", false, OnOff(), 0, "Controller vibration.", /*always_in_file=*/false);
   add("SMAA", "banjo_renut_smaa", false, OnOff(), 0,
       "Edge smoothing on the 3D image after the game's own picture (costs a little GPU time).");
@@ -382,10 +382,11 @@ void AddGameMenuFonts(ImFontAtlas* atlas) {
   config.FontDataOwnedByAtlas = false;  // the system's shared memory
   config.OversampleH = 2;
   config.OversampleV = 1;
-  g_font_small = atlas->AddFontFromMemoryTTF(font.address, int(font.size), 26.0f, &config, kRanges);
-  g_font_large = atlas->AddFontFromMemoryTTF(font.address, int(font.size), 39.0f, &config, kRanges);
-  g_font_small_text = atlas->AddFontFromMemoryTTF(font.address, int(font.size), 20.0f, &config, kRanges);
-  g_font_large_text = atlas->AddFontFromMemoryTTF(font.address, int(font.size), 30.0f, &config, kRanges);
+  // 2026-11-18 (the user, after the first photos: "shrink the font a bit to fit more on screen"): 26/39 and 20/30 before.
+  g_font_small = atlas->AddFontFromMemoryTTF(font.address, int(font.size), 22.0f, &config, kRanges);
+  g_font_large = atlas->AddFontFromMemoryTTF(font.address, int(font.size), 33.0f, &config, kRanges);
+  g_font_small_text = atlas->AddFontFromMemoryTTF(font.address, int(font.size), 18.0f, &config, kRanges);
+  g_font_large_text = atlas->AddFontFromMemoryTTF(font.address, int(font.size), 27.0f, &config, kRanges);
 #else
   (void)atlas;
 #endif
@@ -564,7 +565,7 @@ void GameMenuDialog::OnDraw(ImGuiIO& io) {
   ImFont* font = MenuFont(io);
   if (font)
     ImGui::PushFont(font, font->LegacySize);
-  const float scale = font ? 1.0f : std::max(1.0f, io.DisplaySize.y / 720.0f) * 1.8f;
+  const float scale = font ? 1.0f : std::max(1.0f, io.DisplaySize.y / 720.0f) * 1.55f;
 
   // ---- Input (the menu's own: the window takes no ImGui navigation) ----
   const int before_tab = tab_;
@@ -631,7 +632,7 @@ void GameMenuDialog::OnDraw(ImGuiIO& io) {
   if (ImGui::Begin("##blur_game_menu", nullptr, flags)) {
     if (!font)
       ImGui::SetWindowFontScale(scale);
-    row_height_ = ImGui::GetFontSize() * 1.9f;
+    row_height_ = ImGui::GetFontSize() * 1.75f;
     PickTextFont(io);
     const float width = ImGui::GetContentRegionAvail().x;
     DrawTabs(width);
@@ -850,7 +851,7 @@ void GameMenuDialog::DrawAchievements() {
                         bh * 0.5f);
     ImGui::Dummy(ImVec2(width, font * 2.1f));
   }
-  const float row_h = font * 3.1f;
+  const float row_h = font * 2.9f;
   const float icon = row_h - font * 0.6f;
   int& selected = row_[tab_];
   ImGui::BeginChild("##ach", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None, ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollbar);

@@ -3,8 +3,8 @@
 tools/renut_base_banjo.toml (banjo-nx's shipped renut.toml of 2026-10-29 as katamari-nx's generator left it in the base,
 with Katamari's own keys taken out here), with Blur's settings:
 
-  renut.toml       the shipped settings: Renut on deko3d, 720 lines handheld and docked (the Xbox 360's own:
-                   pixel-identical; 1080 docked is a config for the user), the game's own MSAA, every exact enhancement
+  renut.toml       the shipped settings: Renut on deko3d, 720 lines handheld (the Xbox 360's own: pixel-identical)
+                   and 972 docked (the user's default, 2026-11-18; 1080 docked is a config), the game's own MSAA, every exact enhancement
                    as banjo-nx ships it, the items measured SLOWER ON THE CONSOLE off, diagnostics on (logs);
   renut_play.toml  renut.toml with the diagnostics off (the log at "error", no samplers, no census lines);
   renut_ab.toml    renut.toml with an in-run A/B list, 30 s halves, target 1 (a Vulkan-only key: does nothing on the
@@ -32,10 +32,10 @@ HEADER = """# blur-nx (Blur on the Switch, Renut's renderer on deko3d): {what}
 SHIPPED = {
     'banjo_renderer': '"renut"',
     'renut_gpu_backend': '"deko3d"',
-    # The Xbox 360's 720 lines in both modes and the game's own MSAA: pixel-identical is the default (rr6-nx's rule);
-    # configs/renut_1080_docked.toml is one key away, for the user to decide on.
+    # The Xbox 360's 720 lines handheld (pixel-identical, rr6-nx's rule) and, docked, 972 (the user's default since
+    # 2026-11-18; 720 before); configs/renut_1080_docked.toml is one key away.
     'banjo_renut_render_height_handheld': '720',
-    'banjo_renut_render_height_docked': '720',
+    'banjo_renut_render_height_docked': '972',  # the user (2026-11-18): "i want docked default to be 972p"
     'banjo_renut_dynamic_resolution': 'false',
     # blur-nx (2026-11-14 02:44, docs/cpu-near-exact-50-1113.md): M-38 off. Blur's XEX never imports KeTimeStampBundle,
     # yet the game reads its tick count (a runtime lookup), so with the timer started only on import the count froze
@@ -353,7 +353,7 @@ def main():
     ap.add_argument('--out', default=os.path.join(ROOT, 'dist', 'switch', 'blur-nx'))
     a = ap.parse_args()
     shipped = apply(base_text(), SHIPPED)
-    write(os.path.join(a.out, 'renut.toml'), 'the shipped settings (720 lines both modes, no MSAA + SMAA, the 30 fps '
+    write(os.path.join(a.out, 'renut.toml'), 'the shipped settings (720 lines handheld, 972 docked, no MSAA + SMAA, the 30 fps '
           'cap; the diagnostics off)', apply(shipped, DIAG_OFF))
     write(os.path.join(a.out, 'renut_logs.toml'), 'the shipped settings with the diagnostics on (samplers, GPU traces: '
           'for a test run)', shipped)

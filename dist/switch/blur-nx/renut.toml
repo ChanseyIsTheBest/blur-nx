@@ -1,4 +1,4 @@
-# blur-nx (Blur on the Switch, Renut's renderer on deko3d): the shipped settings (720 lines both modes, no MSAA + SMAA, the 30 fps cap; the diagnostics off)
+# blur-nx (Blur on the Switch, Renut's renderer on deko3d): the shipped settings (720 lines handheld, 972 docked, no MSAA + SMAA, the 30 fps cap; the diagnostics off)
 # Made by tools/make_blur_tomls.py from banjo-nx's shipped renut.toml (2026-10-29, through renut_nx_ultimate_base).
 # Copy next to the NRO as blur.toml. Credits: reNut's renderer (masterspike52, reuse permitted), renut_nx_ultimate_base
 # and the ports its fixes come from (katamari-nx, banjo-nx, sa2-nx, rr6-nx, sasrt-nx, kameo-nx and the others),
@@ -467,7 +467,7 @@ banjo_renut_portrait_msaa_samples = 2
 # (rounded to a multiple of 9: 648, 702, 756, 810, 864, 900, ...; read at start). configs/banjo_renut_native_720p.toml
 # is the game's own 720p.
 banjo_renut_render_height_handheld = 720
-banjo_renut_render_height_docked = 720
+banjo_renut_render_height_docked = 972
 banjo_renut_display_height_docked = 1080
 # The upscale: 0 = bilinear (your choice, every config: one sample a pixel, the cheapest), 1 = bicubic Catmull-Rom
 # (sharper, five samples a pixel).

@@ -25,7 +25,7 @@ Settings
 --------
 The build has every setting built in but ten, which are in blur.toml next to the NRO (written at the first start;
 delete it to get the defaults back): language ("System", the console's own, by default), the frame rate cap (30),
-the handheld and docked resolutions of the 3D image (720 lines each), SMAA (on), MSAA (off), four-core mode (on:
+the handheld and docked resolutions of the 3D image (720 and 972 lines), SMAA (on), MSAA (off), four-core mode (on:
 highly recommended to leave on), the Xbox button layout, and the two sideways Joy-Con options.
 
 The game menu: hold A+B+X+Y+L+R together during the game. Up/Down choose, Left/Right change, L/R switch tabs, and +

@@ -47,9 +47,9 @@ frame_cap = "30"
 # and text stay sharp.
 banjo_renut_render_height_handheld = 720
 
-# The height of the 3D image on the TV: 720 (1280x720), 792, 864, 900, 936, 1008 or 1080 (1920x1080). Lower is
-# faster; the HUD and text are drawn at 1080p.
-banjo_renut_render_height_docked = 720
+# The height of the 3D image on the TV: 720 (1280x720), 792, 864, 900, 936, 972 (1728x972, the default), 1008 or
+# 1080 (1920x1080). Lower is faster; the HUD and text are drawn at 1080p.
+banjo_renut_render_height_docked = 972
 
 # SMAA edge smoothing on the 3D image (the HUD and text stay sharp). Not the game's own picture; costs GPU time.
 banjo_renut_smaa = true

@@ -815,6 +815,15 @@ void SwitchInputDriver::Poll(size_t index) {
     RouteRecording(held, left, right);
   }
   DispatchMenuShortcuts(slot, held);
+  // blur-nx (2026-11-18): the game menu's chord (A+B+X+Y+L+R). While L and R are both held, A, B, X and Y do not reach
+  // the game: held first, L and R keep the face buttons of the chord from it (the menu's first console test pressed the
+  // face buttons first, and the game took one of them: its camera changed). L+R with a face button is no game input
+  // here; the face buttons reach the game again when L or R is let go.
+  {
+    constexpr uint64_t kShoulders = HidNpadButton_L | HidNpadButton_R;
+    if ((held & kShoulders) == kShoulders)
+      held &= ~uint64_t(HidNpadButton_A | HidNpadButton_B | HidNpadButton_X | HidNpadButton_Y);
+  }
   X_INPUT_GAMEPAD gamepad{};
   ButtonTable table;  // blur-nx (2026-11-18): a copy (the game menu may rebuild the maps meanwhile)
   {
