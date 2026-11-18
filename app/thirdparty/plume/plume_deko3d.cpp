@@ -1271,7 +1271,23 @@ namespace plume {
             dkDeviceDestroy(dk);
     }
 
+    // blur-nx (2026-11-18, for 1 % lows, every port): a block that took 4 ms or more to make is logged with its time (64
+    // lines at most): the storage zeroed and flushed, the GPU mapping, the heap's figures, on the thread that asked.
     DkMemBlock Deko3DDevice::makeBlock(uint32_t size, uint32_t flags, const char *what) {
+        const uint64_t t0 = armGetSystemTick();
+        DkMemBlock block = makeBlockUntimed(size, flags, what);
+        const double ms = double(armTicksToNs(armGetSystemTick() - t0)) / 1e6;
+        static std::atomic<uint32_t> slowLogged{0};
+        if (ms >= 4.0 && slowLogged.fetch_add(1, std::memory_order_relaxed) < 64) {
+            s32 priority = -1;
+            svcGetThreadPriority(&priority, CUR_THREAD_HANDLE);
+            logf("memory block: %s, %u KiB took %.1f ms (a thread of priority 0x%X, core %d)%s", what, size >> 10, ms,
+                 uint32_t(priority), svcGetCurrentProcessorNumber(), block ? "" : ": NONE MADE");
+        }
+        return block;
+    }
+
+    DkMemBlock Deko3DDevice::makeBlockUntimed(uint32_t size, uint32_t flags, const char *what) {
         DkMemBlockMaker m;
         dkMemBlockMakerDefaults(&m, dk, alignUp(size, DK_MEMBLOCK_ALIGNMENT));
         m.flags = flags;

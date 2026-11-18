@@ -848,6 +848,7 @@ namespace plume {
 
         // internal
         DkMemBlock makeBlock(uint32_t size, uint32_t flags, const char *what);
+        DkMemBlock makeBlockUntimed(uint32_t size, uint32_t flags, const char *what);  // blur-nx (2026-11-18): makeBlock's body
         void destroyBlock(DkMemBlock block);
         // PLUME_DEKO3D_GUARDS (debug builds): every block's storage has guard bytes after it, checked here.
         void checkGuards();
