@@ -30,6 +30,7 @@ struct Slot {
   std::atomic<uint32_t> kind{0};
   std::atomic<int64_t> timeout_ms{0};
   std::atomic<uint64_t> since_ns{0};  // 0: not blocked
+  std::atomic<uint32_t> guest[5] = {};  // port 167: WaitGuestCallers
 };
 Slot g_slots[kSlots];
 
@@ -119,6 +120,10 @@ void BeginSlow(uint32_t handle, uint32_t object_type, uint32_t count, uint32_t k
   s->count.store(count, std::memory_order_relaxed);
   s->kind.store(kind, std::memory_order_relaxed);
   s->timeout_ms.store(timeout_ms, std::memory_order_relaxed);
+  uint32_t guest[5] = {};
+  WaitGuestCallers(guest);  // port 167
+  for (int i = 0; i < 5; ++i)
+    s->guest[i].store(guest[i], std::memory_order_relaxed);
   const uint64_t now = NowNs();
   s->since_ns.store(now != 0 ? now : 1, std::memory_order_relaxed);
   s->seq.store(q + 2, std::memory_order_release);
@@ -168,6 +173,8 @@ size_t CopyWaits(WaitView* out, size_t max) {
       v.kind = s.kind.load(std::memory_order_relaxed);
       v.timeout_ms = s.timeout_ms.load(std::memory_order_relaxed);
       v.since_ns = s.since_ns.load(std::memory_order_relaxed);
+      for (int k = 0; k < 5; ++k)
+        v.guest[k] = s.guest[k].load(std::memory_order_relaxed);  // port 167
       std::atomic_thread_fence(std::memory_order_acquire);
       if (s.seq.load(std::memory_order_relaxed) != q1) continue;
       if (v.since_ns != 0) out[n++] = v;

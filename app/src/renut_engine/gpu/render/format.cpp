@@ -22,7 +22,7 @@ REXCVAR_DEFINE_BOOL(banjo_deko3d_native_16bit, true, "Banjo/Renut",
 namespace renut::gpu {
 
 namespace {
-// Port 148: banjo_deko3d_native_16bit, read once.
+// Port 145: banjo_deko3d_native_16bit, read once.
 bool Native16Bit() {
   static const bool on = IsDeko3D() && REXCVAR_GET(banjo_deko3d_native_16bit);
   return on;
@@ -458,19 +458,36 @@ void DecodeBlockRow(TexelConversion conversion, const uint8_t *src, uint8_t *dst
   }
 }
 
+// Port 164 (from fnxf_xiii, its note of 2026-11-06): eight bytes at a time (the texture uploads' untile swaps every
+// byte of a DXT level 8in16, one byte pair at a time before); the same bytes in the same places, the tail as before.
+// src and dst may be the same.
 void SwapEndian(u32 endian, const void *src, void *dst, size_t bytes) {
   const auto *s = static_cast<const uint8_t *>(src);
   auto *d = static_cast<uint8_t *>(dst);
+  size_t i = 0;
   switch (endian & 3) {
   case 1:  // 8in16
-    for (size_t i = 0; i + 1 < bytes; i += 2) {
+    for (; i + 8 <= bytes; i += 8) {
+      uint64_t v;
+      std::memcpy(&v, s + i, 8);
+      v = ((v & 0x00FF00FF00FF00FFull) << 8) | ((v >> 8) & 0x00FF00FF00FF00FFull);
+      std::memcpy(d + i, &v, 8);
+    }
+    for (; i + 1 < bytes; i += 2) {
       const uint8_t a = s[i], b = s[i + 1];
       d[i] = b;
       d[i + 1] = a;
     }
     break;
   case 2:  // 8in32
-    for (size_t i = 0; i + 3 < bytes; i += 4) {
+    for (; i + 8 <= bytes; i += 8) {
+      uint64_t v;
+      std::memcpy(&v, s + i, 8);
+      v = __builtin_bswap64(v);
+      v = (v >> 32) | (v << 32);  // each 32-bit word swapped in place
+      std::memcpy(d + i, &v, 8);
+    }
+    for (; i + 3 < bytes; i += 4) {
       uint32_t v;
       std::memcpy(&v, s + i, 4);
       v = __builtin_bswap32(v);
@@ -478,7 +495,13 @@ void SwapEndian(u32 endian, const void *src, void *dst, size_t bytes) {
     }
     break;
   case 3:  // 16in32
-    for (size_t i = 0; i + 3 < bytes; i += 4) {
+    for (; i + 8 <= bytes; i += 8) {
+      uint64_t v;
+      std::memcpy(&v, s + i, 8);
+      v = ((v & 0x0000FFFF0000FFFFull) << 16) | ((v >> 16) & 0x0000FFFF0000FFFFull);
+      std::memcpy(d + i, &v, 8);
+    }
+    for (; i + 3 < bytes; i += 4) {
       uint32_t v;
       std::memcpy(&v, s + i, 4);
       v = (v >> 16) | (v << 16);

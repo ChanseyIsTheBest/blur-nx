@@ -644,6 +644,16 @@ constexpr uint32_t kKickListsAFrame = 3;
 // banjo-nx (2026-10-20, banjo_deko3d_eager_kicks): smaller lists, more of them, each submitted at its own kick.
 constexpr uint32_t kEagerKickDraws = 100;
 static_assert(kKickListsAFrame <= VideoState::kKickLists);
+// Port 164 (from fnxf_xiii, its note of 2026-11-05; banjo_deko3d_progressive_submit): the piece was 200 draws, at most
+// 3 a frame; fnxf_xiii's gameplay frame had ~195 (up to ~400), so a frame almost never split and the GPU started it
+// only at the present (submit -> GPU done 17-18 of its 19 ms; a late Swap or a render-thread spike then missed the
+// refresh). Now a quarter of the previous frame's draws (40 at least), up to kKickLists pieces: the GPU works on the
+// frame while the game and the render thread still make the rest.
+constexpr uint32_t kPiecesAFrame = 4;
+constexpr uint32_t kPieceMinDraws = 40;
+uint32_t PieceDraws(const VideoState &s) {
+  return std::max(kPieceMinDraws, s.last_frame_draws / kPiecesAFrame);
+}
 
 class RingCleaner {
 public:
@@ -1031,6 +1041,8 @@ void SubmitAndAdvance(VideoState &s, plume::RenderCommandSemaphore *wait,
     // banjo-nx (2026-10-20, input latency): the guest Swap this frame ends, for the probe's "input -> GPU done".
     g_slot_swap[cur] = g_presenting_swap;
     g_gpu_done_noted[cur] = g_presenting_swap == 0;
+    s.last_frame_draws = s.frame_draws;  // port 164 (banjo_deko3d_progressive_submit)
+    s.frame_draws = 0;
 #if defined(PLUME_DEKO3D)
     g_trim.frame_end[cur] = plume::Deko3DCopyFence(s.fences[cur].get());
     FirstGpuWorkLocked(cur);
@@ -1226,6 +1238,7 @@ bool Video::EnsureCommandListLocked() {
 
 void Video::NoteDrawLocked() {
   ++State().list_draws;
+  ++State().frame_draws;  // port 164
 }
 
 void Video::NotePresentingSwap(uint64_t swap) {
@@ -1285,9 +1298,10 @@ void Video::KickLocked() {
   }
   // The open list ends here when it holds enough draws; the frame goes on in a kick list of the slot.
   const bool eager = banjo::renut_gpu::EagerKicksOn();
+  const bool progressive = !eager && banjo::renut_gpu::ProgressiveSubmitOn();  // port 164
   if (!banjo::renut_gpu::KickSubmitOn() ||
-      s.list_draws < (eager ? detail::kEagerKickDraws : detail::kKickSubmitDraws) ||
-      s.kick_lists_used[cur] >= (eager ? VideoState::kKickLists : detail::kKickListsAFrame))
+      s.list_draws < (eager ? detail::kEagerKickDraws : progressive ? detail::PieceDraws(s) : detail::kKickSubmitDraws) ||
+      s.kick_lists_used[cur] >= (eager || progressive ? VideoState::kKickLists : detail::kKickListsAFrame))
     return;
   std::unique_ptr<plume::RenderCommandList> &next = s.kick_lists[cur][s.kick_lists_used[cur]];
   if (!next) {
@@ -1427,6 +1441,22 @@ std::unique_ptr<plume::RenderTexture> Video::TakePooledLocked(const plume::Rende
   }
   s.texture_pool_misses.fetch_add(1, std::memory_order_relaxed);
   return nullptr;
+}
+
+size_t Video::DropTexturePoolLocked() {
+  // renut-ultimate (2026-11-17, port 148): the pool holds up to 96 MB of images that Retire would have destroyed; with
+  // the heap or the GPU budget short they go before any cold texture does. The images of retired_pool, still in a frame
+  // in flight, join the pool at their DrainSlot and go at the next check.
+  auto &s = State();
+  const size_t n = s.texture_pool.size();
+  if (!n)
+    return 0;
+  s.texture_pool.clear();
+  s.texture_pool_bytes = 0;
+  s.texture_pool_dropped.fetch_add(n, std::memory_order_relaxed);
+  s.texture_pool_kept.store(0, std::memory_order_relaxed);
+  s.texture_pool_kept_bytes.store(0, std::memory_order_relaxed);
+  return n;
 }
 
 std::string Video::TexturePoolReportLocked() {

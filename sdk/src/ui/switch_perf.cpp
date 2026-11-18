@@ -1332,10 +1332,16 @@ Result __wrap_nvFenceWait(NvFence* f, s32 timeout_us) {
   return rc;
 }
 
+// Port 167 (from fnxf_xiii): plume_deko3d_commands.cpp, the channel's report of a failed kickoff (weak: a build
+// without plume's deko3d back end has none).
+extern "C" __attribute__((weak)) void RexSwitchGpuKickoffFailed(NvGpuChannel* channel, uint32_t rc);
+
 Result __wrap_nvGpuChannelKickoff(NvGpuChannel* c) {
   const u64 from = armGetSystemTick();
   const Result rc = __real_nvGpuChannelKickoff(c);
   Note(kKickoff, from);
+  if (R_FAILED(rc) && RexSwitchGpuKickoffFailed)
+    RexSwitchGpuKickoffFailed(c, rc);
   return rc;
 }
 
@@ -1519,7 +1525,7 @@ Result __wrap_nwindowQueueBuffer(NWindow* nw, s32 slot, const NvMultiFence* fenc
   if (request != 0 && nw != nullptr && nw->swap_interval != request) {
     nwindowSetSwapInterval(nw, request);
   }
-  // Port 148 (banjo_async_present): handed to the helper when it runs.
+  // Port 145 (banjo_async_present): handed to the helper when it runs.
   if (AsyncPresentOn() && AsyncPresentQueue(nw, slot, fence))
     return 0;
   const Result rc = __real_nwindowQueueBuffer(nw, slot, fence);

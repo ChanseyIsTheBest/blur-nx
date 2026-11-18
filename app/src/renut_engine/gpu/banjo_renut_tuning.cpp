@@ -262,6 +262,16 @@ REXCVAR_DEFINE_INT32(banjo_renut_portrait_msaa_samples, 0, "Banjo/Enhancements",
                      "before the HUD, the portrait is part of it). Only lowers a count. disable_msaa covers only the "
                      "scene target")
     .range(0, 2);
+// Port 163 (from fnxf_xiii, its notes of 2026-10-21 to 11-17; fnxf_xiii's default, flags 77247): see Deko3DUamFlags.
+// Off by default: the shaders' code changes (a graphics-breaking key is off in the base; fnxf_xiii's own version once
+// overwrote a pixel shader's colour output, fixed here in all four moving passes), and another DKSH cache file
+// (deko3d_shaders.bin is the 1471 flags' only).
+REXCVAR_DEFINE_BOOL(banjo_deko3d_uam_pressure, false, "Banjo/Enhancements",
+                    "deko3d: uam's register pressure passes (values computed at their first use, also across blocks; a "
+                    "shader still above 56 registers compiled again with rematerialisation and the hoist). fnxf_xiii: "
+                    "about 9 registers fewer on pixel shaders above 56, the 34 above 64 all at 64 or fewer. Another "
+                    "shader cache. false: as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(banjo_deko3d_uam_wide_rows, true, "Banjo/Enhancements",
                     "deko3d renderer (2026-10-20, GPU): uam reads each bone row of tools/deko3d_glsl_opt.py's aw4 view "
                     "(a uvec4 of storage buffer 15) with one 128-bit load instead of four 32-bit ones (banjo flag 1024): "
@@ -333,6 +343,14 @@ REXCVAR_DEFINE_INT32(banjo_renut_diag_smaa_compare_s, 0, "Banjo/Diagnostics",
                      "banjo_renut_smaa comparison pictures (2026-10-21): every N seconds the same frame's 3D image "
                      "before and after SMAA (the HUD not drawn yet) as capturas/smaa_NNN_off.tga and _on.tga next to "
                      "the NRO, at full size (0 = off; render/smaa.cpp)");
+// Port 164 (from fnxf_xiii, its note of 2026-11-05): backend/video.cpp detail::PieceDraws.
+REXCVAR_DEFINE_BOOL(banjo_deko3d_progressive_submit, true, "Banjo/Enhancements",
+                    "deko3d: a frame's command list ends at a kick once it holds a quarter of the previous frame's draws "
+                    "(40 at least, up to 6 pieces a frame), so the GPU works on the frame while the game and the render "
+                    "thread still make the rest (fnxf_xiii: a 195-draw frame never reached the fixed 200 and went to the "
+                    "GPU only at the present). banjo_deko3d_eager_kicks, when set, keeps its fixed 100. false: 200 draws, "
+                    "3 pieces, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(banjo_deko3d_eager_kicks, false, "Banjo/Enhancements",
                     "Input latency A/B (2026-10-20): the frame goes to the GPU in more, earlier parts: a command list ends at a game kick once it holds 100 draws (not 200, at most 6 a frame, not 3) and goes to the GPU at that kick (its upload memory cleaned first), not at the next one. At the frame cap the GPU then works while the render thread is still replaying the frame instead of mostly after the present: the frame is done sooner after its controller read (the [latency] line's \"input -> GPU done\"). The same commands in the same order (configs/banjo_deko3d_eager_kicks_ab.toml; in-run A/B target 18)");
 REXCVAR_DEFINE_BOOL(banjo_deko3d_skin_once, false, "Banjo/Enhancements",
@@ -1774,6 +1792,10 @@ bool SkinOnceOn() { return REXCVAR_GET(banjo_deko3d_skin_once); }
 bool EagerKicksOn() {
   return REXCVAR_GET(banjo_deko3d_eager_kicks) && g_ab_off.load(std::memory_order_relaxed) != 18;
 }
+bool ProgressiveSubmitOn() {  // port 164
+  static const bool on = REXCVAR_GET(banjo_deko3d_progressive_submit);
+  return on;
+}
 bool SmaaOn() {
   return REXCVAR_GET(banjo_renut_smaa) && g_ab_off.load(std::memory_order_relaxed) != 19;
 }
@@ -1834,6 +1856,10 @@ unsigned Deko3DUamFlags() {
     flags &= ~32u;
   if (!REXCVAR_GET(banjo_deko3d_uam_uniform_branches))
     flags &= ~256u;
+  // Port 163 (from fnxf_xiii): the register pressure passes (2048 the sink, 8192 its neutral moves, 65536 the global
+  // sink; a shader still above 56 registers compiled again with the costlier ones: DekoCompiler::TryRescue).
+  if (REXCVAR_GET(banjo_deko3d_uam_pressure))
+    flags |= 2048u | 8192u | 65536u;
   return flags;
 }
 // banjo-nx (2026-10-27): the background threads' core: the system core when the process has it
@@ -2479,6 +2505,22 @@ void OnBackgroundThreadStart(const char *what) {
 
 void OnPrebuildWorkerStart() {
   OnBackgroundThreadStart("pipeline prebuild worker");
+}
+
+// Port 171 (from fnxf_xiii, its note of 2026-11-05): render/textures.cpp's untile helpers, at the render thread's
+// priority on cores 0 and 2 (fnxf_xiii tried the main thread's 0x3B on core 0: no gain, and a helper that lost core 0
+// to main held the run's end).
+void OnCopyHelperStart(uint32_t index) {
+#if REX_PLATFORM_SWITCH
+  const int core = index == 0 ? 0 : 2;
+  const int priority = int(kRenderThreadPriority);
+  const bool priority_ok = RexSwitchSetCurrentThreadPriorityOk(priority);
+  const bool core_ok = RexSwitchPinCurrentThreadToCore(core);
+  REXLOG_INFO("[renut] untile helper {} at priority 0x{:X}{}, core {}{}", index, priority,
+              priority_ok ? "" : " (NOT accepted)", core, core_ok ? "" : " (NOT accepted)");
+#else
+  (void)index;
+#endif
 }
 
 uint32_t PrebuildReleaseSeconds() {

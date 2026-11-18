@@ -56,6 +56,11 @@ inline void NoteFileRead(uint64_t bytes) {
 // A monotonic clock in nanoseconds (the times below are on it).
 uint64_t NowNs();
 
+// Port 167 (from fnxf_xiii, its notes of 2026-10-22 and 10-25): the waiting guest thread's LR (the return address of
+// the wait's caller) and the four return addresses above it on its guest stack's back chain, bounded by its KTHREAD
+// stack (xobject.cpp). The wait's caller is often a wrapper (WaitForSingleObject): the callers above it say who waits.
+void WaitGuestCallers(uint32_t out[5]);
+
 struct WaitView {
   uint32_t host_thread;  // the host thread's handle (Switch: libnx's; 0 elsewhere)
   uint32_t handle;       // the (first) object's handle
@@ -64,6 +69,7 @@ struct WaitView {
   uint32_t kind;         // WaitKind
   int64_t timeout_ms;    // < 0: none
   uint64_t since_ns;
+  uint32_t guest[5];     // port 167: the guest LR and four callers above it (0: unknown)
 };
 // The waits blocked right now (at most max), in slot order.
 size_t CopyWaits(WaitView* out, size_t max);

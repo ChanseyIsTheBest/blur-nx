@@ -268,7 +268,7 @@ def main():
     # the line it zeroes). After store_cards.py, which finds the dcbz by its memset to put the card in front.
     run(tool('vec_dcbz_zva.py'), '--gen', gen)
     # blur-nx (2026-11-16, the 15 ms batch, CG-26): the files that write the guest FPSCR keep -ftrapping-math when the
-    # rest gets -fno-trapping-math (app/CMakeLists.txt, BLUR_NO_TRAPPING_MATH); last, on the final text.
+    # rest gets -fno-trapping-math (a port's CMake option: Blur's BLUR_NO_TRAPPING_MATH); last, on the final text.
     run(tool('fp_env_files.py'), '--gen', gen)
     if scratch:
         print(f'post_codegen: optimised codegen steps done on {gen}')

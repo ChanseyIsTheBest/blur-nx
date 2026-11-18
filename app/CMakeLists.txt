@@ -146,6 +146,17 @@ if(BLUR_CARD_VIEWS_ONLY)
     add_compile_definitions(REX_CARD_VIEWS_ONLY)
 endif()
 include(generated/rexglue.cmake)
+# Port 158 (from fnxf_xiii, its note of 2026-10-26): the function registration (generated/renut_register.cpp, one
+# function of about 44,000 SetFunction calls, run once at start) without optimisation in the Switch build. GCC's
+# optimisation of it was the build's critical path: 1,171 s of a 1,195 s full Switch build (Katamari, 2026-11-18;
+# fnxf_xiii: 81 minutes at -O2). Appended to the generated sources' options, so it comes after their -O level and
+# wins. Without the precompiled header: GCC does not use a PCH made with optimisation in an -O0 file ("__OPTIMIZE__ not
+# defined"); renut_init.h includes renut_pch.h itself. LTO keeps each function's own level. OFF: as before.
+option(BANJO_REGISTER_O0 "Switch: the function registration file at -O0, without the PCH (build time)" ON)
+if(BANJO_REGISTER_O0 AND REXGLUE_PLATFORM_SWITCH AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/generated/renut_register.cpp")
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/generated/renut_register.cpp" APPEND PROPERTY COMPILE_OPTIONS -O0)
+    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/generated/renut_register.cpp" PROPERTY SKIP_PRECOMPILE_HEADERS ON)
+endif()
 
 # banjo-nx (from sa2-nx): the optimised codegen. The build re-runs the generator by itself whenever an input in
 # codegen.d changes (renut_config.toml with the codegen keys, the xex, the generator binary). That rewrites

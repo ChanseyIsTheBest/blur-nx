@@ -56,6 +56,7 @@ extern "C" const bool g_banjo_store_cards = false;
 #include <algorithm>
 #include <cctype>  // blur-nx (2026-11-16): banjo_hot_guard_keep
 #include <atomic>
+#include <cctype>  // blur-nx (2026-11-16): banjo_hot_guard_keep
 #include <chrono>
 #include <cmath>    // port 72: the VMX fuzz's absolute error
 #include <cstdio>

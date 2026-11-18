@@ -144,6 +144,8 @@ struct VideoState {
   plume::RenderCommandList *pending_list = nullptr;
   uint64_t pending_ticket = 0;
   uint32_t list_draws = 0;
+  // Port 164 (banjo_deko3d_progressive_submit): the frame's draws so far and the previous frame's (the piece size).
+  uint32_t frame_draws = 0, last_frame_draws = 0;
   // Bumped each time a command list begins; bound state cached against an
   // older value has to be set again.
   uint64_t list_generation = 0;
@@ -389,6 +391,9 @@ public:
   static void RetirePooledLocked(std::unique_ptr<plume::RenderTexture> texture, const plume::RenderTextureDesc &desc);
   static std::unique_ptr<plume::RenderTexture> TakePooledLocked(const plume::RenderTextureDesc &desc);
   static std::string TexturePoolReportLocked();
+  // renut-ultimate (2026-11-17, port 148): the pool's images destroyed now (memory pressure: textures.cpp's
+  // EvictColdTexturesLocked). They are out of every frame in flight already (DrainSlot put them there). The number gone.
+  static size_t DropTexturePoolLocked();
   static uint32_t AllocateTextureSlotLocked();
   static void SetTextureSlotLocked(uint32_t slot, plume::RenderTexture *texture,
                                    plume::RenderTextureView *view);

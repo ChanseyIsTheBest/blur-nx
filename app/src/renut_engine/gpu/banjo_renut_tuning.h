@@ -112,6 +112,8 @@ void StartLongLivedThread(void (*fn)(), size_t stack_bytes);
 
 // On the render thread, as it starts (backend/render_thread.cpp).
 void OnRenderThreadStart();
+// On an untile helper of render/textures.cpp, as it starts (port 171: core 0 or 2, the render thread's priority).
+void OnCopyHelperStart(uint32_t index);
 // On a pipeline prebuild worker, as it starts (render/pipeline.cpp).
 void OnPrebuildWorkerStart();
 // On any other background worker of the renderer, as it starts (the content verifier, render/draw.cpp): the
@@ -314,6 +316,7 @@ bool SkinOnceOn();
 // banjo_deko3d_eager_kicks (2026-10-20, input latency A/B): kick lists of 100 draws, up to 6 a frame, each submitted at
 // its own kick (backend/video.cpp KickLocked); false in the off half of the in-run A/B (target 18).
 bool EagerKicksOn();
+bool ProgressiveSubmitOn();  // port 164 (banjo_deko3d_progressive_submit)
 // banjo_renut_smaa (2026-10-21): SMAA on the final composite (render/smaa.cpp); false in the off half of the in-run A/B
 // (target 19). Its preset (1 medium, 2 high), luma threshold and the composite's pixel shaders (hex, comma separated).
 bool SmaaOn();

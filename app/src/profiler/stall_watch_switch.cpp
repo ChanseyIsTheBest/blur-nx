@@ -13,6 +13,9 @@
 #include <cstring>
 #include <string>
 
+// Port 167: sdk/src/system/xthread.cpp, every guest thread's guest call chain for the on-demand dump.
+extern "C" size_t RexGuestCallChains(char* out, size_t cap);
+
 // See os/switch_stall_watch.h. Adapted from the watchdog of battd_nx (source/diag.c): threads are only
 // paused to read their registers and copy the top of their stack, and resumed before anything is formatted,
 // allocated or written, so the watchdog never waits on a lock a paused thread holds; the stack is read from
@@ -233,6 +236,12 @@ namespace
             const double forS = nowNs > w.since_ns ? double(nowNs - w.since_ns) / 1e9 : 0.0;
             snprintf(line, sizeof(line), "[stall]     %s waits on %s for %.1f s, %s", who, what, forS, timeout);
             out += line;
+            if (w.guest[0])  // port 167 (from fnxf_xiii): who in the game waits
+            {
+                snprintf(line, sizeof(line), "; guest LR 0x%08x, callers 0x%08x 0x%08x 0x%08x 0x%08x", w.guest[0],
+                    w.guest[1], w.guest[2], w.guest[3], w.guest[4]);
+                out += line;
+            }
 
             const wr::SignalView s = wr::FindSignal(w.handle);
             if (!s.seen)
@@ -414,6 +423,16 @@ namespace
                     else
                         snprintf(header, sizeof(header), "on-demand dump (stall_dump): no frame yet");
                     Dump(header, sinceReadS);
+                    // Port 167 (from fnxf_xiii): every guest thread's guest call chain too (sdk xthread.cpp; the file
+                    // trigger only, no controller combination).
+                    static char chains[16384];
+                    const size_t len = RexGuestCallChains(chains, sizeof(chains));
+                    if (len)
+                    {
+                        const char* head = "[stall] guest call chains (r1, then each frame's saved lr):\n";
+                        os::switch_cpu_profiler::WriteLog(head, strlen(head));
+                        os::switch_cpu_profiler::WriteLog(chains, len);
+                    }
                 }
             }
 

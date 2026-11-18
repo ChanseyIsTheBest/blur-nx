@@ -273,7 +273,9 @@ const std::vector<ScriptedPress>& InputScript() {
     const std::string text = REXCVAR_GET(input_script);
     size_t at = 0;
     while (at < text.size()) {
-      size_t end = text.find(',', at);
+      // Port 176 (from rehatched-nx, its commit 19bf40fc): ';' and spaces separate presses too (the cvar layer keeps a
+      // command-line string only up to its first comma, so a comma list scripted one press there).
+      size_t end = text.find_first_of(",; ", at);
       if (end == std::string::npos) end = text.size();
       const std::string item = text.substr(at, end - at);
       at = end + 1;

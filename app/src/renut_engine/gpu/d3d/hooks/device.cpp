@@ -64,6 +64,22 @@ extern "C" uint32_t RexSetGuestThreadCoreLayout(int main_core, uint32_t others_m
 void renutFrameLimit();  // katamari_keys.cpp: the player's frame_cap
 extern std::atomic<uint64_t> g_banjo_game_frames;  // blur_keys.cpp: game frames swapped (D3DDevice_Swap_hook)
 
+// Port 169 (from fnxf_xiii): see D3DDevice_Swap_hook. Accuracy, so off by default.
+REXCVAR_DEFINE_BOOL(banjo_renut_scaler_crop, false, "Banjo/Enhancements",
+                    "The scaler's source rect (Swap's D3DVIDEO_SCALER_PARAMETERS, or the device's own copy) picks the "
+                    "part of the front buffer scanned out: a game that renders below 720p into a corner of it was shown "
+                    "whole. The device's copy is at its XDK's offset (0x3584 here, the base's SetScalerParameters). "
+                    "false: the whole front buffer, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+// Port 161 (from fnxf_xiii, its note of 2026-11-05): see D3DDevice_Swap_hook's present closure.
+REXCVAR_DEFINE_BOOL(banjo_renut_bookkeeping_after_present, true, "Banjo/Enhancements",
+                    "The render thread's frame bookkeeping (texture and stream-cache frames, the resolution latch, the "
+                    "memory report, the idle pipelines and spare buffers) after the frame's present, while the GPU "
+                    "draws it (fnxf_xiii: 15-37 ms spikes in it held the submit back and the frame missed its refresh). "
+                    "false: before the present, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 // banjo-nx (2026-10-20, from sa2-nx's sa2_renut_core_layout): see D3DDevice_Swap_hook.
 REXCVAR_DEFINE_BOOL(banjo_renut_core_layout, false, "Banjo/Enhancements",
                     "Renut's renderer on the Switch: at the first Swap the guest main thread (N&B's drawing thread, the "
@@ -898,7 +914,7 @@ void D3DDevice_RunCommandBuffer_hook(u32 device_va, u32 command_buffer,
 // The frame goes to the render thread, which presents it; the game thread
 // goes on with the next one, waiting only when it is more than
 // render_thread::kMaxFramesAhead ahead.
-void D3DDevice_Swap_hook(u32 device_va, u32 front_buffer, u32 /*parameters*/) {
+void D3DDevice_Swap_hook(u32 device_va, u32 front_buffer, u32 parameters) {
 #if defined(_WIN32)
   // blur-nx (2026-11-10): banjo_renderdoc_game_s counted at Renut's Swap (Blur has no appMainDraw hook): a PC RenderDoc
   // capture of three game frames by time, with RenderDoc's Vulkan layer loaded (VK_LAYER_PATH / VK_INSTANCE_LAYERS).
@@ -951,23 +967,59 @@ void D3DDevice_Swap_hook(u32 device_va, u32 front_buffer, u32 /*parameters*/) {
     Video::NoteGameGamma(device + 0x3B70, g_gamma_piecewise);  // katamari-nx: 0x3A9C->0x3A84; halo3-nx: the form (blur-nx: 0x3A84->0x3B70)
   }
 
-  render_thread::QueueFrame([front_buffer, swap_ordinal] {
+  // Port 161 (from fnxf_xiii, its note of 2026-11-05; banjo_renut_bookkeeping_after_present): the frame's bookkeeping
+  // (texture and stream-cache frames, the resolution latch, the memory report, the idle pipelines and spare buffers)
+  // after the present: the frame goes to the GPU and the display first, and the bookkeeping runs while the GPU draws
+  // it (fnxf_xiii's vsync timing: 15-37 ms spikes in it held the submit back, and the frame missed its refresh). It
+  // still comes before the next frame's commands (one render thread).
+  static const bool after = REXCVAR_GET(banjo_renut_bookkeeping_after_present);
+  // Port 169 (banjo_renut_scaler_crop): the scaler's source rect, given (D3DVIDEO_SCALER_PARAMETERS: a D3DRECT first) or
+  // the device's own (SetScalerParameters' copy at +0x3584).
+  static const bool crop = REXCVAR_GET(banjo_renut_scaler_crop);
+  std::array<i32, 4> scaler{};
+  if (crop) {
+    const be_u32 *p = parameters ? GuestPtr<const be_u32>(parameters)
+                                 : (device_va ? GuestPtr<const be_u32>(device_va + 0x3584) : nullptr);
+    if (p)
+      for (int i = 0; i < 4; ++i)
+        scaler[i] = i32(u32(p[i]));
+  }
+  render_thread::QueueFrame([front_buffer, swap_ordinal, scaler] {
     PresentImage image;
     {
       std::lock_guard lock(State().mutex);
-      image = FrontBufferImageLocked(front_buffer);
+      image = crop ? FrontBufferImageLocked(front_buffer, scaler.data()) : FrontBufferImageLocked(front_buffer);
       if (image.texture)
         State().last_front_buffer = front_buffer;
-      AdvanceTextureFrameLocked();
-      AdvanceStreamCacheFrameLocked();
-      LatchResolutionScaleLocked();
+      if (!after) {
+        AdvanceTextureFrameLocked();
+        AdvanceStreamCacheFrameLocked();
+        LatchResolutionScaleLocked();
+      }
     }
-    MaybeReportMemory();
-    ReleaseIdlePrebuiltPipelines();  // banjo-nx (2026-10-28, the heap)
-    ReleaseSpareBuffersWhenHeapShort();
+    if (!after) {
+      MaybeReportMemory();
+      ReleaseIdlePrebuiltPipelines();  // banjo-nx (2026-10-28, the heap)
+      ReleaseSpareBuffersWhenHeapShort();
+    }
     // The front buffer is the texture the game resolved the frame into.
     Video::NotePresentingSwap(swap_ordinal);  // banjo-nx (2026-10-20): the probe's "input -> GPU done"
     Video::Present(image.texture ? &image : nullptr);
+    if (after) {
+      rex::latency::NotePresented(swap_ordinal);  // banjo-nx (2026-10-19, input latency)
+      banjo::display_sync::NotePresented(swap_ordinal);  // banjo-nx (2026-10-19, latency batch 3)
+      {
+        std::lock_guard lock(State().mutex);
+        ::renut::gpu::SyncPipelineListLocked();  // banjo-nx (2026-10-20): the list's new records to the card
+        AdvanceTextureFrameLocked();
+        AdvanceStreamCacheFrameLocked();
+        LatchResolutionScaleLocked();
+      }
+      MaybeReportMemory();
+      ReleaseIdlePrebuiltPipelines();  // banjo-nx (2026-10-28, the heap)
+      ReleaseSpareBuffersWhenHeapShort();
+      return;
+    }
     {
       std::lock_guard lock(State().mutex);
       ::renut::gpu::SyncPipelineListLocked();  // banjo-nx (2026-10-20): the list's new records to the card
@@ -1227,6 +1279,19 @@ void D3DDevice_SetGammaRamp_hook(u32 device_va, u32 /*flags*/, u32 ramp_va) {
   u16 ramp[768];
   ReadRamp(ramp_va, ramp);
   SetGammaRamp(d, ramp);
+}
+
+// Port 173 (from rehatched-nx, its commit 9d93d896): XDK 2.0.9407 (and 11164, docs/xdk-notes.md) keeps the Flags
+// argument, (D3DDevice*, DWORD Flags, ramp): the two-argument hooks would read Flags as the ramp's address. Not bound
+// here (Katamari's build dropped Flags); a port at such an XDK binds these at the two functions' addresses in place of
+// the two-argument hooks (BANJO_RENUT_HOOK(sub_<address>, D3DDevice_SetGammaRamp_flags_hook), and the PWL one).
+void D3DDevice_SetGammaRamp_hook(u32 device_va, u32 ramp_va);
+void D3DDevice_SetPWLGamma_hook(u32 device_va, u32 pwl_va);
+[[maybe_unused]] void D3DDevice_SetGammaRamp_flags_hook(u32 device_va, u32 /*flags*/, u32 ramp_va) {
+  D3DDevice_SetGammaRamp_hook(device_va, ramp_va);
+}
+[[maybe_unused]] void D3DDevice_SetPWLGamma_flags_hook(u32 device_va, u32 /*flags*/, u32 pwl_va) {
+  D3DDevice_SetPWLGamma_hook(device_va, pwl_va);
 }
 
 // void D3DDevice_SetPWLGamma(D3DDevice*, const D3DPWLGAMMA*) [0x8261FAD0]

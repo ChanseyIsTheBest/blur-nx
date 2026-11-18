@@ -478,7 +478,7 @@ bool build_frsqrte(BuilderContext& ctx) {
   }
   ExactFpCheck check(ctx, "frsqrte", 1, false);
   ctx.emit_set_flush_mode(false);
-  // Port 147 (vmx_360_estimates): xenia-edge's hardware table (rex/ppc/vmx_est360.h): frsqrte(1.0) is 0.970703125.
+  // Port 144 (vmx_360_estimates): xenia-edge's hardware table (rex/ppc/vmx_est360.h): frsqrte(1.0) is 0.970703125.
   if (ctx.config().vmx360Estimates) {
     ctx.println("\t{}.f64 = rex::ppc::frsqrte360({}.f64);", ctx.f(ctx.insn.operands[0]), ctx.f(ctx.insn.operands[1]));
     return true;

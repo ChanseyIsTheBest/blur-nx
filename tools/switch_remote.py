@@ -60,6 +60,20 @@ def sd_path(path=''):
     return full
 
 
+# blur-nx (2026-11-13, the user: "You can open the folder the crash report in"): Atmosphere's crash reports, read only,
+# for crash-ls and crash-get: one folder, listed, and its files downloaded by name. Nothing here writes, renames or
+# deletes, and no other part of /atmosphere is reached.
+CRASH_ROOT = '/atmosphere/crash_reports'
+
+
+def crash_path(name=None):
+    if name is None:
+        return CRASH_ROOT
+    if ':' in name or '/' in name or chr(92) in name or name in ('', '.', '..'):
+        sys.exit('refused: %s is not a file name in %s' % (name, CRASH_ROOT))
+    return CRASH_ROOT + '/' + name
+
+
 # sasrt-nx (2026-11-09, the user: "grab screenshots I took from the emunand album, do not delete any files"): the Album
 # read only, for album-ls and album-get, which only list and download. The paths: /Nintendo/Album... and
 # /emuMMC/<folder>/Nintendo/Album..., and for finding that folder, listings of /emuMMC, /emuMMC/<folder> and

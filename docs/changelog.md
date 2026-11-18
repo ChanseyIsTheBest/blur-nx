@@ -182,7 +182,7 @@ Ports 1-43 are the first round: the universal fixes of the other ports' renderer
   bit-exact for scalar denormals; Blur's console +4.6 % fps), and its census.
 - Port 124 (from blur-nx) counts every promoted call target as address-taken in leaf_dead_stores.
 - Port 125 (from blur-nx) turns the user clip slot off for pipelines that write no clip distance (Renut's host
-  passes on deko3d; Blur's black band).
+  passes on deko3d; not Blur's black band, which is its race intro: port 154).
 - Port 126 adds tools/switch_remote.py (sys-botbase and sys-ftpd-light, the port's own SD folder only, no delete)
   and the porting guide's appendices on the console and RenderDoc.
 - Port 127 (from blur-nx) keeps the console's EDRAM tricks working when `msaa_level` lowers a target's samples
@@ -215,3 +215,59 @@ Ports 1-43 are the first round: the universal fixes of the other ports' renderer
 - Port 141 (from blur-nx) makes the guard take a NaN that differs only in its sign as the same.
 - Port 142 removes `kernel_timestamp_timer_on_import` (port 139's M-38) at the user's word: the timestamp
   timer runs from start-up again in every game.
+- Port 143 (from tw2de_nx) drops Xenia's 100 ms wait on saves and dialogs (with the event reset it needs) and
+  throttles XMP polling; whole 64-bit arguments, the disc swap's event and the scatter read are off.
+- Port 144 (from tw2de_nx) yields at the Xenon's spin hints and unpacks NORMSHORT2 with NEON; its exact FPU and
+  VMX forms, the 360's estimate tables, exact_fp and the missing instructions are off by default.
+- Port 145 (from tw2de_nx) redeems quiet vertex streams, keeps unused render targets, uploads only the written
+  rows of dynamic textures, uses the GPU's 16-bit formats and presents from a helper thread.
+- Port 146 (from tw2de_nx) releases mutants without their mutex when nobody waits and reads files in 4 MB
+  pieces, host buffers directly.
+- Port 147 (from tw2de_nx) adds the PowerPC instruction test NRO (Xenia's hardware-recorded tests) and the
+  console's time zone (off).
+- Port 148 (from blur-nx) takes Renut's recorded binds, its per-draw lookups and its record lock off the
+  frame jobs' path, scans only the changed chunks for set words and adds the Renut audit's CPU batch
+  (Blur's console: +3.5, +0.5 and +0.4 fps).
+- Port 149 (from blur-nx) never leaves a sample-grid resolve in the view's image (the colour hand-over).
+- Port 150 (from blur-nx) caches each indirect call site's target, loads doubles in the vector unit, drops the
+  barriers of counted loops and gives the guest compare-and-swap and fences the PowerPC's orderings
+  (acquire in a game with isync); the ABI-trust copies are off.
+- Port 151 (from blur-nx) gives small C++ allocations per-thread free lists on the Switch (32 MB arena).
+- Port 152 (from blur-nx) skips the APC lock on an empty queue and adds the startup-notification option,
+  Sphaira's forwarder ids, the guard's keep list and the audio pump's frames (off).
+- Port 153 (from blur-nx) lists the blocked guest waits in the stall watchdog's dumps and adds the profiler's
+  interval, call-count switch and audout counters, and deko3d's crash breadcrumbs.
+- Port 154 (from blur-nx) adds its census, signature, crash-report and RenderDoc tools, and corrects ports
+  125 and 145.
+- Port 155 (from blur-nx) scales a target's colour by its exponent bias as well as its alpha, and keeps a
+  sample-grid resolve from being skipped as unchanged (Blur's menu backdrop). Take it with a shader package
+  made again (tools/switch_shaders.ps1).
+- Port 156 (from blur-nx) counts the game frames at Swap, so the captures' video works in a game that
+  swaps without Present.
+- Port 157 (from blur-nx) sends a GPU submission that nvservices refuses again in halves instead of
+  aborting (Blur's map-load crashes, a Timeout on a full GPFIFO ring).
+- Port 158 (from fnxf_xiii) builds the function registration file at -O0 in the Switch build (1,171 s of a full build down to 37 s).
+- Port 159 (from fnxf_xiii) adds kernel and SDK fixes from fnxf_xiii, off by default (timer due times, profile settings, HOME close,
+  PC keystrokes), and cleans SaltySD's page.
+- Port 160 (from fnxf_xiii) makes the store cards evaluate their address once (less code, fewer loads).
+- Port 161 (from fnxf_xiii) holds back barriers between buffer copies, runs the frame bookkeeping after the present, writes deko3d's
+  log on its own thread and fixes the surface memo (the EDRAM base).
+- Port 162 (from fnxf_xiii) speeds up uam's compiles and frees what each compile leaked.
+- Port 163 (from fnxf_xiii) adds uam's register pressure passes, off by default (banjo_deko3d_uam_pressure).
+- Port 164 (from fnxf_xiii) sends a frame to the GPU in pieces sized by the frame before, and takes scratch memory out of two host shaders.
+- Port 165 (from fnxf_xiii) adds banjo_deko3d_swap_interval (1-4 refreshes an image).
+- Port 166 (from fnxf_xiii) adds the MSAA sample mask and absolute wait timeouts, off by default.
+- Port 167 (from fnxf_xiii) adds guest callers to the stall dumps, a GPU fault report and better gap tools (find_gaps.py,
+  runtime_gap_resolver.py, code_pointer_scan.py).
+- Port 168 (from fnxf_xiii) keeps a replaced texture a while for its content's return (no upload again).
+- Port 169 (from fnxf_xiii) adds the scaler's source crop at present, off by default.
+- Port 170 (from fnxf_xiii) lets a D3D fence wait for pending memexport results, off by default.
+- Port 171 (from fnxf_xiii) untiles large texture levels on two helper threads with the render thread.
+- Port 172 (from fnxf_xiii) lets the guest's vblanks follow the display's refreshes, off by default.
+- Port 173 (from rehatched-nx) adds hook bodies for later XDKs (GetDeclaration, Bind and gamma with Flags), not bound.
+- Port 174 (from rehatched-nx) can keep every bound surface's header as bound (banjo_renut_all_surface_headers, off).
+- Port 175 (from rehatched-nx) translates a shader export to a register with no name as a plain register write.
+- Port 176 (from rehatched-nx) lets input_script split at ';' and spaces, and adds the XDK 2.0.9407 notes.
+- Port 177 (from blur-nx) adds Blur's Renut host batch (render thread ~16 % faster per draw on its console),
+  1 % lows in the 10 s report, the image heap's spare chunk, the UI-upscale band fix and the game menu.
+- Port 178 (from blur-nx) wires the game menu into the base's app (A+B+X+Y+L+R opens it, + closes it).

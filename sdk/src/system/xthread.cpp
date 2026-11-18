@@ -1654,3 +1654,44 @@ extern "C" uint32_t RexSetGuestThreadCoreLayout(int main_core, uint32_t others_m
   return 0;
 #endif
 }
+
+// Port 167 (from fnxf_xiii, its note of 2026-11-11): each guest thread's guest call chain, for the on-demand stall dump
+// (app/src/profiler/stall_watch_switch.cpp, the file stall_dump: a game stuck while it still draws). Its r1 (current
+// while it waits in a kernel call: the import reads its arguments from the context), then the back chain ([sp]) and
+// each frame's saved lr ([back - 8]), only inside the thread's own guest stack (its KTHREAD's base and limit: fnxf_xiii's
+// first walk read past a stack into an unmapped page and crashed). Lines into out (NUL-terminated); their length.
+extern "C" size_t RexGuestCallChains(char* out, size_t cap) {
+  if (!out || cap == 0)
+    return 0;
+  out[0] = 0;
+  auto* ks = rex::system::kernel_state();
+  if (!ks || !ks->object_table())
+    return 0;
+  auto* mem = ks->memory();
+  size_t n = 0;
+  for (const auto& t : ks->object_table()->GetObjectsByType<rex::system::XThread>()) {
+    if (!t->is_guest_thread() || !t->thread_state() || !t->thread_state()->context())
+      continue;
+    const uint32_t r1 = uint32_t(t->thread_state()->context()->r1.u64);
+    const auto* kt = t->guest_object() ? t->guest_object<rex::system::X_KTHREAD>() : nullptr;
+    const uint32_t base = kt ? uint32_t(kt->stack_base) : 0, limit = kt ? uint32_t(kt->stack_limit) : 0;
+    std::string chain;
+    uint32_t sp = r1;
+    for (int i = 0; i < 32 && limit && sp >= limit && sp + 4 <= base; ++i) {
+      const uint32_t back = __builtin_bswap32(*mem->TranslateVirtual<const uint32_t*>(sp));
+      if (back <= sp || back > base || back - 8 < limit)
+        break;
+      const uint32_t lr = __builtin_bswap32(*mem->TranslateVirtual<const uint32_t*>(back - 8));
+      chain += fmt::format(" {:08X}", lr);
+      sp = back;
+    }
+    const std::string line = fmt::format("[stall]   guest {:08X} \"{}\" r1 {:08X} (stack {:08X}-{:08X}):{}\n", t->handle(),
+                                         t->name(), r1, limit, base, chain);
+    if (n + line.size() + 1 > cap)
+      break;
+    std::memcpy(out + n, line.data(), line.size());
+    n += line.size();
+    out[n] = 0;
+  }
+  return n;
+}

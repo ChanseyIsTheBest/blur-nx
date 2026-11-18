@@ -8,7 +8,7 @@
 // requests up to 512 bytes from ten size classes carved out of one arena, each thread keeping its own free lists: no
 // lock on the way in or out except when a list is refilled or handed back (32 blocks at a time). Everything else, and
 // everything allocated before the arena exists, is the system allocator's: delete tells the two apart by the arena's
-// address range, which is exact. The arena (blur_small_alloc_mb, 0: off) is taken once, after setup
+// address range, which is exact. The arena (blur_small_alloc_mb: 32 MB in the base, 0: off) is taken once, after setup
 // (RenutApp::OnPostSetup: blur::small_alloc::Enable); when it is used up the system allocator answers again.
 //
 // Switch only: the NRO is one linked image, so every new and delete in it are these. The PC build's runtime is a DLL
@@ -28,7 +28,10 @@
 #include <mutex>
 #include <new>
 
-REXCVAR_DEFINE_INT32(blur_small_alloc_mb, 0, "Blur/Enhancements",
+// renut-ultimate (2026-11-17, port 151; the user: "I want small block allocator on"): 32 MB by default, Blur's size
+// (Blur's console: 30.56 fps against 29.88 without it). The arena comes out of the game's heap; a title short of heap
+// sets a smaller size or 0 in its toml.
+REXCVAR_DEFINE_INT32(blur_small_alloc_mb, 32, "Blur/Enhancements",
                      "#220 (Switch): an arena of this many MB for the host's small C++ allocations (up to 512 bytes), "
                      "free lists per thread instead of the system allocator's lock (0: off, the system allocator for all)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);

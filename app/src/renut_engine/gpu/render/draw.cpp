@@ -298,6 +298,18 @@ REXCVAR_DEFINE_BOOL(banjo_renut_whole_buffers_verify, false, "Banjo/Diagnostics"
                     "Tests (banjo_renut_whole_buffers): each whole-buffer draw's indices compared with the guest's, and "
                     "its vertices' rows with the range converted again; a difference is logged")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// Port 170 (from fnxf_xiii): see SettleExportsForFence. A fix, so off by default (fnxf_xiii: on).
+REXCVAR_DEFINE_BOOL(banjo_fence_waits_exports, false, "Banjo/Renut",
+                    "A D3D fence completes only once every pending memexport result is in guest memory (fnxf_xiii: the "
+                    "game freed memory at the fence and a late GPU copy overwrote what it wrote there). A GPU sync on "
+                    "every fence while exports are pending. false: as soon as the render thread has read the work, as "
+                    "before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// Port 166 (from fnxf_xiii): see SetSampleMaskLocked. Accuracy, so off by default here (fnxf_xiii: on).
+REXCVAR_DEFINE_BOOL(banjo_deko3d_sample_mask, false, "Banjo/Enhancements",
+                    "deko3d: the game's MSAA sample mask (PA_SC_AA_MASK) for each draw on a multisampled target (fnxf_xiii: "
+                    "per-sample depth restores drew every sample). false: every sample written, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(banjo_renut_fast_draw, true, "Banjo/Enhancements",
                     "Renut's renderer (2026-10-26, the record-time draw path's stage 1, docs/record-time-draw-path.md): "
                     "a draw starts from what the draw before left and redoes only what the recording's field bits and "
@@ -8936,6 +8948,27 @@ void WaitForExportsLocked(u32 slots) {
   }
 }
 
+}  // namespace
+// Port 170 (from fnxf_xiii, its note of 2026-11-16; banjo_fence_waits_exports): a D3D fence tells the game its GPU work
+// is done; the GPU's memexport results (fnxf_xiii: the game's copy kernel moving its physical heap's blocks) must be in
+// guest memory by then, or the game writes the freed memory and the late results land over it (fnxf_xiii's damaged
+// loading screens). On the render thread, before a fence completes (backend/render_thread.cpp QueueFenceCompletion):
+// every pending export brought to guest memory (submit and wait when they are this frame's). A GPU sync on every fence
+// while exports are pending, so off by default.
+void SettleExportsForFence() {
+  static const bool on = REXCVAR_GET(banjo_fence_waits_exports);
+  if (!on)
+    return;
+  std::lock_guard lock(State().mutex);
+  u32 slots = 0;
+  for (u32 slot = 0; slot < kFramesInFlight; ++slot)
+    if (!g_exports[slot].pending.empty())
+      slots |= 1u << slot;
+  if (slots)
+    WaitForExportsLocked(slots);
+}
+namespace {
+
 // banjo-nx (2026-10-26, GPU, banjo_renut_convert_reuse): the conversions made in this frame's slot, by everything
 // stream_convert_cs reads (the export slot, its offset, the vertices, both strides and the elements). The export
 // buffers change only with a new export, which raises g_export_generation; the slot's stream buffer only grows within
@@ -9908,7 +9941,8 @@ u32 FurSkinLocked(VideoState &s, plume::RenderCommandList *cmd, const ShaderReco
 struct TargetsReuse {
   uint64_t seq = 0, epoch = 0;
   u32 va[d3d::kMaxRenderTargets + 1] = {};       // the device's render target words and its depth word
-  u32 desc[d3d::kMaxRenderTargets + 1][3] = {};  // each one's Size, SurfaceInfo, Format (GetHostSurfaceLocked's)
+  // each one's Size, SurfaceInfo, Format and ColorInfo (GetHostSurfaceLocked's; port 161: ColorInfo, the EDRAM base)
+  u32 desc[d3d::kMaxRenderTargets + 1][4] = {};
   Targets targets;
 };
 TargetsReuse g_targets_reuse;
@@ -9921,15 +9955,17 @@ struct ViewportReuse {
 };
 ViewportReuse g_viewport_reuse;
 
-// The descriptor words GetHostSurfaceLocked reads for a surface word of the device (0 0 0 for none).
-void SurfaceDescWords(u32 va, u32 out[3]) {
-  out[0] = out[1] = out[2] = 0;
+// The descriptor words GetHostSurfaceLocked reads for a surface word of the device (0 0 0 0 for none). Port 161 (from
+// fnxf_xiii, 2026-11-11): ColorInfo too, as the surface memo: a target pointed at another EDRAM base is another target.
+void SurfaceDescWords(u32 va, u32 out[4]) {
+  out[0] = out[1] = out[2] = out[3] = 0;
   if (!va)
     return;
   if (const auto *desc = GuestPtr<const d3d::SurfaceDesc>(va + sizeof(d3d::Resource))) {
     out[0] = desc->Size;
     out[1] = desc->SurfaceInfo;
     out[2] = desc->Format;
+    out[3] = desc->ColorInfo;
   }
 }
 
@@ -10593,6 +10629,35 @@ bool FastExportReads(const GuestDevice &device, const DrawCall &call, const Shad
     }
   }
   return false;
+}
+
+// Port 166 (from fnxf_xiii, its notes of 2026-10-21, 10-22 and 11-06; banjo_deko3d_sample_mask): PA_SC_AA_MASK
+// (device 0x2A00), 4 bits per pixel of a 2x2 quad (sample i of pixel p is bit 4p + i): a sample is written when any
+// pixel's bit for it is set (the D3D masks repeat it for the four). Before, no draw's mask reached the GPU (every
+// sample written). deko3d's mask is a command, not pipeline state (plume Deko3DSetSampleMask, recorded when it
+// changes): the pipeline key and its lists stay as they are. Only on a multisampled target; host sample j takes guest
+// sample j's bit (the base only ever lowers a target's count).
+void SetSampleMaskLocked(plume::RenderCommandList *cmd, const GuestDevice &device, const Targets &t) {
+#if defined(PLUME_DEKO3D)
+  static const bool on = REXCVAR_GET(banjo_deko3d_sample_mask);
+  if (!on || !cmd)
+    return;
+  const HostSurface *first = t.color_count ? t.colors[0] : t.depth;
+  const u32 samples = first ? u32(first->samples) : 1u;
+  u32 mask = 0xFFFFu;
+  if (samples > 1) {
+    const u32 aa = device.U32(0x2A00) & 0xFFFFu;
+    const u32 all = (1u << samples) - 1u;
+    mask = (aa | aa >> 4 | aa >> 8 | aa >> 12) & all;
+    if (mask == all)
+      mask = 0xFFFFu;
+  }
+  plume::Deko3DSetSampleMask(cmd, mask);
+#else
+  (void)cmd;
+  (void)device;
+  (void)t;
+#endif
 }
 
 int FastDrawLocked(const u8 *device_state, const DrawCall &call, const ReplayConstants *replay) {
@@ -11585,6 +11650,9 @@ int FastDrawLocked(const u8 *device_state, const DrawCall &call, const ReplayCon
     }
   }
   ++s.list_draws;  // Video::NoteDrawLocked
+  if (vs->entry && vs->entry->textureFetchMask)
+    VertexTextureBarrierLocked();  // port 161 (banjo_deko3d_vertex_texture_barrier)
+  SetSampleMaskLocked(cmd, device, targets);  // port 166 (banjo_deko3d_sample_mask)
   if (geometry.indexed) {
     // banjo-nx (2026-10-27, render thread night, A/B 38): a whole index copy is a piece of a pool chunk: the chunk bound at
     // its start and the copy's place given as the first index, so the draws of every copy in one chunk keep one binding
@@ -12653,7 +12721,7 @@ bool DrawStateLocked(const u8 *device_state, const DrawCall &call, const ReplayC
       (!(chain.fields & kFieldTargets) || target_words_same()) && g_targets_reuse.epoch == SurfaceEpochLocked()) {
     targets_reused = true;
     for (u32 i = 0; targets_reused && i <= d3d::kMaxRenderTargets; ++i) {
-      u32 words[3];
+      u32 words[4];
       SurfaceDescWords(g_targets_reuse.va[i], words);
       targets_reused = std::memcmp(words, g_targets_reuse.desc[i], sizeof(words)) == 0;
     }
@@ -13712,6 +13780,9 @@ bool DrawStateLocked(const u8 *device_state, const DrawCall &call, const ReplayC
     UnleashedCensusDraw(device, call, texture_mask, declaration->layout.used_mask, prefetch_streams,
                         prefetch_stream_count, prefetch_indexed ? &prefetch_index : nullptr);
   Video::NoteDrawLocked();  // banjo-nx (2026-10-19, banjo_deko3d_kick_submit): the open list's draws
+  if (vs->entry && vs->entry->textureFetchMask)
+    VertexTextureBarrierLocked();  // port 161 (banjo_deko3d_vertex_texture_barrier)
+  SetSampleMaskLocked(cmd, device, targets);  // port 166 (banjo_deko3d_sample_mask)
   // sasrt-nx (2026-11-08, sasrt_gpu_exp_export_twice): a memexport draw drawn twice (the second writes the same bytes).
   const bool export_twice = g_ds_keys.export_twice;
   for (int pass = 0; pass < (export_count && export_twice ? 2 : 1); ++pass) {
@@ -16583,6 +16654,31 @@ bool ReadRenderTargetLocked(const u8 *device_state, u32 source, u32 &width, u32 
 bool FrontBufferWrittenLocked(u32 texture_va) {
   const HostTexture *texture = FindHostTextureLocked(texture_va);
   return texture && texture->texture && texture->gpu_written;
+}
+
+// Port 169 (from fnxf_xiii, banjo_renut_scaler_crop): the scaler's source rect, the part of the front buffer the video
+// hardware scans out and stretches to the screen. A game that renders below 720p into a corner of its front buffer
+// was shown whole (its frame in a corner of the window). Only a rect from the corner, inside the texture.
+PresentImage FrontBufferImageLocked(u32 texture_va, const i32 scaler[4]) {
+  PresentImage image = FrontBufferImageLocked(texture_va);
+  const HostTexture *texture = image.texture ? FindHostTextureLocked(texture_va) : nullptr;
+  if (!texture)
+    return image;
+  const i32 x1 = scaler[0], y1 = scaler[1], x2 = scaler[2], y2 = scaler[3];
+  if (x1 == 0 && y1 == 0 && x2 > 0 && y2 > 0 && u32(x2) <= texture->width && u32(y2) <= texture->height) {
+    if (u32(x2) != texture->width || u32(y2) != texture->height) {
+      image.source_width = std::max<uint32_t>(texture->scale.Size(u32(x2)), 1u);
+      image.source_height = std::max<uint32_t>(texture->scale.Size(u32(y2)), 1u);
+    }
+  } else if (x2 > x1 && (x1 || y1)) {
+    static bool logged = false;
+    if (!logged) {
+      logged = true;
+      RGPU_WARN("Swap: scaler source ({},{})-({},{}) not from the corner of the {}x{} front buffer: shown whole", x1, y1,
+                x2, y2, texture->width, texture->height);
+    }
+  }
+  return image;
 }
 
 PresentImage FrontBufferImageLocked(u32 texture_va) {

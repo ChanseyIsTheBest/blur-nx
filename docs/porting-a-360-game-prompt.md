@@ -130,6 +130,14 @@ The work, in order
    match the old loudness with audio_stereo_frame_gain (compare audio_dump_s dumps, folded). A game that ignores it
    needs patching per game (blur-nx's tools/stereo_mix.py), worth it only when audio is near the top of the CPU
    table. audio_switch_pump_pairs (off) trades +5.3 ms of latency for CPU: my choice.
+   Three keys are decided from this port's own log (blur-nx, 2026-11-18; port 177), in gameplay windows only (not
+   menus or loads), with no A/B: a 0 is enough. The base's defaults stay; set them in the port's own toml:
+   - `ultimate_renut_replay_inherit_same` (true): the line "[renut] replays with the inherited words as recorded
+     (ultimate_renut_replay_inherit_same): N of M". N is 0: false.
+   - `sasrt_gpu_skip_inert_draws` (true): the line "[sasrt gpu] GPU round ..., in the last 10 s:
+     sasrt_gpu_skip_inert_draws (on) N". N is 0 in every gameplay window: false.
+   - `banjo_renut_tags_check` (32): the line "[renut] recording from marks (banjo_renut_tags): ..., N whole checks,
+     M chunks changed without a mark". M is 0 over whole gameplay sessions: 256.
 6. Hot functions, by the base's optimising-functions.md. Its two tracks replace any fixed top-5 or top-100 target.
    - Machine-optimise as many functions as possible, at every opportunity: every function any session samples (Ryujinx
      and the PC's profiler now, the console when I send a log), with tools/localize_native.py and

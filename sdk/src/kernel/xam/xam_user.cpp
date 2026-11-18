@@ -34,6 +34,11 @@
 #include <rex/system/xtypes.h>
 
 REXCVAR_DEFINE_UINT32(user_language, 1, "Kernel", "User's language ID");
+// Port 159 (from fnxf_xiii): XamUserWriteProfileSettings keeps the INT32, INT64, DATETIME, DOUBLE, FLOAT and WSTRING
+// settings too (only BINARY and CONTENT were kept: a game's other saved options were lost, "Unimplemented data type").
+REXCVAR_DEFINE_BOOL(banjo_xam_profile_all_types, false, "Kernel",
+                    "XamUserWriteProfileSettings keeps the int, int64, date, double, float and string settings too "
+                    "(off: only the binary ones, as before)");
 REXCVAR_DEFINE_BOOL(xam_guest_signin, true, "Kernel",
                     "When the game opens the sign-in screen, every further connected controller (2 to 4) is signed "
                     "in as a guest of the profile, as choosing a guest on the console does. Off: only controller 1 "
@@ -509,6 +514,45 @@ u32 XamUserWriteProfileSettings_entry(u32 title_id, u32 user_index, u32 setting_
       case UserProfile::Setting::Type::INT32:
       case UserProfile::Setting::Type::INT64:
       case UserProfile::Setting::Type::DATETIME:
+        if (REXCVAR_GET(banjo_xam_profile_all_types)) {
+          // Port 159 (from fnxf_xiii): the other types kept as well.
+          switch (setting_type) {
+            case UserProfile::Setting::Type::INT32:
+              user_profile->AddSetting(std::make_unique<xam::UserProfile::Int32Setting>(
+                  setting.setting_id, int32_t(setting.data.s32)));
+              break;
+            case UserProfile::Setting::Type::INT64:
+              user_profile->AddSetting(std::make_unique<xam::UserProfile::Int64Setting>(
+                  setting.setting_id, int64_t(setting.data.s64)));
+              break;
+            case UserProfile::Setting::Type::DATETIME:
+              user_profile->AddSetting(std::make_unique<xam::UserProfile::DateTimeSetting>(
+                  setting.setting_id, int64_t(setting.data.s64)));
+              break;
+            case UserProfile::Setting::Type::DOUBLE:
+              user_profile->AddSetting(std::make_unique<xam::UserProfile::DoubleSetting>(
+                  setting.setting_id, double(setting.data.f64)));
+              break;
+            case UserProfile::Setting::Type::FLOAT:
+              user_profile->AddSetting(std::make_unique<xam::UserProfile::FloatSetting>(
+                  setting.setting_id, float(setting.data.f32)));
+              break;
+            default: {  // WSTRING
+              std::u16string str;
+              if (setting.data.unicode.ptr) {
+                auto* chars = reinterpret_cast<const rex::be<uint16_t>*>(
+                    REX_KERNEL_MEMORY()->TranslateVirtual(setting.data.unicode.ptr));
+                const uint32_t count = uint32_t(setting.data.unicode.size) / 2;
+                for (uint32_t i = 0; i < count && uint16_t(chars[i]); ++i)
+                  str.push_back(char16_t(uint16_t(chars[i])));
+              }
+              user_profile->AddSetting(
+                  std::make_unique<xam::UserProfile::UnicodeSetting>(setting.setting_id, str));
+            } break;
+          }
+          break;
+        }
+        [[fallthrough]];
       default: {
         REXKRNL_ERROR("XamUserWriteProfileSettings: Unimplemented data type {}", setting_type);
       } break;

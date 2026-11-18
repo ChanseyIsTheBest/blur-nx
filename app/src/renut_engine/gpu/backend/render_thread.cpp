@@ -93,6 +93,10 @@ extern "C" bool RexSwitchWaitIfEqual(volatile uint32_t* word, uint32_t value, in
 extern "C" void RexSwitchWakeAddress(volatile uint32_t* word, int32_t count);
 #endif
 
+namespace renut::gpu {
+void SettleExportsForFence();  // port 170: render/draw.cpp (banjo_fence_waits_exports)
+}
+
 namespace renut::gpu::render_thread {
 
 namespace {
@@ -626,6 +630,7 @@ void QueuePrefetched(const void *prefetch0, const void *prefetch1, std::function
 
 void QueueFenceCompletion(u32 completion_va, u32 fence, uint64_t after_callback) {
   QueueUnlocked([completion_va, fence, after_callback] {
+    ::renut::gpu::SettleExportsForFence();  // port 170 (banjo_fence_waits_exports; nothing when off)
     bool wake;
     {
       std::lock_guard lock(g_mutex);

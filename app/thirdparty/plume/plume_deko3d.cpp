@@ -47,6 +47,27 @@ namespace plume {
     // Free memory, for the log lines that may be about running out of it: the heap's free bytes (newlib) and the
     // process's unused memory (the system's figures).
     extern "C" char *fake_heap_end; // libnx: the heap's end (sbrk grows towards it)
+    // Port 161 (from fnxf_xiii, its note of 2026-11-05): newlib's malloc bins (devkitA64 libc.a mallocr.c; the third word
+    // is the top chunk) and lock, for the heap's room without mallinfo in the logs made while the game runs. mallinfo
+    // takes the malloc lock and walks every free chunk (newlib's __malloc_update_mallinfo; fnxf_xiii: 13-20 ms with the
+    // game's heap): the "memory block" line of the first 24 blocks of 8 MB or more (the upload ring's chunks, the stream
+    // buffers) cost the render thread about 20 ms each, and every thread's malloc waited meanwhile. The room: newlib's
+    // top chunk (__malloc_av_[2], its size word masked, what mallinfo calls keepcost) and what sbrk can still give; free
+    // chunks inside the heap are not counted.
+    extern "C" void *__malloc_av_[];  // (__malloc_lock / __malloc_unlock: malloc.h, as regionMoveHeapEnd uses them)
+    static void memoryFiguresQuick(uint64_t &heapRoom, uint64_t &processFree) {
+        __malloc_lock(_REENT);
+        const size_t *top = static_cast<const size_t *>(__malloc_av_[2]);
+        const size_t keepcost = top ? top[1] & ~size_t(3) : 0;
+        __malloc_unlock(_REENT);
+        char *brk = static_cast<char *>(sbrk(0));
+        heapRoom = uint64_t(keepcost) + (fake_heap_end > brk ? uint64_t(fake_heap_end - brk) : 0);
+        uint64_t total = 0, used = 0;
+        svcGetInfo(&total, InfoType_TotalMemorySize, CUR_PROCESS_HANDLE, 0);
+        svcGetInfo(&used, InfoType_UsedMemorySize, CUR_PROCESS_HANDLE, 0);
+        processFree = total > used ? total - used : 0;
+    }
+
     static void memoryFigures(uint64_t &heapFree, uint64_t &processFree) {
         // Free chunks inside what malloc has taken, and what sbrk can still give.
         struct mallinfo mi = mallinfo();
@@ -62,10 +83,13 @@ namespace plume {
 
     // blur-nx (2026-11-13, the console crash of 21:16: deko3d aborted the process when dkMemBlockCreate failed to map a
     // GPU-region block during a race load, with 1.8 GB of the heap free): the blocks live and their bytes, and before
-    // every dkMemBlockCreate a breadcrumb in this thread's TLS (bytes 0x138-0x17B since 2026-11-17, below; the
-    // IPC buffer below is what deko3d's own calls overwrite), which Atmosphère's crash report dumps with the thread: the
-    // request that failed, the blocks live then, the GPU region's size and the process's system resource (the kernel
-    // memory its mappings use).
+    // every dkMemBlockCreate a breadcrumb in this thread's TLS (the IPC buffer below 0x100 is what deko3d's own calls
+    // overwrite), which Atmosphère's crash report dumps with the thread: the request that failed, the blocks live then,
+    // the GPU region's size and the process's system resource (the kernel memory its mappings use).
+    // renut-ultimate (2026-11-17, port 153): at 0x138-0x17B. libnx's thread-local slots (threadTlsGet / Set, which
+    // pthread keys and libstdc++'s thread-exit destructors use) are 0x180-0x1DF (its threadTlsGet: tpidrro_el0 + 0x180
+    // + 8 * slot, twelve slots), and the kernel's preemption words 0x100-0x107: Blur's 0x140 put the crumb's last four
+    // bytes over slot 0.
     static std::atomic<uint32_t> g_blocksLive{0}, g_blocksMade{0}, g_blockCrumbSeq{0};
     static std::atomic<uint64_t> g_blocksLiveBytes{0};
     static std::atomic<uint64_t> g_regionBytesNow{0};  // set where the region changes (makeBlock)
@@ -76,12 +100,9 @@ namespace plume {
         uint32_t sysUsedKb, sysTotalKb, seq;
         char what[24];
     };
-    // blur-nx (2026-11-17, RR6's finding in the base): 0x180-0x1DF are libnx's twelve thread-local slots (threadTlsGet reads
-    // tpidrro_el0 + 8 * slot + 0x180), so the crumb at 0x140 overwrote the low half of slot 0's pointer (the first pthread
-    // key, likely libstdc++'s thread_local destructor list) on every thread that made a block. Now 0x138-0x17B, as the base.
-    static constexpr size_t kBlockCrumbAt = 0x138;
+    static constexpr size_t kBlockCrumbAt = 0x138;  // renut-ultimate (2026-11-17): see above
     static_assert(kBlockCrumbAt >= 0x108 && kBlockCrumbAt + sizeof(BlockCrumb) <= 0x180,
-                  "the crumb stays below libnx's TLS slots (0x180-0x1DF)");
+                  "the crumb stays between the kernel's words and libnx's TLS slots");
     static void systemResource(uint64_t &used, uint64_t &total) {
         used = total = 0;
         svcGetInfo(&total, InfoType_SystemResourceSizeTotal, CUR_PROCESS_HANDLE, 0);
@@ -1300,7 +1321,7 @@ namespace plume {
         // on the thread making the block: the render thread for the upload ring's chunks).
         if ((size >= (8u << 20) || (before >> 26) != ((before + m.size) >> 26)) && logged.fetch_add(1) < 24) {
             uint64_t heapFree = 0, processFree = 0;
-            memoryFigures(heapFree, processFree);
+            memoryFiguresQuick(heapFree, processFree);  // port 161: no heap walk (the heap's room)
             logf("memory block: %s, %u KiB (deko3d blocks %" PRIu64 " MB in all; heap %" PRIu64 " MB free, process %" PRIu64 " MB unused)",
                  what, size >> 10, (before + m.size) >> 20, heapFree >> 20, processFree >> 20);
         }
@@ -2074,7 +2095,7 @@ namespace plume {
                 if (logged < 4) {
                     logged++;
                     uint64_t hf = 0, pf = 0;
-                    memoryFigures(hf, pf);
+                    memoryFiguresQuick(hf, pf);  // port 161: no heap walk
                     logf("uam: compile %u (stage %u, %zu bytes of GLSL; heap %" PRIu64 " MB free, process %" PRIu64 " MB unused)",
                          logged, uint32_t(job->stage), job->source->size(), hf >> 20, pf >> 20);
                 }

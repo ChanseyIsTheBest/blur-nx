@@ -331,6 +331,10 @@ void ReleaseHostTexturesInMemoryLocked(u32 physical, u32 size);
 void TransitionTextureLocked(HostTexture *texture, plume::RenderTextureLayout layout);
 // banjo-nx (2026-10-19): a layout a texture is only read in (banjo_deko3d_barrier_lean).
 bool ReadOnlyLayout(plume::RenderTextureLayout layout);
+// Port 161 (banjo_deko3d_vertex_texture_barrier): every layout move notes a GPU write; a draw whose vertex shader
+// samples textures calls the barrier first.
+void NoteGpuWriteLayoutLocked(plume::RenderTextureLayout layout);
+void VertexTextureBarrierLocked();
 
 // Rebuilds the host levels of a resolve destination (HostTexture::extra_levels)
 // over 'rect' of level 0, in host texels, after a resolve wrote it. Leaves the

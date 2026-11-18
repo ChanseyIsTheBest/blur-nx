@@ -44,7 +44,10 @@ REXCVAR_DEFINE_BOOL(banjo_stall_watch_waits, true, "Nuts&Bolts/Profiler",
     "[Switch] With the stall watchdog: each dump lists the guest threads blocked in a wait, on what and for how long, "
     "and whether that object was set after the wait began (each blocking wait and each set or release is noted).")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_INT32(banjo_stall_watch_quiet_seconds, 30, "Nuts&Bolts/Profiler",
+// renut-ultimate (2026-11-17, port 153): 0 in the base (Blur: 30). A race or a level can go 30 s without a file read,
+// and each dump pauses every game thread in turn and writes to the SD card: a diagnostic for a boot that hangs while
+// frames still come, set in the toml of the game being looked at.
+REXCVAR_DEFINE_INT32(banjo_stall_watch_quiet_seconds, 0, "Nuts&Bolts/Profiler",
     "[Switch] With the stall watchdog: dump when no file has been read for this many seconds, even while frames still "
     "come (two dumps at most until reads resume; 0 = off). A file named stall_dump in logs/rex/ also dumps (on demand).")
     .range(0, 3600)

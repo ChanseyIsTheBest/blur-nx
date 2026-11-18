@@ -104,7 +104,7 @@ int Fast(u32 guest_va) {
 
 } // namespace
 
-u32 AllocPhysicalBlock(u32 size) {
+u32 AllocPhysicalBlock(u32 size, bool quiet) {
   // The physical window (64 KiB pages) maps host and guest addresses 1:1 in
   // offset, so a host pointer into it round-trips to a guest VA.
   rex::memory::BaseHeap *heap = REX_KERNEL_MEMORY()->LookupHeapByType(true, 64u * 1024u);
@@ -117,7 +117,8 @@ u32 AllocPhysicalBlock(u32 size) {
                    rex::memory::kMemoryAllocationReserve | rex::memory::kMemoryAllocationCommit,
                    rex::memory::kMemoryProtectRead | rex::memory::kMemoryProtectWrite, true,
                    &guest_va)) {
-    RGPU_ERROR("Reserving {} bytes of guest physical memory failed", size);
+    if (!quiet)
+      RGPU_ERROR("Reserving {} bytes of guest physical memory failed", size);
     return 0;
   }
   return guest_va;
@@ -129,12 +130,24 @@ bool Init() {
     return true;
 
   auto *memory = REX_KERNEL_MEMORY();
-  const u32 guest_va = AllocPhysicalBlock(kHeapSize);
+  // Port 161 (from fnxf_xiii, its note of 2026-11-11): kHeapSize at most; with less guest physical memory left (a
+  // game's own pools grown for a larger scene) 48, 32, 24 or 16 MiB, the first that can be reserved, instead of no
+  // record heap at all. The lock-free table keeps kHeapSize's span: offsets past the heap are never allocated.
+  u32 guest_va = 0, size = 0;
+  for (const u32 mb : {kHeapSize >> 20, 48u, 32u, 24u, 16u}) {
+    size = mb << 20;
+    if (size > kHeapSize)
+      continue;
+    if ((guest_va = AllocPhysicalBlock(size, true)) != 0)
+      break;
+  }
   if (!guest_va) {
-    RGPU_ERROR("Record heap: reserving {} bytes failed", kHeapSize);
+    RGPU_ERROR("Record heap: reserving even {} bytes failed", size);
     return false;
   }
-  g_heap = o1heapInit(memory->TranslateVirtual<void *>(guest_va), kHeapSize);
+  if (size != kHeapSize)
+    RGPU_WARN("Record heap: {} MiB (the {} MiB could not be reserved)", size >> 20, kHeapSize >> 20);
+  g_heap = o1heapInit(memory->TranslateVirtual<void *>(guest_va), size);
   if (!g_heap) {
     RGPU_ERROR("Record heap: o1heapInit failed");
     return false;

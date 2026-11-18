@@ -220,6 +220,16 @@ def main():
                      'changed' % pch)
         if not a.check:
             open(pch, 'w', encoding='utf-8', newline='\n').write(text.replace(anchor, MACROS + '\n' + anchor, 1))
+    elif MACROS not in text:
+        # renut-ultimate (2026-11-17, port 150): an older form of the block (before CG-08's site caches, say) is put in
+        # place of, as loop_locals.py does with its own: a game's tree gets the current macros without a new codegen.
+        # The block ends with REX_CALL_INDIRECT_FUNC_AT's two #endif lines, every form of it so far.
+        start = text.index(MARKER)
+        tail = '#endif\n#endif\n'
+        end = text.index(tail, text.index('#ifndef REX_CALL_INDIRECT_FUNC_AT', start)) + len(tail)
+        if not a.check:
+            open(pch, 'w', encoding='utf-8', newline='\n').write(text[:start] + MACROS + text[end:])
+        print('indirect_calls: the macros in %s were replaced by the current ones' % pch)
     print('indirect_calls%s: %d bctrl sites written (%d promoted to a guarded direct call, %d of them with two or '
           'three targets; %d in the list), %d already as wanted; %d files changed' %
           (' (check only)' if a.check else '', tagged, promoted, chained, len(promote), already, changed))

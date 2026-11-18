@@ -38,6 +38,16 @@
 #endif
 
 // renut-ultimate (2026-11-16, port 145; tw2de_nx's of 2026-10-22, ON at the user's word: "port the speed ups as on by default").
+// Port 174 (from rehatched-nx): see CapturedHeaderVa. Accuracy, so off by default; a game that re-points headers turns it
+// on in its toml, with banjo_renut_chain_reuse and banjo_deko3d_scanout_handover off (both read the live header:
+// rehatched-nx turned them off for Angry Birds).
+REXCVAR_DEFINE_BOOL(banjo_renut_all_surface_headers, false, "Banjo/Renut",
+                    "From rehatched-nx: the header of every bound surface (not only those on the stack, "
+                    "blur_renut_stack_surface_headers) is kept as the game bound it, with each draw, clear and resolve, "
+                    "and the render thread reads that (a game that re-points a heap header between EDRAM views drew to "
+                    "the wrong view). Pair it with banjo_renut_chain_reuse and banjo_deko3d_scanout_handover off. "
+                    "false: a heap header is read as it is when the render thread gets to it, as before")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(banjo_renut_keep_unused_targets, true, "Banjo/Renut",
                     "tw2de_nx: a render target no surface uses any more is kept for 250 ms for a surface that takes the "
                     "same EDRAM view again, instead of being destroyed and made anew (a game that switches one surface "
@@ -197,7 +207,11 @@ void ForgetFramebuffers(const HostSurface *surface) {
 // three descriptor words it reads, valid while nothing it reads has changed (g_surface_epoch: bumped by every target
 // built, retired, unused or rebound, the resolution scale latched and the tiling extent set).
 struct SurfaceMemo {
-  u32 va = 0, size = 0, info = 0, format = 0;
+  // Port 161 (from fnxf_xiii, its note of 2026-11-11 from FNXF XIII-LR): color_info (the EDRAM base) too. A surface
+  // object pointed, the same size, pitch and format, at another EDRAM base gave the memo's target of the old base
+  // (LR at 1600x900: the scene's tile colour, then its depth's EDRAM for the per-tile depth restore), where the slow
+  // path's TargetKey keys on ColorInfo.
+  u32 va = 0, size = 0, info = 0, format = 0, color_info = 0;
   uint64_t epoch = 0;
   HostSurface *surface = nullptr;
 };
@@ -988,7 +1002,7 @@ void DropTarget(uint64_t key) {
   }
 }
 
-// Port 148 (banjo_renut_keep_unused_targets): kept targets unused for kUnusedTargetMs, and the oldest beyond
+// Port 145 (banjo_renut_keep_unused_targets): kept targets unused for kUnusedTargetMs, and the oldest beyond
 // banjo_renut_kept_targets, go (tw2de_nx: 250 ms and 24; the views a game switches between come back within a frame,
 // and nothing is kept long enough to matter for memory). Swept every frame too (SweepUnusedTargetsLocked).
 constexpr int64_t kUnusedTargetMs = 250;
@@ -1185,6 +1199,19 @@ std::mutex g_stack_headers_mutex;
 std::unordered_map<u32, d3d::SurfaceDesc> g_stack_headers;
 inline bool StackVa(u32 va) { return va >= 0x70000000u && va < 0x80000000u; }
 
+// Port 174 (from rehatched-nx, its commit e0794e0b of 2026-11-16; banjo_renut_all_surface_headers): Angry Birds Trilogy
+// re-points one heap header between 1280-, 640- and 320-pitch views of EDRAM several times a frame; the device holds
+// only the address, the same for each. The render thread read the header when it replayed a draw, by which time the
+// game had often re-pointed it (its sprites and the bloom downsample went to the wrong view). The console's GPU takes a
+// surface's layout when it is bound (SetRenderTarget / SetDepthStencilSurface write RB_SURFACE_INFO and RB_COLOR_INFO).
+// With the key on, every bound surface's header is kept as it was at its bind (NoteSurfaceHeader) and captured with each
+// operation (CaptureStackHeaders), not only the stack's (blur_renut_stack_surface_headers). Off: as before.
+bool AllSurfaceHeadersOn() {
+  static const bool on = REXCVAR_GET(banjo_renut_all_surface_headers);
+  return on;
+}
+inline bool CapturedHeaderVa(u32 va) { return AllSurfaceHeadersOn() || StackVa(va); }
+
 // blur-nx (2026-11-10, port 76; its key 218: blur_renut_wipe_overwritten; see surfaces.h).
 bool OverlapWrittenSinceLocked(const HostSurface *surface, uint64_t seq) {
   if (!surface || surface->depth)
@@ -1319,8 +1346,19 @@ void CaptureStackHeaders(const u8 *device, StackHeaderSet &out) {
                       be(d3d::kDeviceOffsetRenderTargets + 8), be(d3d::kDeviceOffsetRenderTargets + 12),
                       be(d3d::kDeviceOffsetDepthStencil)};
   for (const u32 va : vas) {
-    if (!StackVa(va) || out.count >= 5)
+    if (!va || !CapturedHeaderVa(va) || out.count >= 5)  // port 174: every bound surface with the key on
       continue;
+    // Port 174 (rehatched-nx): with the key on, the header as it was when the surface was bound (NoteSurfaceHeader), as
+    // the console's GPU has it.
+    if (AllSurfaceHeadersOn()) {
+      std::lock_guard lock(g_stack_headers_mutex);
+      if (const auto it = g_stack_headers.find(va); it != g_stack_headers.end()) {
+        out.va[out.count] = va;
+        out.desc[out.count] = it->second;
+        ++out.count;
+        continue;
+      }
+    }
     if (const auto *desc = GuestPtr<const d3d::SurfaceDesc>(va + sizeof(d3d::Resource))) {
       out.va[out.count] = va;
       out.desc[out.count] = *desc;
@@ -1332,7 +1370,7 @@ void CaptureStackHeaders(const u8 *device, StackHeaderSet &out) {
 void SetReplayStackHeaders(const StackHeaderSet *set) { g_replay_stack_headers = set; }
 
 void NoteSurfaceHeader(u32 surface_va) {
-  if (!StackVa(surface_va) || !banjo::renut_gpu::StackSurfaceHeadersOn())
+  if (!CapturedHeaderVa(surface_va) || !banjo::renut_gpu::StackSurfaceHeadersOn())  // port 174
     return;
   const auto *desc = GuestPtr<const d3d::SurfaceDesc>(surface_va + sizeof(d3d::Resource));
   if (!desc)
@@ -1351,7 +1389,7 @@ HostSurface *GetHostSurfaceLocked(u32 surface_va) {
   if (!desc)
     return nullptr;
   d3d::SurfaceDesc stack_copy;  // blur-nx (2026-11-10, port 76; its key 215: blur_renut_stack_surface_headers)
-  if (StackVa(surface_va) && banjo::renut_gpu::StackSurfaceHeadersOn()) {
+  if (CapturedHeaderVa(surface_va) && banjo::renut_gpu::StackSurfaceHeadersOn()) {  // port 174
     bool found = false;
     if (const StackHeaderSet *set = g_replay_stack_headers) {  // the replayed operation's own
       for (u32 i = 0; i < set->count; ++i) {
@@ -1363,7 +1401,8 @@ HostSurface *GetHostSurfaceLocked(u32 surface_va) {
         }
       }
     }
-    if (!found) {  // a path that captured none: as last bound (counted: none is expected)
+    // port 174: the last-bound fallback stays for the stack's (a heap header the operation did not capture is read live)
+    if (!found && StackVa(surface_va)) {  // a path that captured none: as last bound (counted: none is expected)
       std::lock_guard lock(g_stack_headers_mutex);
       if (const auto it = g_stack_headers.find(surface_va); it != g_stack_headers.end()) {
         stack_copy = it->second;
@@ -1379,7 +1418,7 @@ HostSurface *GetHostSurfaceLocked(u32 surface_va) {
   const bool memo = banjo::renut_gpu::CpuMemosOn();
   SurfaceMemo &m = g_surface_memo[(surface_va * 0x9E3779B1u) >> 26];
   if (memo && m.epoch == g_surface_epoch && m.va == surface_va && m.size == desc->Size &&
-      m.info == desc->SurfaceInfo && m.format == desc->Format) {
+      m.info == desc->SurfaceInfo && m.format == desc->Format && m.color_info == desc->ColorInfo) {
     // the same as the lookup's: the surface bound now
     m.surface->size_word = desc->Size;
     m.surface->info_word = desc->SurfaceInfo;
@@ -1401,6 +1440,7 @@ HostSurface *GetHostSurfaceLocked(u32 surface_va) {
     m.size = desc->Size;
     m.info = desc->SurfaceInfo;
     m.format = desc->Format;
+    m.color_info = desc->ColorInfo;  // port 161
     m.epoch = g_surface_epoch;
     m.surface = result;
   }
@@ -1772,6 +1812,7 @@ void TransitionSurfaceLocked(HostSurface *surface, plume::RenderTextureLayout la
   if (!surface || !surface->texture || surface->layout == layout)
     return;
   ++g_layout_epoch;  // banjo-nx (2026-10-26, render/textures.h)
+  NoteGpuWriteLayoutLocked(layout);  // port 161 (banjo_deko3d_vertex_texture_barrier)
   // banjo-nx (2026-10-19, banjo_deko3d_barrier_lean): from one read layout to another: no barrier (textures.cpp).
   if (IsDeko3D() && banjo::renut_gpu::Deko3DBarrierLeanOn() && ReadOnlyLayout(surface->layout) &&
       ReadOnlyLayout(layout)) {
@@ -1865,6 +1906,7 @@ void TransitionDepthImageLocked(DepthImage &image, plume::RenderTextureLayout la
   if (!image.texture || image.layout == layout)
     return;
   ++g_layout_epoch;  // banjo-nx (2026-10-26, render/textures.h)
+  NoteGpuWriteLayoutLocked(layout);  // port 161 (banjo_deko3d_vertex_texture_barrier)
   if (IsDeko3D() && banjo::renut_gpu::Deko3DBarrierLeanOn() && ReadOnlyLayout(image.layout) && ReadOnlyLayout(layout)) {
     image.layout = layout;
     return;

@@ -394,7 +394,10 @@ void SwitchAudioSystem::FillAndAppend(size_t buffer_index) {
   // (counter 27). Blur's console races appended ~12 % more 1,024-sample buffers than 48 kHz plays (52.9 a second
   // against 46.9; the menus at 60 fps 47.1): either the device releases some buffers without playing them, or the
   // count is wrong. Counter 57: samples played in the interval (the output thread is the only caller).
-  {
+  // renut-ultimate (2026-11-17, port 153): asked every 16th buffer (about 12 times a second), not at every one: an IPC
+  // request to audout each time, in every game. The count is audout's running total, so the sum is the same.
+  static uint32_t played_ask = 0;
+  if ((++played_ask & 15) == 0) {
     static u64 last_played = 0;
     u64 played = 0;
     if (R_SUCCEEDED(audoutGetAudioOutPlayedSampleCount(&played))) {
