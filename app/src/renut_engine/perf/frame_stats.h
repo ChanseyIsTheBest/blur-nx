@@ -29,8 +29,12 @@ struct Snapshot {
     int history_count = 0;
 };
 
-// Called by the renderer at each guest D3DDevice_Swap.
+// Called by the renderer at each guest D3DDevice_Swap (blur-nx, 2026-11-18: at its end, the frame's release).
 void OnGameFrame();
+
+// blur-nx (2026-11-18, 1 % lows on screen, every port): called by the display thread (display_sync.cpp) at a refresh
+// that shows a new image, with the time the image before it was shown (whole refreshes): PacingReport's "on screen".
+void OnImageShown(double ms);
 
 // Called by the renderer when a frame's GPU time is known (a frame or two
 // after it was submitted).

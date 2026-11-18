@@ -356,7 +356,7 @@ void AtRefresh(uint64_t now, uint64_t period) {
   }
   if (!done_index)
     return;
-  std::lock_guard lock(g_mutex);
+  std::unique_lock lock(g_mutex);
   int newest = -1;
   for (uint32_t k = 0; k < g_shown_count; ++k) {
     if (g_shown[(g_shown_head + k) % kShown].present_index == done_index) {
@@ -378,6 +378,17 @@ void AtRefresh(uint64_t now, uint64_t period) {
     g_release_display.Add(Ms(s.anchor, now));
     const double refreshes = double(now - s.anchor) / double(period);
     PhaseFrame(uint32_t(std::lround(refreshes)), now);
+  }
+  // blur-nx (2026-11-18, 1 % lows on screen, every port): the image before this one was shown from its refresh to this
+  // one, a whole number of refreshes (this thread wakes a little after each): to frame_stats' "on screen" (after g_mutex:
+  // frame_stats takes its own lock).
+  static uint64_t last_new_image = 0;  // this thread's only
+  const uint64_t previous_image = last_new_image;
+  last_new_image = now;
+  lock.unlock();
+  if (previous_image && period) {
+    const double shown = std::max(1.0, std::round(double(now - previous_image) / double(period)));
+    renut::frame_stats::OnImageShown(shown * double(period) / 1e6);
   }
 }
 

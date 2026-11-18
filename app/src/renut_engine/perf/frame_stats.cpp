@@ -29,8 +29,9 @@ using Clock = std::chrono::steady_clock;
 // blur-nx (2026-11-18, the user: "help with 1% lows"; written for every port): the frame pacing of the 10 s report
 // (PacingReport). A window's frame lengths in a histogram of a quarter of a millisecond a bin (to 250 ms; longer ones
 // kept apart with their sum), so its percentiles and 1 % low are exact to a quarter ms, and the logged bins of several
-// windows add up to a race's. Three of them: the game's frames (Swap to Swap), the render thread's busy time and the
-// GPU's time of each frame.
+// windows add up to a race's. Three of them: the game's frames (Swap to Swap; from 2026-11-18 the end of one Swap hook,
+// after the frame cap, to the next), the render thread's busy time and the GPU's time of each frame. A fourth from
+// 2026-11-18: each image's time on the display (OnImageShown).
 struct Hist {
   static constexpr int kPerMs = 4, kBins = 250 * kPerMs;
   uint16_t bins[kBins] = {};
@@ -118,6 +119,7 @@ struct State {
   // blur-nx (2026-11-18, the frame pacing): the window's histograms and slowest frames (PacingReport starts them
   // again), the running frame's waits and longest render thread and GPU frames, the game thread (the one at Swap).
   Hist game, render, gpu;
+  Hist shown;  // blur-nx (2026-11-18): each image's time on the display (OnImageShown), what the player sees
   SlowFrame slow[kSlowKept];
   int slow_n = 0;
   double frame_wait[4] = {}, frame_render = 0.0, frame_gpu = 0.0;
@@ -195,6 +197,12 @@ void OnGameFrame() {
     s.gpu_sum = s.render_sum = s.wait_sum = 0.0;
     s.gpu_n = s.render_n = 0;
   }
+}
+
+void OnImageShown(double ms) {
+  State& s = S();
+  std::lock_guard lock(s.mutex);
+  s.shown.Add(ms);
 }
 
 void OnGpuFrame(double ms) {
@@ -281,6 +289,12 @@ std::string PacingReport() {
       g.Percentile(0.99), g.Percentile(0.999), g.worst, s.render.n ? s.render.sum / s.render.n : 0.0,
       s.render.Percentile(0.99), s.render.worst, s.render.n, s.gpu.n ? s.gpu.sum / s.gpu.n : 0.0, s.gpu.Percentile(0.99),
       s.gpu.worst, s.gpu.n, s.other_wait_n, s.other_wait_ms);
+  // blur-nx (2026-11-18): on screen (the display thread: each new image's time shown, whole refreshes; the Switch).
+  const Hist &sh = s.shown;
+  const double shown_mean = sh.n ? sh.sum / sh.n : 0.0, shown_low1 = sh.SlowestMean(0.01);
+  out += fmt::format("; on screen: {} images, mean {:.2f} ms ({:.2f} fps), 1 % low {:.2f} fps ({:.2f} ms), 0.1 % low "
+                     "{:.2f} fps, the longest {:.2f} ms",
+                     sh.n, shown_mean, fps(shown_mean), fps(shown_low1), shown_low1, fps(sh.SlowestMean(0.001)), sh.worst);
   out += "\n[renut] frame pacing's slowest frames (ms at the race's second: the game thread's waits for fences / Swap's "
          "frames-ahead limit / the display / the limiter; the longest render thread and GPU frames reported in it):";
   for (int i = 0; i < s.slow_n; ++i) {
@@ -288,11 +302,12 @@ std::string PacingReport() {
     out += fmt::format(" {:.1f} at {:.1f} s (waits {:.1f} / {:.1f} / {:.1f} / {:.1f}; render {:.1f}, GPU {:.1f});", f.ms,
                        f.at_s, f.wait[0], f.wait[1], f.wait[2], f.wait[3], f.render_ms, f.gpu_ms);
   }
-  out += fmt::format("\n[renut] frame pacing's bins (a quarter ms each, bin:count): game {}; render {}; gpu {}",
-                     g.Bins(), s.render.Bins(), s.gpu.Bins());
+  out += fmt::format("\n[renut] frame pacing's bins (a quarter ms each, bin:count): game {}; render {}; gpu {}; shown {}",
+                     g.Bins(), s.render.Bins(), s.gpu.Bins(), sh.Bins());
   s.game = Hist{};
   s.render = Hist{};
   s.gpu = Hist{};
+  s.shown = Hist{};
   s.slow_n = 0;
   s.other_wait_ms = 0.0;
   s.other_wait_n = 0;
