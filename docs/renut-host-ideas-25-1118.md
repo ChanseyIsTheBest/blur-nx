@@ -197,16 +197,14 @@ so the CPU the batch saves shows as headroom, and as fps only in a port the CPU 
 The user (2026-11-18 ~12:05): "when we send this to ridge racer 6 for ultimate base ask it to add a part in the porting
 prompt to check if these need to be on or off and do they impact performance". The package that sends this batch asks
 RR6 to add to the base's porting prompt a step for every port (new or rebased): decide these three keys from the port's
-own console log, then measure them.
+own console log. The user (~12:10): no measurement is needed; a log that shows 0 is good enough.
 
 | Key | The base's default | Blur | What the port's log says (a race, the 10 s report) | Turn it off when |
 |---|---|---|---|---|
-| `ultimate_renut_replay_inherit_same` | true | false (#14) | "[renut] replays with the inherited words as recorded (ultimate_renut_replay_inherit_same): N of M" (every 65,536 replays; only with banjo_renut_replay_inherits on) | N is 0 or close to it: each replay copies and compares for nothing |
+| `ultimate_renut_replay_inherit_same` | true | false (#14) | "[renut] replays with the inherited words as recorded (ultimate_renut_replay_inherit_same): N of M" (every 65,536 replays; only with banjo_renut_replay_inherits on) | N is 0: each replay copies and compares for nothing |
 | `sasrt_gpu_skip_inert_draws` | true | false (#15) | "[sasrt gpu] GPU round ..., in the last 10 s: sasrt_gpu_skip_inert_draws (on) N" | N is 0 in every race window: its test runs before every draw for nothing |
 | `banjo_renut_tags_check` | 32 | 256 (#31) | "[renut] recording from marks (banjo_renut_tags): ..., N whole checks, M chunks changed without a mark" | M is 0 over whole races: 256 checks 8 times less often (not strictly exact: an unmarked write would be caught 256 ops later, not 32); any M above 0 keeps 32 |
 
-Then the performance: an ABBA of uncapped races (the key as the log says, then the base's default, twice), comparing
-the render thread's ms a frame and us a draw (the [renut] 10 s line), the profile's CPU and the fps; or the in-run A/B
-where the key has a target (`banjo_renut_tags_check`: A/B 27). Blur saved 0.05-0.15 ms a frame with each. A port keeps
-the base's default unless both the log and the measurement say otherwise, and names its choice in its own toml.
+With the log showing 0 over a whole race (every race window, not the menus or loads), the port sets the key as in the
+last column in its own toml, naming the log line it read; anything above 0 keeps the base's default. No A/B is needed.
 
