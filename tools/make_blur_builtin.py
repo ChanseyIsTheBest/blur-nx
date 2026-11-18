@@ -33,8 +33,9 @@ FINAL = {'log_level': '"off"'}
 
 PLAYER_HEAD = '''# Blur for the Nintendo Switch (blur-nx): your settings. Everything else is built into the game.
 # Change them here, or in the game menu: hold A+B+X+Y+L+R during the game (input_menu_combo below), and + closes it.
-# Language, the resolutions, MSAA and four-core mode (marked * in the menu) take effect at the next start. Delete this
-# file and the game writes it again.
+# In the menu, the language and four-core mode (marked *) take effect at the next start, the resolutions and MSAA when
+# the menu closes, the rest at once. A change made here is read at the next start. Delete this file and the game
+# writes it again.
 
 # The game's language: "System" (the console's own), "English", "French", "German", "Italian", "Spanish", "Polish",
 # "Russian", "Japanese", "Korean", "Portuguese", "Chinese (Simplified)" or "Chinese (Traditional)". A language the
