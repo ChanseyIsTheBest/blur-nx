@@ -49,6 +49,8 @@
 #include <unistd.h>
 #include <switch.h>
 #include <spdlog/sinks/base_sink.h>
+// blur-nx (2026-11-18): sdk/src/ui/switch_crash_hooks.c's (weak: an executable without the crash hooks has none).
+extern "C" __attribute__((weak)) void RexSwitchStderrToFile(int on);
 #endif
 
 #if REX_PLATFORM_WIN32
@@ -589,6 +591,11 @@ void InitLogging(const LogConfig& config) {
                   [](const auto& category) { return category.second == spdlog::level::off; });
   if (every_level_off)
     resolved_path.clear();
+#ifdef __SWITCH__
+  // blur-nx (2026-11-18): stderr to logs/rex/rex_stderr.log only when something is logged; with every level off it
+  // stays in memory and only a crash report carries it (sdk/src/ui/switch_crash_hooks.c).
+  if (RexSwitchStderrToFile) RexSwitchStderrToFile(every_level_off ? 0 : 1);
+#endif
   if (!resolved_path.empty()) {
     const size_t max_size = static_cast<size_t>(REXCVAR_GET(log_max_file_size_mb)) * 1024 * 1024;
     const size_t max_files = static_cast<size_t>(REXCVAR_GET(log_max_files));

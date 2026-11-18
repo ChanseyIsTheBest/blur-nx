@@ -523,6 +523,9 @@ void WriteCrashFile(const char* data, size_t len) {
 
 }  // namespace
 
+// blur-nx (2026-11-18): sdk/src/ui/switch_crash_hooks.c's (weak: an executable without the crash hooks has none).
+extern "C" __attribute__((weak)) const char* RexSwitchStderrRecent(size_t* len);
+
 extern "C" void RexSwitchCrashLog(const char* reason, const ThreadExceptionDump* ctx,
                                   uint64_t stack, uint64_t pc) {
   // A second fault while the first is being written (on this thread or another)
@@ -596,6 +599,16 @@ extern "C" void RexSwitchCrashLog(const char* reason, const ThreadExceptionDump*
   ScanStack(b, ctx ? ctx->sp.x : stack, base, text_lo, text_hi);
   Append(b, "\n");
   WriteCrashFile(b.data, b.len);
+  // blur-nx (2026-11-18): with every log off, stderr is kept in memory (switch_crash_hooks.c): its last lines go into
+  // the crash report, the one file a release writes.
+  size_t recent_len = 0;
+  const char* recent = RexSwitchStderrRecent ? RexSwitchStderrRecent(&recent_len) : nullptr;
+  if (recent && recent_len) {
+    static const char kHead[] = "==== stderr before the crash (kept in memory: logging is off) ====\n";
+    WriteCrashFile(kHead, sizeof(kHead) - 1);
+    WriteCrashFile(recent, recent_len);
+    WriteCrashFile("\n", 1);
+  }
   // The log's last lines, which its writer thread had not put in the log file yet (log_file_writer).
   static char tail[12288];
   const size_t tail_len = RexLogUnwrittenTail(tail, sizeof(tail));

@@ -11,7 +11,8 @@
  * replace it.
  *
  *   stderr  -> <NRO folder>/logs/rex/rex_stderr.log, unbuffered, rewritten on every boot; blur-nx (2026-11-18):
- *              opened at the first write to stderr, so a run that writes nothing there leaves no file
+ *              only while logging is on (RexSwitchStderrToFile, from logging.cpp), opened at its first write; with
+ *              every log off the last 8 KB stay in memory and go into rex_crash.log if the game crashes
  *   abort() -> <NRO folder>/logs/rex/rex_crash.log with the stack, and error 2345-0101
  *   exit()  -> the same, error 2345-0103. The orderly shutdown does not go through exit()
  *              (see windowed_app_main_switch.cpp), so getting here means some library
@@ -85,25 +86,75 @@ static void RexSwitchExitHook(void) {
 
 /*
  * blur-nx (2026-11-18, the user: "final nro just make sure all logging is off"; crash reports only): stderr goes to a
- * device of its own ("rexstderr:"), which opens rex_stderr.log at its first write. Before, the file was made (empty) at
- * every boot, so a release with every log off still wrote it each start; what reaches stderr before a crash (Mesa's,
- * libnx's, an uncaught exception's message) still lands there, as before. A failed open drops what is written, as
- * stderr did with no file.
+ * device of its own ("rexstderr:"). Before, rex_stderr.log was made at every boot and the SDK's modules (SaltyNX,
+ * APM) wrote their status lines to it in every run, so a release with every log off still wrote a log each start.
+ * Now, until the logger says logging is on (RexSwitchStderrToFile(1), from sdk/src/core/logging.cpp), what reaches
+ * stderr is kept in memory, the last REX_STDERR_KEEP bytes, and a crash report carries it (RexSwitchStderrRecent, read
+ * by RexSwitchCrashLog into rex_crash.log): nothing is written in normal play, and a crash still says what stderr saw
+ * before it (Mesa's, libnx's, an uncaught exception's message). With logging on, the kept bytes and everything after
+ * go to rex_stderr.log, opened at the first write. A failed open drops what is written, as stderr did with no file.
  */
+#define REX_STDERR_KEEP 8192
+static char g_rex_stderr_keep[REX_STDERR_KEEP];
+static size_t g_rex_stderr_kept;
+static volatile int g_rex_stderr_to_file;
 static int g_rex_stderr_fd = -1;
 static int g_rex_stderr_failed;
 
-static ssize_t RexStderrWrite(struct _reent* r, void* fd, const char* ptr, size_t len) {
-    (void)r;
-    (void)fd;
+static int RexStderrFile(void) {
     if (g_rex_stderr_fd < 0 && !g_rex_stderr_failed) {
         char path[FS_MAX_PATH];
         snprintf(path, sizeof(path), "%srex_stderr.log", g_rex_log_dir);
         g_rex_stderr_fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
         if (g_rex_stderr_fd < 0) g_rex_stderr_failed = 1;
     }
-    if (g_rex_stderr_fd < 0) return (ssize_t)len;
-    return write(g_rex_stderr_fd, ptr, len);
+    return g_rex_stderr_fd;
+}
+
+/* The bytes kept: the last REX_STDERR_KEEP written (called under stderr's lock, as every write is). */
+static void RexStderrKeep(const char* ptr, size_t len) {
+    if (len >= REX_STDERR_KEEP) {
+        memcpy(g_rex_stderr_keep, ptr + len - REX_STDERR_KEEP, REX_STDERR_KEEP);
+        g_rex_stderr_kept = REX_STDERR_KEEP;
+        return;
+    }
+    if (g_rex_stderr_kept + len > REX_STDERR_KEEP) {
+        const size_t drop = g_rex_stderr_kept + len - REX_STDERR_KEEP;
+        memmove(g_rex_stderr_keep, g_rex_stderr_keep + drop, g_rex_stderr_kept - drop);
+        g_rex_stderr_kept -= drop;
+    }
+    memcpy(g_rex_stderr_keep + g_rex_stderr_kept, ptr, len);
+    g_rex_stderr_kept += len;
+}
+
+static ssize_t RexStderrWrite(struct _reent* r, void* fd, const char* ptr, size_t len) {
+    (void)r;
+    (void)fd;
+    if (!g_rex_stderr_to_file) {
+        RexStderrKeep(ptr, len);
+        return (ssize_t)len;
+    }
+    const int file = RexStderrFile();
+    if (file < 0) return (ssize_t)len;
+    return write(file, ptr, len);
+}
+
+/* sdk/src/core/logging.cpp, once the log levels are known: on (1) when anything is logged. */
+void RexSwitchStderrToFile(int on) {
+    if (!on || g_rex_stderr_to_file) return;
+    flockfile(stderr);
+    g_rex_stderr_to_file = 1;
+    const int file = RexStderrFile();
+    if (file >= 0 && g_rex_stderr_kept) write(file, g_rex_stderr_keep, g_rex_stderr_kept);
+    g_rex_stderr_kept = 0;
+    funlockfile(stderr);
+}
+
+/* For the crash report: what stderr saw while it was kept in memory (NULL when it goes to rex_stderr.log). Read
+ * without the lock: a crash may come from inside a write. */
+const char* RexSwitchStderrRecent(size_t* len) {
+    *len = g_rex_stderr_to_file ? 0 : g_rex_stderr_kept;
+    return *len ? g_rex_stderr_keep : NULL;
 }
 
 static int RexStderrOpen(struct _reent* r, void* file, const char* path, int flags, int mode) {
