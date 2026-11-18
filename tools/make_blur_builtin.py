@@ -27,7 +27,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # rumble into blur.toml only when the player changes it from the default.
 PLAYER_KEYS = ('language', 'frame_cap', 'banjo_renut_render_height_handheld', 'banjo_renut_render_height_docked',
                'banjo_renut_smaa', 'msaa_level', 'input_xbox_layout', 'input_joycon_sideways',
-               'input_joycon_sideways_stick', 'four_core_mode', 'input_menu_combo')
+               'input_joycon_sideways_stick', 'four_core_mode', 'input_menu_combo', 'menu_color', 'menu_font')
 PLAYER_TABLES = ()
 FINAL = {'log_level': '"off"'}
 
@@ -76,6 +76,13 @@ four_core_mode = true
 # DOWN LEFT RIGHT SL SR, joined by + (for example "L+R+MINUS"). + closes the menu. Hold the shoulders first: while
 # they are held, the combo's other buttons do not reach the game.
 input_menu_combo = "A+B+X+Y+L+R"
+
+# The game menu's colour: "Green", "Yellow", "Red", "Blue", "Purple", "Pink", "Orange", "White" or "Rainbow".
+menu_color = "Green"
+
+# The game menu's font: "System" (the console's own), "Pixel" (the debug overlay's pixel font), "Roboto", "Karla" or
+# "Cousine". A change takes effect at the next start.
+menu_font = "System"
 '''
 
 

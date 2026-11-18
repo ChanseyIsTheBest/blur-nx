@@ -43,3 +43,10 @@ four_core_mode = true
 # DOWN LEFT RIGHT SL SR, joined by + (for example "L+R+MINUS"). + closes the menu. Hold the shoulders first: while
 # they are held, the combo's other buttons do not reach the game.
 input_menu_combo = "A+B+X+Y+L+R"
+
+# The game menu's colour: "Green", "Yellow", "Red", "Blue", "Purple", "Pink", "Orange", "White" or "Rainbow".
+menu_color = "Green"
+
+# The game menu's font: "System" (the console's own), "Pixel" (the debug overlay's pixel font), "Roboto", "Karla" or
+# "Cousine". A change takes effect at the next start.
+menu_font = "System"

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <string>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -24,6 +25,8 @@
 #include <rex/ui/keybinds.h>
 #include <rex/ui/overlay/achievement_icon_cache.h>
 
+#include "game_menu_fonts.h"  // blur-nx (2026-11-18): Dear ImGui's misc/fonts, embedded by CMake (app/CMakeLists.txt)
+
 #if REX_PLATFORM_SWITCH
 #include <rex/input/switch/switch_input_driver.h>  // rex::input::nx::RebuildButtonMaps
 
@@ -38,6 +41,14 @@ uint32_t plGetSharedFontByType(BlurPlFontData* font, int shared_font_type);
 int RexSwitchApplyFourCoreMode(int on);  // threading_switch.cpp: the forwarder's NPDM written or removed
 }
 #endif
+
+// blur-nx (2026-11-18): the menu's colour (at once) and font (baked at start: the Switch's ImGui atlas is fixed).
+REXCVAR_DEFINE_STRING(menu_color, "Green", "UI",
+                      "The game menu's colour: Green, Yellow, Red, Blue, Purple, Pink, Orange, White or Rainbow");
+REXCVAR_DEFINE_STRING(menu_font, "System", "UI",
+                      "The game menu's font: System (the console's own), Pixel (the debug overlay's ProggyTiny), "
+                      "Roboto, Karla or Cousine. Read at start")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 // blur_keys.cpp: the frame cap from the next frame, and the one in force.
 void BlurSetFrameCapLive(int fps);
@@ -75,14 +86,65 @@ ImVec2 TextSize(const char* text, float wrap = 0.0f) {
 // ---- Colours: green and black ---------------------------------------------------------------------------------------
 
 const ImVec4 kBlack(0.012f, 0.020f, 0.014f, 0.97f);
-const ImVec4 kPanel(0.030f, 0.060f, 0.038f, 1.00f);
-const ImVec4 kGreen(0.200f, 0.930f, 0.420f, 1.00f);
-const ImVec4 kGreenDim(0.090f, 0.420f, 0.190f, 1.00f);
-const ImVec4 kGreenDark(0.050f, 0.230f, 0.105f, 1.00f);
 const ImVec4 kText(0.880f, 1.000f, 0.900f, 1.00f);
 const ImVec4 kTextDim(0.500f, 0.660f, 0.540f, 1.00f);
-const ImVec4 kPending(0.780f, 0.960f, 0.350f, 1.00f);  // a * setting's value for the next start
-const ImVec4 kWarn(1.000f, 0.720f, 0.180f, 1.00f);     // the four-core option's warning, and its Off
+const ImVec4 kWarn(1.000f, 0.720f, 0.180f, 1.00f);  // the four-core option's warning, and its Off
+
+// blur-nx (2026-11-18, the user: "add a colour change option for the menu UI yellow, red, green, blue, purple, pink,
+// orange, white, and rainbow ... the current green should be default"): menu_color. The accent and its shades, set at
+// every frame (Rainbow turns through the hues every 12 s); Green is the first menu's colours exactly.
+ImVec4 kAccent(0.200f, 0.930f, 0.420f, 1.00f);
+ImVec4 kAccentDim(0.090f, 0.420f, 0.190f, 1.00f);
+ImVec4 kAccentDark(0.050f, 0.230f, 0.105f, 1.00f);
+ImVec4 kPanel(0.030f, 0.060f, 0.038f, 1.00f);
+ImVec4 kPending(0.780f, 0.960f, 0.350f, 1.00f);  // a * setting's value for the next start
+bool g_rainbow = false;
+float g_rainbow_hue = 0.0f;
+
+ImVec4 Hue(float h, float s = 0.72f, float v = 0.97f) {
+  ImVec4 c(0, 0, 0, 1);
+  ImGui::ColorConvertHSVtoRGB(h - std::floor(h), s, v, c.x, c.y, c.z);
+  return c;
+}
+
+void SetTheme(const std::string& name, double time) {
+  struct Named {
+    const char* name;
+    float r, g, b;
+  };
+  static const Named kNamed[] = {
+      {"Yellow", 0.98f, 0.86f, 0.20f}, {"Red", 0.96f, 0.27f, 0.25f},    {"Blue", 0.27f, 0.56f, 1.00f},
+      {"Purple", 0.67f, 0.42f, 1.00f}, {"Pink", 1.00f, 0.44f, 0.76f},   {"Orange", 1.00f, 0.58f, 0.17f},
+      {"White", 0.93f, 0.93f, 0.93f},
+  };
+  g_rainbow = rex::string::compare_case(name.c_str(), "Rainbow") == 0;
+  ImVec4 a(0.200f, 0.930f, 0.420f, 1.0f);
+  bool green = !g_rainbow;
+  if (g_rainbow) {
+    g_rainbow_hue = float(std::fmod(time / 12.0, 1.0));
+    a = Hue(g_rainbow_hue);
+  } else {
+    for (const Named& n : kNamed)
+      if (rex::string::compare_case(name.c_str(), n.name) == 0) {
+        a = ImVec4(n.r, n.g, n.b, 1.0f);
+        green = false;
+      }
+  }
+  if (green) {  // the default: the first menu's own colours
+    kAccent = ImVec4(0.200f, 0.930f, 0.420f, 1.00f);
+    kAccentDim = ImVec4(0.090f, 0.420f, 0.190f, 1.00f);
+    kAccentDark = ImVec4(0.050f, 0.230f, 0.105f, 1.00f);
+    kPanel = ImVec4(0.030f, 0.060f, 0.038f, 1.00f);
+    kPending = ImVec4(0.780f, 0.960f, 0.350f, 1.00f);
+    return;
+  }
+  auto scale = [&](float f, float base) { return ImVec4(a.x * f + base, a.y * f + base, a.z * f + base, 1.0f); };
+  kAccent = a;
+  kAccentDim = scale(0.45f, 0.0f);
+  kAccentDark = scale(0.24f, 0.0f);
+  kPanel = scale(0.06f, 0.015f);
+  kPending = ImVec4(a.x * 0.5f + 0.5f, a.y * 0.5f + 0.5f, a.z * 0.5f + 0.38f, 1.0f);  // lighter
+}
 
 ImU32 U32(const ImVec4& c, float alpha = 1.0f) { return ImGui::GetColorU32(ImVec4(c.x, c.y, c.z, c.w * alpha)); }
 
@@ -284,6 +346,14 @@ std::vector<Setting> MakeSettings() {
        Q("ZL+ZR+Minus", "ZL+ZR+MINUS"), Q("L stick + R stick", "LSTICK+RSTICK")},
       0, "The buttons that open this menu, held together (+ closes it); from now on. Any other set: input_menu_combo in "
          "blur.toml.");
+  // blur-nx (2026-11-18, the user's requests): the menu's colour (at once) and font (the next start).
+  add("Menu colour", "menu_color", false,
+      {Q("Green", "Green"), Q("Yellow", "Yellow"), Q("Red", "Red"), Q("Blue", "Blue"), Q("Purple", "Purple"),
+       Q("Pink", "Pink"), Q("Orange", "Orange"), Q("White", "White"), Q("Rainbow", "Rainbow")},
+      0, "The colour of this menu.");
+  add("Menu font", "menu_font", true,
+      {Q("System", "System"), Q("Pixel", "Pixel"), Q("Roboto", "Roboto"), Q("Karla", "Karla"), Q("Cousine", "Cousine")},
+      0, "The font of this menu: the console's own, the debug overlay's pixel font, or three others.");
   return s;
 }
 
@@ -378,25 +448,55 @@ const char* const kTabNames[] = {"Settings", "Achievements", "P1 Controls", "P2 
 // ---- Fonts ----------------------------------------------------------------------------------------------------------
 
 void AddGameMenuFonts(ImFontAtlas* atlas) {
-#if REX_PLATFORM_SWITCH
-  if (!atlas || plInitialize(0 /* PlServiceType_User */) != 0)
+  if (!atlas)
     return;
-  BlurPlFontData font{};
-  if (plGetSharedFontByType(&font, 0 /* PlSharedFontType_Standard */) != 0 || !font.address || !font.size)
-    return;
+  // blur-nx (2026-11-18, the user: "add a couple font options as well for the UI including the debug pixelly font but
+  // keep the current as default"): menu_font, baked at start (the Switch's drawer has a fixed atlas). The others are
+  // Dear ImGui's own (misc/fonts: game_menu_fonts.h, made by CMake), kept in the NRO.
   static const ImWchar kRanges[] = {0x0020, 0x00FF, 0x2010, 0x2027, 0x2190, 0x2193, 0x25B2, 0x25C0, 0};
+  const std::string& name = REXCVAR_GET(menu_font);
+  auto is = [&](const char* n) { return rex::string::compare_case(name.c_str(), n) == 0; };
   ImFontConfig config;
-  config.FontDataOwnedByAtlas = false;  // the system's shared memory
+  config.FontDataOwnedByAtlas = false;  // static data, or the system's shared memory
   config.OversampleH = 2;
   config.OversampleV = 1;
-  // 2026-11-18 (the user, after the first photos: "shrink the font a bit to fit more on screen"): 26/39 and 20/30 before.
-  g_font_small = atlas->AddFontFromMemoryTTF(font.address, int(font.size), 22.0f, &config, kRanges);
-  g_font_large = atlas->AddFontFromMemoryTTF(font.address, int(font.size), 33.0f, &config, kRanges);
-  g_font_small_text = atlas->AddFontFromMemoryTTF(font.address, int(font.size), 18.0f, &config, kRanges);
-  g_font_large_text = atlas->AddFontFromMemoryTTF(font.address, int(font.size), 27.0f, &config, kRanges);
-#else
-  (void)atlas;
+  const void* data = nullptr;
+  int size = 0;
+  float sizes[4] = {22.0f, 33.0f, 18.0f, 27.0f};  // the rows' and the smaller text's, for 720 and 1080 lines
+  if (is("Pixel")) {
+    // ProggyTiny (10 px) at 2x and 3x, whole pixels (the debug overlay's font).
+    data = kMenuFontProggyTiny;
+    size = int(sizeof(kMenuFontProggyTiny));
+    config.OversampleH = 1;
+    config.PixelSnapH = true;
+    sizes[0] = 20.0f, sizes[1] = 30.0f, sizes[2] = 20.0f, sizes[3] = 30.0f;
+  } else if (is("Roboto")) {
+    data = kMenuFontRoboto, size = int(sizeof(kMenuFontRoboto));
+  } else if (is("Karla")) {
+    data = kMenuFontKarla, size = int(sizeof(kMenuFontKarla));
+  } else if (is("Cousine")) {
+    data = kMenuFontCousine, size = int(sizeof(kMenuFontCousine));
+    sizes[0] = 20.0f, sizes[1] = 30.0f, sizes[2] = 17.0f, sizes[3] = 25.0f;
+  }
+#if REX_PLATFORM_SWITCH
+  if (!data) {  // System (the default): the console's shared font
+    BlurPlFontData font{};
+    if (plInitialize(0 /* PlServiceType_User */) == 0 &&
+        plGetSharedFontByType(&font, 0 /* PlSharedFontType_Standard */) == 0 && font.address && font.size) {
+      data = font.address;
+      size = int(font.size);
+    }
+  }
 #endif
+  if (!data) {  // no system font (the PC): Roboto
+    data = kMenuFontRoboto;
+    size = int(sizeof(kMenuFontRoboto));
+  }
+  void* bytes = const_cast<void*>(data);
+  g_font_small = atlas->AddFontFromMemoryTTF(bytes, size, sizes[0], &config, kRanges);
+  g_font_large = atlas->AddFontFromMemoryTTF(bytes, size, sizes[1], &config, kRanges);
+  g_font_small_text = atlas->AddFontFromMemoryTTF(bytes, size, sizes[2], &config, kRanges);
+  g_font_large_text = atlas->AddFontFromMemoryTTF(bytes, size, sizes[3], &config, kRanges);
 }
 
 // ---- The dialog -----------------------------------------------------------------------------------------------------
@@ -621,22 +721,34 @@ void GameMenuDialog::OnDraw(ImGuiIO& io) {
     scroll_to_row_ = true;
 
   // ---- The window ----
-  const ImVec2 margin(io.DisplaySize.x * 0.06f, io.DisplaySize.y * 0.07f);
-  ImGui::SetNextWindowPos(margin, ImGuiCond_Always);
-  ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x - 2.0f * margin.x, io.DisplaySize.y - 2.0f * margin.y),
-                           ImGuiCond_Always);
+  // Sized to its contents (the user: "get rid of some white space at the bottom"): the tabs, the list in whole rows, the
+  // footer; centred. The same height on every tab.
+  SetTheme(REXCVAR_GET(menu_color), ImGui::GetTime());
+  const float font_px = font ? font->LegacySize : ImGui::GetFontSize() * scale;
+  row_height_ = font_px * 1.75f;
+  PickTextFont(io);
+  const ImVec2 pad(22.0f, 12.0f);
+  const float win_w = std::floor(io.DisplaySize.x * 0.88f);
+  const float tabs_h = font_px * 2.4f + 6.0f;  // DrawTabs: the bar, the line under it, a gap
+  const float footer = FooterHeight(win_w - 2.0f * pad.x);
+  const float room = io.DisplaySize.y * 0.92f - 2.0f * pad.y - tabs_h - footer;
+  const float list = std::max(row_height_, std::floor(room / row_height_) * row_height_);
+  const float win_h = 2.0f * pad.y + tabs_h + list + footer + 2.0f;
+  ImGui::SetNextWindowPos(ImVec2(std::floor((io.DisplaySize.x - win_w) * 0.5f), std::floor((io.DisplaySize.y - win_h) * 0.5f)),
+                          ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(win_w, win_h), ImGuiCond_Always);
   ImGui::SetNextWindowFocus();
   ImGui::PushStyleColor(ImGuiCol_WindowBg, kBlack);
   ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
-  ImGui::PushStyleColor(ImGuiCol_Border, kGreen);
+  ImGui::PushStyleColor(ImGuiCol_Border, kAccent);
   ImGui::PushStyleColor(ImGuiCol_Text, kText);
   ImGui::PushStyleColor(ImGuiCol_ScrollbarBg, kPanel);
-  ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab, kGreenDim);
-  ImGui::PushStyleColor(ImGuiCol_PlotHistogram, kGreen);
-  ImGui::PushStyleColor(ImGuiCol_FrameBg, kGreenDark);
+  ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab, kAccentDim);
+  ImGui::PushStyleColor(ImGuiCol_PlotHistogram, kAccent);
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, kAccentDark);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.0f);
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(22.0f, 16.0f));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, pad);
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
   const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                                  ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings |
@@ -645,15 +757,8 @@ void GameMenuDialog::OnDraw(ImGuiIO& io) {
   if (ImGui::Begin("##blur_game_menu", nullptr, flags)) {
     if (!font)
       ImGui::SetWindowFontScale(scale);
-    row_height_ = ImGui::GetFontSize() * 1.75f;
-    PickTextFont(io);
     const float width = ImGui::GetContentRegionAvail().x;
     DrawTabs(width);
-    // The list fills what the footer leaves (its height from its own text: the help, the * note, the buttons).
-    const float footer = FooterHeight(width);
-    float list = std::max(row_height_, ImGui::GetContentRegionAvail().y - footer);
-    if (tab_ != kAchievements)
-      list = std::max(1.0f, std::floor(list / row_height_)) * row_height_;  // whole rows
     ImGui::BeginChild("##list", ImVec2(0.0f, list), ImGuiChildFlags_None,
                       ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollbar);
     if (!font)
@@ -684,7 +789,7 @@ void GameMenuDialog::DrawTabs(float width) {
   const float hint_w = font * 1.6f;
   auto hint = [&](float x, const char* t) {
     const ImVec2 a(x, origin.y + height * 0.14f), b(x + hint_w, origin.y + height * 0.86f);
-    dl->AddRect(a, b, U32(kGreenDim), 5.0f, 0, 2.0f);
+    dl->AddRect(a, b, U32(kAccentDim), 5.0f, 0, 2.0f);
     const ImVec2 ts = ImGui::CalcTextSize(t);
     dl->AddText(ImVec2(a.x + (hint_w - ts.x) * 0.5f, origin.y + (height - ts.y) * 0.5f), U32(kTextDim), t);
   };
@@ -711,7 +816,7 @@ void GameMenuDialog::DrawTabs(float width) {
   for (int i = 0; i < kTabCount; ++i) {
     if (i) {
       const ImVec2 bar(x + sep * 0.5f, origin.y + height * 0.22f);
-      dl->AddLine(bar, ImVec2(bar.x, origin.y + height * 0.78f), U32(kGreenDim), 2.0f);
+      dl->AddLine(bar, ImVec2(bar.x, origin.y + height * 0.78f), U32(kAccentDim), 2.0f);
       x += sep;
     }
     const ImVec2 ts = tab_font->CalcTextSizeA(tab_size, FLT_MAX, 0.0f, kTabNames[i]);
@@ -725,14 +830,24 @@ void GameMenuDialog::DrawTabs(float width) {
     }
     ImGui::PopID();
     if (i == tab_)
-      dl->AddRectFilled(a, b, U32(kGreen), 6.0f);
+      dl->AddRectFilled(a, b, U32(kAccent), 6.0f);
     dl->AddText(tab_font, tab_size, ImVec2(x, origin.y + (height - ts.y) * 0.5f),
                 i == tab_ ? U32(kBlack, 1.0f / kBlack.w) : U32(kText), kTabNames[i]);
     x += ts.x;
   }
-  // The thick line under the tabs.
-  dl->AddRectFilled(ImVec2(origin.x - 4.0f, origin.y + height + 2.0f),
-                    ImVec2(origin.x + width + 4.0f, origin.y + height + 6.0f), U32(kGreen));
+  // The thick line under the tabs (with Rainbow, the hues along it, turning).
+  if (g_rainbow) {
+    constexpr int kParts = 12;
+    const float x0 = origin.x - 4.0f, w = width + 8.0f;
+    for (int i = 0; i < kParts; ++i) {
+      const ImU32 c0 = U32(Hue(g_rainbow_hue + float(i) / kParts)), c1 = U32(Hue(g_rainbow_hue + float(i + 1) / kParts));
+      dl->AddRectFilledMultiColor(ImVec2(x0 + w * i / kParts, origin.y + height + 2.0f),
+                                  ImVec2(x0 + w * (i + 1) / kParts, origin.y + height + 6.0f), c0, c1, c1, c0);
+    }
+  } else {
+    dl->AddRectFilled(ImVec2(origin.x - 4.0f, origin.y + height + 2.0f),
+                      ImVec2(origin.x + width + 4.0f, origin.y + height + 6.0f), U32(kAccent));
+  }
   ImGui::SetCursorScreenPos(ImVec2(origin.x, origin.y + height + 6.0f + font * 0.5f));
   ImGui::Dummy(ImVec2(width, 0.0f));
 }
@@ -772,17 +887,17 @@ void GameMenuDialog::DrawSettingsRows(std::vector<Setting>& rows, bool controls,
     // The row: a band and a bar for the chosen one, a thin line under the others.
     const ImVec2 a(p.x, p.y + 2.0f), b(p.x + width, p.y + row_height_ - 2.0f);
     if (sel) {
-      dl->AddRectFilled(a, b, U32(kGreenDark), 6.0f);
-      dl->AddRectFilled(a, ImVec2(a.x + 5.0f, b.y), U32(kGreen), 2.0f);
+      dl->AddRectFilled(a, b, U32(kAccentDark), 6.0f);
+      dl->AddRectFilled(a, ImVec2(a.x + 5.0f, b.y), U32(kAccent), 2.0f);
     } else {
-      dl->AddLine(ImVec2(a.x + pad, b.y + 1.0f), ImVec2(b.x - pad, b.y + 1.0f), U32(kGreenDim, 0.35f), 1.0f);
+      dl->AddLine(ImVec2(a.x + pad, b.y + 1.0f), ImVec2(b.x - pad, b.y + 1.0f), U32(kAccentDim, 0.35f), 1.0f);
     }
     const float ty = p.y + (row_height_ - font) * 0.5f;
     std::string label = s.label;
     dl->AddText(ImVec2(p.x + pad * 1.6f, ty), U32(sel ? kText : kTextDim), label.c_str());
     if (s.restart) {
       const float lw = ImGui::CalcTextSize(label.c_str()).x;
-      dl->AddText(ImVec2(p.x + pad * 1.6f + lw + font * 0.15f, ty), U32(kGreen), "*");
+      dl->AddText(ImVec2(p.x + pad * 1.6f + lw + font * 0.15f, ty), U32(kAccent), "*");
     }
     // The value, between its arrows.
     std::string value;
@@ -801,12 +916,12 @@ void GameMenuDialog::DrawSettingsRows(std::vector<Setting>& rows, bool controls,
     const bool warn = s.key == "four_core_mode" && s.value != s.default_choice;  // Off: the warning's colour
     const ImVec2 vs = ImGui::CalcTextSize(value.c_str());
     const float vx = p.x + value_x + (value_w - vs.x) * 0.5f;
-    dl->AddText(ImVec2(vx, ty), U32(warn ? kWarn : pending ? kPending : (sel ? kGreen : kText)), value.c_str());
+    dl->AddText(ImVec2(vx, ty), U32(warn ? kWarn : pending ? kPending : (sel ? kAccent : kText)), value.c_str());
     if (sel && s.key != kResetKey) {
       const float cy = p.y + row_height_ * 0.5f, h = font * 0.32f;
       const float lx = p.x + value_x + arrow_w * 0.35f, rx = p.x + value_x + value_w - arrow_w * 0.35f;
-      dl->AddTriangleFilled(ImVec2(lx, cy), ImVec2(lx + h * 1.3f, cy - h), ImVec2(lx + h * 1.3f, cy + h), U32(kGreen));
-      dl->AddTriangleFilled(ImVec2(rx, cy), ImVec2(rx - h * 1.3f, cy - h), ImVec2(rx - h * 1.3f, cy + h), U32(kGreen));
+      dl->AddTriangleFilled(ImVec2(lx, cy), ImVec2(lx + h * 1.3f, cy - h), ImVec2(lx + h * 1.3f, cy + h), U32(kAccent));
+      dl->AddTriangleFilled(ImVec2(rx, cy), ImVec2(rx - h * 1.3f, cy - h), ImVec2(rx - h * 1.3f, cy + h), U32(kAccent));
     }
     if (pending) {
       const char* tag = "next start";
@@ -855,12 +970,12 @@ void GameMenuDialog::DrawAchievements() {
     dl->AddText(ImVec2(p.x + pad, p.y), U32(kText), line);
     std::snprintf(line, sizeof(line), "%dG / %dG", earned, total);
     const float gw = ImGui::CalcTextSize(line).x;
-    dl->AddText(ImVec2(p.x + width - pad - gw, p.y), U32(kGreen), line);
+    dl->AddText(ImVec2(p.x + width - pad - gw, p.y), U32(kAccent), line);
     const float by = p.y + font * 1.35f, bh = font * 0.32f;
-    dl->AddRectFilled(ImVec2(p.x + pad, by), ImVec2(p.x + width - pad, by + bh), U32(kGreenDark), bh * 0.5f);
+    dl->AddRectFilled(ImVec2(p.x + pad, by), ImVec2(p.x + width - pad, by + bh), U32(kAccentDark), bh * 0.5f);
     const float frac = float(unlocked) / float(list.size());
     if (frac > 0.0f)
-      dl->AddRectFilled(ImVec2(p.x + pad, by), ImVec2(p.x + pad + (width - 2.0f * pad) * frac, by + bh), U32(kGreen),
+      dl->AddRectFilled(ImVec2(p.x + pad, by), ImVec2(p.x + pad + (width - 2.0f * pad) * frac, by + bh), U32(kAccent),
                         bh * 0.5f);
     ImGui::Dummy(ImVec2(width, font * 2.1f));
   }
@@ -888,8 +1003,8 @@ void GameMenuDialog::DrawAchievements() {
     ImGui::PopID();
     const ImVec2 ra(p.x, p.y + 2.0f), rb(p.x + cw, p.y + row_h - 2.0f);
     if (sel) {
-      cl->AddRectFilled(ra, rb, U32(kGreenDark), 6.0f);
-      cl->AddRectFilled(ra, ImVec2(ra.x + 5.0f, rb.y), U32(kGreen), 2.0f);
+      cl->AddRectFilled(ra, rb, U32(kAccentDark), 6.0f);
+      cl->AddRectFilled(ra, ImVec2(ra.x + 5.0f, rb.y), U32(kAccent), 2.0f);
     } else if (got) {
       cl->AddRectFilled(ra, rb, U32(kPanel), 6.0f);
     }
@@ -900,14 +1015,14 @@ void GameMenuDialog::DrawAchievements() {
       cl->AddImage(reinterpret_cast<ImTextureID>(tex), ia, ib, ImVec2(0, 0), ImVec2(1, 1),
                    got ? IM_COL32_WHITE : IM_COL32(90, 110, 95, 255));
     else
-      cl->AddRect(ia, ib, U32(kGreenDim), 4.0f, 0, 2.0f);
-    cl->AddRect(ia, ib, U32(got ? kGreen : kGreenDim), 4.0f, 0, got ? 2.0f : 1.0f);
+      cl->AddRect(ia, ib, U32(kAccentDim), 4.0f, 0, 2.0f);
+    cl->AddRect(ia, ib, U32(got ? kAccent : kAccentDim), 4.0f, 0, got ? 2.0f : 1.0f);
     const float tx = ib.x + pad;
     const float text_w = p.x + cw - pad - tx;
     char score[16];
     std::snprintf(score, sizeof(score), "%uG", a.gamerscore);
     const float sw = ImGui::CalcTextSize(score).x;
-    cl->AddText(ImVec2(p.x + cw - pad - sw, p.y + font * 0.35f), U32(got ? kGreen : kTextDim), score);
+    cl->AddText(ImVec2(p.x + cw - pad - sw, p.y + font * 0.35f), U32(got ? kAccent : kTextDim), score);
     cl->AddText(ImVec2(tx, p.y + font * 0.35f), U32(got ? kText : kTextDim), a.label.c_str());
     const std::string& desc = got ? a.description : a.unachieved_description;
     const char* tag = got ? "Unlocked" : nullptr;
@@ -915,7 +1030,7 @@ void GameMenuDialog::DrawAchievements() {
     cl->AddText(g_text_font, g_text_size, ImVec2(tx, p.y + font * 1.55f), U32(kTextDim, got ? 1.0f : 0.8f), desc.c_str(),
                 nullptr, text_w - tw);
     if (tag)
-      cl->AddText(g_text_font, g_text_size, ImVec2(p.x + cw - pad - TextSize(tag).x, p.y + font * 1.55f), U32(kGreen), tag);
+      cl->AddText(g_text_font, g_text_size, ImVec2(p.x + cw - pad - TextSize(tag).x, p.y + font * 1.55f), U32(kAccent), tag);
   }
   ImGui::EndChild();
 }
@@ -941,19 +1056,22 @@ static const std::string* HelpOf(int tab, const int* rows, const std::vector<Gam
   return nullptr;
 }
 
-// The footer: the chosen row's help (wrapped, room for two lines on every tab so the list does not jump), then the *
-// note (the Settings tab) and the buttons: on one line when they fit side by side, else on two (the console's first
-// test: they overlapped).
+// The footer: the chosen row's help, then the * note (the Settings tab) and the buttons, on one line when they fit
+// side by side, else on two. Its height is the same on every tab (the window's too): the tallest help of any row, and
+// the note's line whether shown or not. Little padding (the user: "get rid of some white space at the bottom").
 float GameMenuDialog::FooterHeight(float width) const {
   const float font = ImGui::GetFontSize();
   const float line = g_text_size * 1.3f;
-  const std::string* help = HelpOf(tab_, row_, settings_, controls_, nullptr);
-  float h = font * 0.6f + std::max(line * 2.0f, help ? TextSize(help->c_str(), width - font * 0.6f).y : 0.0f);
-  const char* keys = tab_ == kAchievements ? kKeysScroll : kKeysList;
-  const bool note = tab_ == kSettings;
-  const bool one_line = !note || TextSize(kNote).x + TextSize(keys).x + font * 1.5f <= width;
-  h += line * (one_line ? 1.0f : 2.0f) + font * 0.35f;
-  return h;
+  float help_h = line;
+  auto taller = [&](const std::vector<Setting>& rows) {
+    for (const Setting& s : rows)
+      if (!s.help.empty())
+        help_h = std::max(help_h, TextSize(s.help.c_str(), width - font * 0.6f).y + g_text_size * 0.3f);
+  };
+  taller(settings_);
+  taller(controls_[0]);
+  const bool one_line = TextSize(kNote).x + TextSize(kKeysList).x + font * 1.5f <= width;
+  return font * 0.55f + help_h + line * (one_line ? 1.0f : 2.0f);
 }
 
 void GameMenuDialog::DrawFooter(float height) {
@@ -962,21 +1080,21 @@ void GameMenuDialog::DrawFooter(float height) {
   const float font = ImGui::GetFontSize();
   const float line = g_text_size * 1.3f;
   const ImVec2 p = ImGui::GetCursorScreenPos();
-  dl->AddLine(ImVec2(p.x - 4.0f, p.y + font * 0.3f), ImVec2(p.x + width + 4.0f, p.y + font * 0.3f), U32(kGreenDim), 2.0f);
+  dl->AddLine(ImVec2(p.x - 4.0f, p.y + font * 0.2f), ImVec2(p.x + width + 4.0f, p.y + font * 0.2f), U32(kAccentDim), 2.0f);
   bool warning = false;
   const std::string* help = HelpOf(tab_, row_, settings_, controls_, &warning);
   if (help && !help->empty())
-    dl->AddText(g_text_font, g_text_size, ImVec2(p.x + font * 0.3f, p.y + font * 0.6f),
+    dl->AddText(g_text_font, g_text_size, ImVec2(p.x + font * 0.3f, p.y + font * 0.45f),
                 U32(warning ? kWarn : kTextDim), help->c_str(), nullptr, width - font * 0.6f);
-  // The * note and the buttons, from the bottom up.
+  // The * note and the buttons, at the bottom.
   const char* keys = tab_ == kAchievements ? kKeysScroll : kKeysList;
   const bool note = tab_ == kSettings;
-  const bool one_line = !note || TextSize(kNote).x + TextSize(keys).x + font * 1.5f <= width;
-  const float keys_y = p.y + height - font * 0.2f - line;
+  const bool one_line = TextSize(kNote).x + TextSize(kKeysList).x + font * 1.5f <= width;
+  const float keys_y = p.y + height - line + (line - g_text_size) * 0.5f;
   dl->AddText(g_text_font, g_text_size, ImVec2(p.x + width - TextSize(keys).x - font * 0.3f, keys_y), U32(kTextDim),
               keys);
   if (note)
-    dl->AddText(g_text_font, g_text_size, ImVec2(p.x + font * 0.3f, one_line ? keys_y : keys_y - line), U32(kGreen),
+    dl->AddText(g_text_font, g_text_size, ImVec2(p.x + font * 0.3f, one_line ? keys_y : keys_y - line), U32(kAccent),
                 kNote);
   ImGui::Dummy(ImVec2(width, height));
 }
