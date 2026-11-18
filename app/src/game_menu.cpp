@@ -2,6 +2,7 @@
 #include "game_menu.h"
 
 #include <algorithm>
+#include <cfloat>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -46,13 +47,27 @@ namespace {
 
 // ---- Fonts ----------------------------------------------------------------------------------------------------------
 
-ImFont* g_font_small = nullptr;  // for a 720-line display
-ImFont* g_font_large = nullptr;  // for a 1080-line one
+ImFont* g_font_small = nullptr;       // for a 720-line display
+ImFont* g_font_large = nullptr;       // for a 1080-line one
+ImFont* g_font_small_text = nullptr;  // their smaller text (help, descriptions, the footer): baked at its own size, as
+ImFont* g_font_large_text = nullptr;  // the Switch's drawer has a fixed atlas (another size would be scaled, blurred)
 
-ImFont* MenuFont(const ImGuiIO& io) {
-  ImFont* want = io.DisplaySize.y > 900.0f ? g_font_large : g_font_small;
-  // Only a font of this context's atlas (the PC draws the app's dialogs with Renut's own ImGui context).
-  return want && io.Fonts && io.Fonts->Fonts.contains(want) ? want : nullptr;
+// Only a font of this context's atlas (the PC draws the app's dialogs with Renut's own ImGui context).
+ImFont* InAtlas(const ImGuiIO& io, ImFont* font) {
+  return font && io.Fonts && io.Fonts->Fonts.contains(font) ? font : nullptr;
+}
+ImFont* MenuFont(const ImGuiIO& io) { return InAtlas(io, io.DisplaySize.y > 900.0f ? g_font_large : g_font_small); }
+
+// The smaller text's font and size this frame (OnDraw sets them): its own font, else the current one at 0.8.
+ImFont* g_text_font = nullptr;
+float g_text_size = 0.0f;
+void PickTextFont(const ImGuiIO& io) {
+  ImFont* own = InAtlas(io, io.DisplaySize.y > 900.0f ? g_font_large_text : g_font_small_text);
+  g_text_font = own ? own : ImGui::GetFont();
+  g_text_size = own ? own->LegacySize : ImGui::GetFontSize() * 0.8f;
+}
+ImVec2 TextSize(const char* text, float wrap = 0.0f) {
+  return g_text_font->CalcTextSizeA(g_text_size, FLT_MAX, wrap, text);
 }
 
 // ---- Colours: green and black ---------------------------------------------------------------------------------------
@@ -361,6 +376,8 @@ void AddGameMenuFonts(ImFontAtlas* atlas) {
   config.OversampleV = 1;
   g_font_small = atlas->AddFontFromMemoryTTF(font.address, int(font.size), 26.0f, &config, kRanges);
   g_font_large = atlas->AddFontFromMemoryTTF(font.address, int(font.size), 39.0f, &config, kRanges);
+  g_font_small_text = atlas->AddFontFromMemoryTTF(font.address, int(font.size), 20.0f, &config, kRanges);
+  g_font_large_text = atlas->AddFontFromMemoryTTF(font.address, int(font.size), 30.0f, &config, kRanges);
 #else
   (void)atlas;
 #endif
@@ -599,6 +616,7 @@ void GameMenuDialog::OnDraw(ImGuiIO& io) {
     if (!font)
       ImGui::SetWindowFontScale(scale);
     row_height_ = ImGui::GetFontSize() * 1.9f;
+    PickTextFont(io);
     const float width = ImGui::GetContentRegionAvail().x;
     DrawTabs(width);
     // The list fills what the footer leaves.
@@ -745,11 +763,9 @@ void GameMenuDialog::DrawSettingsRows(std::vector<Setting>& rows, bool controls,
     }
     if (pending) {
       const char* tag = "next start";
-      const ImVec2 tsz = ImGui::CalcTextSize(tag);
-      const float tx = std::min(vx + vs.x + font * 0.6f, p.x + width - tsz.x * 0.62f - pad);
-      ImGui::PushFont(nullptr, font * 0.62f);
-      dl->AddText(ImGui::GetFont(), font * 0.62f, ImVec2(tx, ty + font * 0.3f), U32(kPending, 0.85f), tag);
-      ImGui::PopFont();
+      const ImVec2 tsz = TextSize(tag);
+      const float tx = std::min(vx + vs.x + font * 0.6f, p.x + width - tsz.x - pad);
+      dl->AddText(g_text_font, g_text_size, ImVec2(tx, ty + (font - g_text_size) * 0.7f), U32(kPending, 0.85f), tag);
     }
   }
   (void)player;
@@ -841,14 +857,12 @@ void GameMenuDialog::DrawAchievements() {
     cl->AddText(ImVec2(p.x + cw - pad - sw, p.y + font * 0.35f), U32(got ? kGreen : kTextDim), score);
     cl->AddText(ImVec2(tx, p.y + font * 0.35f), U32(got ? kText : kTextDim), a.label.c_str());
     const std::string& desc = got ? a.description : a.unachieved_description;
-    const float small = font * 0.78f;
-    cl->AddText(ImGui::GetFont(), small, ImVec2(tx, p.y + font * 1.55f), U32(got ? kTextDim : kTextDim, got ? 1.0f : 0.8f),
-                desc.c_str(), nullptr, text_w);
-    if (got) {
-      const char* tag = "Unlocked";
-      const float tw = ImGui::GetFont()->CalcTextSizeA(small, FLT_MAX, 0.0f, tag).x;
-      cl->AddText(ImGui::GetFont(), small, ImVec2(p.x + cw - pad - tw, p.y + font * 1.55f), U32(kGreen), tag);
-    }
+    const char* tag = got ? "Unlocked" : nullptr;
+    const float tw = tag ? TextSize(tag).x + pad : 0.0f;
+    cl->AddText(g_text_font, g_text_size, ImVec2(tx, p.y + font * 1.55f), U32(kTextDim, got ? 1.0f : 0.8f), desc.c_str(),
+                nullptr, text_w - tw);
+    if (tag)
+      cl->AddText(g_text_font, g_text_size, ImVec2(p.x + cw - pad - TextSize(tag).x, p.y + font * 1.55f), U32(kGreen), tag);
   }
   ImGui::EndChild();
 }
@@ -865,19 +879,18 @@ void GameMenuDialog::DrawFooter() {
     help = settings_[size_t(row_[tab_])].help;
   else if (tab_ >= kP1 && row_[tab_] < int(controls_[tab_ - kP1].size()))
     help = controls_[tab_ - kP1][size_t(row_[tab_])].help;
-  const float small = font * 0.8f;
   if (!help.empty())
-    dl->AddText(ImGui::GetFont(), small, ImVec2(p.x + font * 0.3f, p.y + font * 0.65f), U32(kTextDim), help.c_str(),
+    dl->AddText(g_text_font, g_text_size, ImVec2(p.x + font * 0.3f, p.y + font * 0.65f), U32(kTextDim), help.c_str(),
                 nullptr, width - font * 0.6f);
   // The note for the * settings, and the buttons.
   const float y = p.y + font * 2.15f;
   if (tab_ == kSettings)
-    dl->AddText(ImGui::GetFont(), small, ImVec2(p.x + font * 0.3f, y), U32(kGreen),
+    dl->AddText(g_text_font, g_text_size, ImVec2(p.x + font * 0.3f, y), U32(kGreen),
                 "* Must restart the game to change these settings");
   const char* keys = tab_ == kAchievements ? "Up/Down: scroll    L/R: tabs    +: close"
                                            : "Up/Down: choose    Left/Right: change    L/R: tabs    +: close";
-  const float kw = ImGui::GetFont()->CalcTextSizeA(small, FLT_MAX, 0.0f, keys).x;
-  dl->AddText(ImGui::GetFont(), small, ImVec2(p.x + width - kw - font * 0.3f, y), U32(kTextDim), keys);
+  const float kw = TextSize(keys).x;
+  dl->AddText(g_text_font, g_text_size, ImVec2(p.x + width - kw - font * 0.3f, y), U32(kTextDim), keys);
   ImGui::Dummy(ImVec2(width, font * 3.0f));
 }
 
