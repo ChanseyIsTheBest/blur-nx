@@ -106,6 +106,18 @@ REXCVAR_DEFINE_BOOL(thread_event_address_wait, true, "Threading",
                     "directly, a manual-reset Set every blocked thread (the 360's semantics). false = the condition "
                     "variable, as before")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(thread_semaphore_address_wait, false, "Threading",
+                    "blur-nx (the Renut audit's #10; the Switch, with thread_event_address_wait): a thread blocked on a "
+                    "semaphore sleeps on an address as an event's does (port 65), and a release hands each unit to a "
+                    "blocked thread first, so it wakes with it and takes no mutex before it runs. false: the condition "
+                    "variable, as before (an A/B first)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_INT32(thread_event_spin, 0, "Threading",
+                     "blur-nx (the Renut audit's #13; the Switch, with thread_event_address_wait): a wait on an "
+                     "unsignalled event watches it this many CPU yields (about 10 ns each) before it blocks, so a Set "
+                     "soon after costs no sleep and wake. 0: block at once, as before (an A/B: it trades CPU time)")
+    .range(0, 100000)
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(thread_signal_skip_idle, true, "Threading",
                     "Setting an event or releasing a semaphore that no thread is blocked on does not call the "
                     "condition variable's notify (on Horizon always a syscall, svcSignalProcessWideKey, even with "
@@ -855,6 +867,18 @@ class PosixCondition<Event> : public PosixConditionBase {
     if (!AddressWaitOn()) {
       return PosixConditionBase::Wait(timeout, interrupt);
     }
+    // blur-nx (2026-11-17, the Renut audit's #13, thread_event_spin): an unsignalled event is watched this many CPU
+    // yields before the wait takes the mutex and blocks: a Set within that time costs the waiter no sleep and wake
+    // (the job threads of Blur's race are woken at each job the Game Master posts). The result is the same as without
+    // it: the locked path below takes the signal as before. Read without the mutex (a byte, single-copy atomic).
+    static const int32_t spin = REXCVAR_GET(thread_event_spin);
+    if (spin > 0 && timeout.count() != 0) {
+      for (int32_t i = 0; i < spin && !__atomic_load_n(&signal_, __ATOMIC_ACQUIRE); ++i) {
+#if defined(__aarch64__)
+        asm volatile("yield" ::: "memory");
+#endif
+      }
+    }
     const bool infinite = timeout == std::chrono::milliseconds::max();
     const auto deadline = infinite ? std::chrono::steady_clock::time_point::max()
                                    : std::chrono::steady_clock::now() + timeout;
@@ -939,11 +963,45 @@ template <>
 class PosixCondition<Semaphore> : public PosixConditionBase {
  public:
   PosixCondition(uint32_t initial_count, uint32_t maximum_count)
-      : count_(initial_count), maximum_count_(maximum_count) {}
+      : count_(initial_count), maximum_count_(maximum_count) {
+#if defined(__SWITCH__)
+    has_count_ = initial_count > 0;  // blur-nx (2026-11-17, audit #10)
+#endif
+  }
 
   bool Signal() override { return Release(1, nullptr); }
 
   bool Release(uint32_t release_count, int* out_previous_count) {
+#if defined(__SWITCH__)
+    // blur-nx (2026-11-17, the Renut audit's #10, thread_semaphore_address_wait): port 65's address wait for
+    // semaphores. Each unit released goes to a thread blocked in Wait if one is not yet released (a grant: the count
+    // stays), else to the count, so a blocked thread is woken with its unit and takes no mutex before it runs.
+    if (AddressWaitOn()) {
+      int32_t wake = 0;
+      {
+        auto lock = std::unique_lock<std::mutex>(mutex_);
+        if (release_count > maximum_count_ - count_) {
+          return false;
+        }
+        if (out_previous_count) {
+          *out_previous_count = count_;
+        }
+        for (uint32_t i = 0; i < release_count; ++i) {
+          bool to_count = false;
+          wake += address_.SetLocked(false, to_count);
+          if (to_count) ++count_;
+        }
+        has_count_ = count_ > 0;
+      }
+      if (wake) {
+        address_.Wake(wake);
+      } else {
+        REX_SYS_COUNT(rex::syscount::kSignalIdle, 1);
+      }
+      NotifyMulti();
+      return true;
+    }
+#endif
     auto lock = std::unique_lock<std::mutex>(mutex_);
     if (release_count > maximum_count_ - count_) {
       return false;
@@ -959,13 +1017,95 @@ class PosixCondition<Semaphore> : public PosixConditionBase {
     return true;
   }
 
+#if defined(__SWITCH__)
+  // blur-nx (2026-11-17, audit #10): the blocked part on address_ (address_event_core.h), as the event's.
+  WaitResult Wait(std::chrono::milliseconds timeout, const std::atomic<bool>* interrupt = nullptr) override {
+    if (!AddressWaitOn()) {
+      return PosixConditionBase::Wait(timeout, interrupt);
+    }
+    const bool infinite = timeout == std::chrono::milliseconds::max();
+    const auto deadline = infinite ? std::chrono::steady_clock::time_point::max()
+                                   : std::chrono::steady_clock::now() + timeout;
+    std::unique_lock<std::mutex> lock(mutex_, std::defer_lock);
+    if (infinite) {
+      lock.lock();
+    } else {
+      while (!lock.try_lock()) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
+          return WaitResult::kTimeout;
+        }
+        const auto remaining = std::chrono::ceil<std::chrono::microseconds>(deadline - now);
+        std::this_thread::sleep_for(std::min(remaining, std::chrono::microseconds(100)));
+      }
+    }
+    if (count_ > 0) {
+      post_execution();
+      return WaitResult::kSuccess;
+    }
+    if (interrupt && interrupt->load(std::memory_order_acquire)) {
+      return WaitResult::kTimeout;  // interrupted by a queued user callback
+    }
+    if (!infinite && std::chrono::steady_clock::now() >= deadline) {
+      return WaitResult::kTimeout;
+    }
+    constexpr int64_t kSafetyNs = 100'000'000;  // a blocked thread re-checks every 100 ms unwoken (a net)
+    switch (address_.Block(lock, has_count_, interrupt, infinite, deadline, kSafetyNs)) {
+      case detail::AddressWaitResult::kSignaled:
+        post_execution();
+        return WaitResult::kSuccess;
+      case detail::AddressWaitResult::kGranted:
+        return WaitResult::kSuccess;
+      default:
+        return WaitResult::kTimeout;
+    }
+  }
+
+  void InterruptWaiters() override {
+    if (!AddressWaitOn()) {
+      PosixConditionBase::InterruptWaiters();
+      return;
+    }
+    int32_t wake;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      wake = address_.InterruptLocked();
+    }
+    if (wake) {
+      address_.Wake(wake);
+    }
+  }
+#endif
+
  private:
   inline bool signaled() const override { return count_ > 0; }
   inline void post_execution() override {
     count_--;
+#if defined(__SWITCH__)
+    has_count_ = count_ > 0;  // blur-nx (2026-11-17, audit #10)
+    if (AddressWaitOn()) {
+      return;  // a blocked thread was given its unit at the release (a grant); none waits on the count
+    }
+#endif
     // Called by the waiter under mutex_ (it has left the count already): other waiters re-check the count.
     WakeWaiters(cond_waiters_);
   }
+#if defined(__SWITCH__)
+  static bool AddressWaitOn() {
+    static const bool on = REXCVAR_GET(thread_event_address_wait) && REXCVAR_GET(thread_semaphore_address_wait);
+    return on;
+  }
+  struct HorizonArbiter {  // threading_switch.cpp
+    static bool WaitIfEqual(std::atomic<uint32_t>* word, uint32_t value, int64_t ns) {
+      return RexSwitchWaitIfEqual(reinterpret_cast<volatile uint32_t*>(word), value, ns);
+    }
+    static void Wake(std::atomic<uint32_t>* word, int32_t count) {
+      RexSwitchWakeAddress(reinterpret_cast<volatile uint32_t*>(word), count);
+    }
+  };
+  detail::AddressEventCore<HorizonArbiter> address_;
+  bool has_count_ = false;  // count_ > 0, for address_.Block (guarded by mutex_)
+#endif
   uint32_t count_;
   const uint32_t maximum_count_;
 };

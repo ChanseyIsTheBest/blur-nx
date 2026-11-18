@@ -43,6 +43,7 @@
 #include <atomic>
 #include <cinttypes>
 #include <cstdio>
+#include <cstdlib>  // blur-nx (2026-11-16): strtol (switch_profile_stacks_ms)
 #include <cstring>
 #include <string>
 #include <string_view>
@@ -240,7 +241,13 @@ inline Calls& CallsOf(unsigned id) {
   return g_call_shards[(tls >> 9) % kCallShards].calls[id];
 }
 
+// blur-nx (2026-11-17, the Renut audit's #29): the wrapped libnx calls' counters (the "libnx per second" line), off
+// with the title's switch_perf_count_calls = false (read by ProfilerMain after its warm-up; counted until then): a
+// shipping config that reads no reports skips a clock read and two atomics per kick, mapping, cache clean and yield.
+std::atomic<bool> g_count_calls{true};
+
 inline void Note(unsigned id, u64 from, u64 bytes = 0) {
+  if (!g_count_calls.load(std::memory_order_relaxed)) return;
   const u64 ticks = armGetSystemTick() - from;
   Calls& l = CallsOf(id);
   l.n.fetch_add(1, std::memory_order_relaxed);
@@ -568,8 +575,10 @@ void Report(u64 elapsed_ticks, u64 tick_freq, u64 counters_last[kCounterCount],
   std::fprintf(f,
                "     audio: %.0f client blocks mixed, %.0f requests without data, "
                "%.0f/%.0f audout buffers with non-zero PCM, %.0f saturated samples (above 1.0 before clipping), "
-               "%.0f buffers with a peak of 0.98 or more, maximum peak %.3f | console in %s mode\n",
+               "%.0f buffers with a peak of 0.98 or more, maximum peak %.3f | audout played %.0f samples (%.0f Hz), "
+               "%.0f wakes with every buffer released | console in %s mode\n",
                delta(24), delta(25), delta(26), delta(27), delta(21), delta(22), double(audio_peak) / 10000.0,
+               delta(57), delta(57) / seconds, delta(58),
                rex::ui::switch_saltynx::BaseMode(appletGetOperationMode() == AppletOperationMode_Console)
                    ? "docked"
                    : "handheld");
@@ -1109,6 +1118,11 @@ void ProfilerMain(void*) {
     overlay.Step(armGetSystemTick(), tick_freq, false);
   }
 
+  // blur-nx (2026-11-17, audit #29): switch_perf_count_calls (the title's cvar; true when it has none).
+  {
+    const std::string value = rex::cvar::GetFlagByName("switch_perf_count_calls");
+    if (value == "false" || value == "0") g_count_calls.store(false, std::memory_order_relaxed);
+  }
   // Invasive sampling is only enabled explicitly, for diagnostics.
   // The normal mode keeps FPS, CPU and counters, without stopping the game.
   bool sample_stacks = false;
@@ -1122,6 +1136,16 @@ void ProfilerMain(void*) {
     const std::string value = rex::cvar::GetFlagByName("switch_profile_stacks");
     if (value == "true" || value == "1") sample_stacks = true;
   }
+  // blur-nx (2026-11-16, the 15 ms batch): the interval between two stack samples, from the title's cvar
+  // switch_profile_stacks_ms (1 when it has none). Each sample pauses one game thread (svcSetThreadActivity), reads its
+  // context and stack and resumes it, from a thread above every game thread: at 1 ms that is ~1,000 pauses and ~5,000
+  // system calls a second, which no report counts (the sampler leaves itself out).
+  u64 sample_interval_ns = kSampleIntervalNs;
+  {
+    const std::string value = rex::cvar::GetFlagByName("switch_profile_stacks_ms");
+    const long ms = value.empty() ? 0 : std::strtol(value.c_str(), nullptr, 10);
+    if (ms >= 1 && ms <= 100) sample_interval_ns = u64(ms) * 1000000ULL;
+  }
 
   u64 counters_last[kCounterCount]{};
   for (unsigned i = 0; i < kCounterCount; ++i) {
@@ -1130,7 +1154,8 @@ void ProfilerMain(void*) {
   if (FILE* f = std::fopen(ReportPath().c_str(), "w")) {
     std::fprintf(f, "image 0x%016" PRIx64 ", code up to 0x%016" PRIx64 "\n\n", g_base,
                  g_text_hi);
-    std::fprintf(f, "Stack sampling: %s\n", sample_stacks ? "active (1 ms)" : "disabled");
+    std::fprintf(f, "Stack sampling: %s (%u ms)\n", sample_stacks ? "active" : "disabled",
+                 unsigned(sample_interval_ns / 1000000ULL));
     const FpcrCost fpcr = MeasureFpcrCost(tick_freq);
     std::fprintf(f,
                  "FPCR on this CPU (per access, loop overhead taken off): read %.1f ns, write of the same value "
@@ -1153,7 +1178,7 @@ void ProfilerMain(void*) {
   size_t rr = 0;
   size_t mode_index = 0;
   while (true) {
-    __real_svcSleepThread(sample_stacks ? kSampleIntervalNs : kPassiveIntervalNs);
+    __real_svcSleepThread(sample_stacks ? sample_interval_ns : kPassiveIntervalNs);
 
     for (size_t tries = 0; sample_stacks && tries < kMaxThreads; ++tries) {
       const size_t idx = rr;
@@ -1307,10 +1332,16 @@ Result __wrap_nvFenceWait(NvFence* f, s32 timeout_us) {
   return rc;
 }
 
+// Port 167 (from fnxf_xiii): plume_deko3d_commands.cpp, the channel's report of a failed kickoff (weak: a build
+// without plume's deko3d back end has none).
+extern "C" __attribute__((weak)) void RexSwitchGpuKickoffFailed(NvGpuChannel* channel, uint32_t rc);
+
 Result __wrap_nvGpuChannelKickoff(NvGpuChannel* c) {
   const u64 from = armGetSystemTick();
   const Result rc = __real_nvGpuChannelKickoff(c);
   Note(kKickoff, from);
+  if (R_FAILED(rc) && RexSwitchGpuKickoffFailed)
+    RexSwitchGpuKickoffFailed(c, rc);
   return rc;
 }
 
@@ -1494,7 +1525,7 @@ Result __wrap_nwindowQueueBuffer(NWindow* nw, s32 slot, const NvMultiFence* fenc
   if (request != 0 && nw != nullptr && nw->swap_interval != request) {
     nwindowSetSwapInterval(nw, request);
   }
-  // Port 148 (banjo_async_present): handed to the helper when it runs.
+  // Port 145 (banjo_async_present): handed to the helper when it runs.
   if (AsyncPresentOn() && AsyncPresentQueue(nw, slot, fence))
     return 0;
   const Result rc = __real_nwindowQueueBuffer(nw, slot, fence);
@@ -1531,6 +1562,10 @@ void AddOwn(std::atomic<u64>& counter, u64 value) {  // one writer: a load and a
 }
 
 void __wrap_svcSleepThread(s64 nano) {
+  if (!g_count_calls.load(std::memory_order_relaxed)) {  // blur-nx (2026-11-17, audit #29)
+    __real_svcSleepThread(nano);
+    return;
+  }
   const u64 from = armGetSystemTick();
   __real_svcSleepThread(nano);
   Note(nano == 0 ? kSleep0 : nano < 0 ? kSleepYield : nano <= 1000000 ? kSleepShort : kSleepLong, from);

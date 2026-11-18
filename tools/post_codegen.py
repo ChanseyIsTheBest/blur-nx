@@ -119,6 +119,9 @@ def main():
     # again. --redo writes only the files that change, so the build does not recompile the others.
     run(tool('direct_calls.py'), '--redo', '--gen', gen)
     run(tool('guest_cas.py'), '--gen', gen)
+    # blur-nx (2026-11-16, the 15 ms batch, #164 / #165): sync, lwsync and eieio with the PowerPC's orderings (lwsync
+    # `dmb ishld` + `dmb ishst`, eieio `dmb ishst` on AArch64; g_rex_guest_fence_full puts the full fence back).
+    run(tool('guest_fences.py'), '--gen', gen)
     run(tool('flush_mode_flow.py'), '--redo', '--gen', gen, '--image', IMAGE, '--tomls', *HOOK_TOMLS)
     run(tool('vec_byteswap.py'), '--gen', gen)
     run(tool('pch_neon_shuffles.py'), pch)
@@ -194,7 +197,7 @@ def main():
     # plain ones: 10,239 sites were left in the integer form). After ro_constants_cfg.py and dead_ctx_defs.py, before
     # the copies (so they take the same forms) and store_cards.py (which marks the new stores' cards). renut-ultimate
     # (2026-11-13): after port 121's stack_forward.py, which then sees the stores as port 121 measured them.
-    run(tool('float_loads.py'), '--gen', gen, '--any-mode')
+    run(tool('float_loads.py'), '--gen', gen, '--any-mode', '--doubles')  # #231: lfd too (2026-11-17)
     # blur-nx (2026-11-13, docs/cpu-near-exact-50-1113.md, the user's choice of near-exact ideas): the forms a near-exact
     # switch changes as helpers whose default is the generator's expression (#42: vmaxfp / vminfp as rex::ppc::VMaxFp /
     # VMinFp, sdk/include/rex/ppc/diet_ops.h). Before the copies, so they take the same forms.
@@ -256,6 +259,9 @@ def main():
     # blur-nx (2026-11-11, CPU batch 1, docs/vector-store-ideas.md VS-05): a 128-byte dcbzl as two DC ZVA (no read of
     # the line it zeroes). After store_cards.py, which finds the dcbz by its memset to put the card in front.
     run(tool('vec_dcbz_zva.py'), '--gen', gen)
+    # blur-nx (2026-11-16, the 15 ms batch, CG-26): the files that write the guest FPSCR keep -ftrapping-math when the
+    # rest gets -fno-trapping-math (a port's CMake option: Blur's BLUR_NO_TRAPPING_MATH); last, on the final text.
+    run(tool('fp_env_files.py'), '--gen', gen)
     if scratch:
         print(f'post_codegen: optimised codegen steps done on {gen}')
         return

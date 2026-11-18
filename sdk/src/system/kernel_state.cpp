@@ -45,6 +45,18 @@
 #include <rex/system/xtimer.h>
 #include <rex/sys_counters.h>
 
+// blur-nx (2026-11-11): which notification listeners of the system area get the startup notifications
+// (KernelState::RegisterNotifyListener).
+REXCVAR_DEFINE_STRING(notify_startup_listeners, "first", "Kernel",
+                      "Which XNotify listeners of the system area get the startup notifications (XN_SYS_UI, "
+                      "SIGNINCHANGED, INPUTDEVICESCHANGED, INPUTDEVICECONFIGCHANGED): first = only the first made "
+                      "(Xenia's rule; a race when a game makes several on different threads: Blur's boot then waits "
+                      "forever under load), all = every one once when it is made, second = only the second (a test "
+                      "that reproduces the bad order)")
+    .allowed({"first", "all", "second"})
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+
 // renut-ultimate (2026-11-16, port 143; tw2de_nx's kernel fixes, off by default: the user's word, "make sure its off by
 // default"; the speed-up, the deferred delay of 0 with the event reset it needs, ON: "port the speed ups as on by
 // default"). rex/ppc/function.h g_u64_args_whole.
@@ -315,7 +327,7 @@ void KernelState::LoadAchievementsData() {
   const util::XdbfGameData db = title_xdbf();
   if (db.is_valid()) {
     const XLanguage language =
-        db.GetExistingLanguage(static_cast<XLanguage>(REXCVAR_GET(user_language)));
+        db.GetExistingLanguage(static_cast<XLanguage>(rex::system::EffectiveLanguage()));
     for (const auto& entry : db.GetAchievements()) {
       AchievementInfo info;
       info.id = entry.id;
@@ -1141,7 +1153,22 @@ void KernelState::RegisterNotifyListener(XNotifyListener* listener) {
   // Games seem to expect a few notifications on startup, only for the first
   // listener.
   // https://cs.rin.ru/forum/viewtopic.php?f=38&t=60668&hilit=resident+evil+5&start=375
-  if (!has_notified_startup_ && listener->mask() & 0x00000001) {
+  // blur-nx (2026-11-11): "the first" is a race when a game makes its system listeners on several threads. Blur makes
+  // two (mask 0x83 on one thread, at 5.6 s; mask 0x05 on another, at 12.4 s, in a PC run): the first gets the set and
+  // the game goes on to its save; under load (the PC busy, the guard's slow verify runs) the second thread can come
+  // first, the 0x83 listener never hears XN_SYS_SIGNINCHANGED and the boot's loading screen waits forever (4 of 8
+  // guard runs on 2026-11-11, before any XMA kick or save access). notify_startup_listeners: "first" as before, "all"
+  // (every listener of the system area gets the set once, when it is made), "second" (a test: only the second, which
+  // reproduces the bad order on demand).
+  if (!(listener->mask() & 0x00000001)) return;
+  static const std::string mode = REXCVAR_GET(notify_startup_listeners);
+  static uint32_t system_listeners = 0;  // counted under the global lock
+  ++system_listeners;
+  const bool give = mode == "all" ? true : mode == "second" ? system_listeners == 2 : !has_notified_startup_;
+  REXSYS_INFO("notification listener of the system area #{} (mask {:#x}): {} (notify_startup_listeners {})",
+              system_listeners, listener->mask(), give ? "given the startup notifications" : "no startup notifications",
+              mode);
+  if (give) {
     has_notified_startup_ = true;
     // XN_SYS_UI (on, off)
     listener->EnqueueNotification(0x00000009, 1);

@@ -190,6 +190,14 @@ INDEX_FORMAT = 12  # raise when summarise() changes: the cached index is rebuilt
 # leaves it (sub_82507988, sub_825087A0; harmless by the calling convention, but the guard turns them off). Not
 # verifiable as it stands: parked.
 PROMOTED_MEMBERS = os.environ.get('BLUR_LOCALIZE_PROMOTED_MEMBERS', '0') == '1'
+# blur-nx (2026-11-17, #232): the non-volatile registers of the Xbox 360's PowerPC ABI (r14-r31, f14-f31, the VMX
+# v14-v31 and VMX128 v64-v127, CR fields 2-4): a real call returns them as it found them (call_text).
+# renut-ultimate (2026-11-17, port 149): OFF in the base, as every near-exact switch is (port 140): a callee that breaks
+# the ABI (hand-written assembly) is the one case it changes. BLUR_LOCALIZE_ABI_TRUST=1 in the environment turns it on.
+ABI_TRUST = os.environ.get('BLUR_LOCALIZE_ABI_TRUST', '0') == '1'
+NONVOLATILE = frozenset(['r%d' % i for i in range(14, 32)] + ['f%d' % i for i in range(14, 32)] +
+                        ['v%d' % i for i in list(range(14, 32)) + list(range(64, 128))] + ['cr2', 'cr3', 'cr4'])
+ABI_SKIPPED = [0, 0]  # (real calls with a reload left out, reloads left out)
 PROMOTED_SITE = re.compile(r'^\tif \(REX_PROMOTED_IS\(')
 
 REG = re.compile(r'\bctx\.(r\d+|f\d+|v\d+|cr\d|ctr|xer|reserved)\b')
@@ -213,7 +221,8 @@ KNOWN = re.compile(r'^(?:REX_\w+|simde_\w+|__builtin_\w+|rex::ppc::\w+|rex::ppc:
 # Forms that make a function unfit for a copy and for a closure (see the docstring).
 SPECIAL = re.compile(r'\b(REX_GUEST_CAS|reserved|REX_MM_(?:STORE|LOAD)_\w+|ppc_setjmp|ppc_longjmp|REX_ENTER_GLOBAL_LOCK|'
                      r'REX_LEAVE_GLOBAL_LOCK|REX_CHECK_GLOBAL_LOCK|REX_QUERY_TIMEBASE|REX_UNIMPLEMENTED|'
-                     r'std::atomic_thread_fence|storeFromGuest|loadFromHost|log2f)\b')
+                     r'std::atomic_thread_fence|REX_GUEST_SYNC|REX_GUEST_LWSYNC|REX_GUEST_EIEIO|storeFromGuest|'
+                     r'loadFromHost|log2f)\b')
 # Guest memory through a raw host address. Loads (the vector loads) and the two store forms the tool logs.
 # banjo-nx (2026-10-23): the store-card form of a vector store too (package 34: REX_CARD(ea), then the store, one comma
 # expression); the guard's Note goes in front of the whole expression, so the card and the store run together.
@@ -230,12 +239,14 @@ RAW_LOAD = re.compile(r'^\tsimde_mm_store_si128\(\(simde__m128i\*\)\w+(?:\.\w+)+
 # logged run ends before the first one (the call is then not compared, as for a call outside the copy), and in the
 # running form Open() is a constant false. log2f is a pure function. SASRT_LOCALIZE_ATOMICS=0: refused, as before.
 ATOMICS = os.environ.get('SASRT_LOCALIZE_ATOMICS', '1') != '0'
-ATOMIC_SPECIAL = {'reserved', 'REX_GUEST_CAS', 'std::atomic_thread_fence', 'log2f'}
+# blur-nx (2026-11-16, tools/guest_fences.py): the guest fences as macros with the PowerPC orderings, the same rules.
+ATOMIC_SPECIAL = {'reserved', 'REX_GUEST_CAS', 'std::atomic_thread_fence', 'REX_GUEST_SYNC', 'REX_GUEST_LWSYNC',
+                  'REX_GUEST_EIEIO', 'log2f'}
 ATOMIC_HOST = {'std::atomic_thread_fence', 'log2f'}
 ATOMIC_LOAD = re.compile(r'^\t+reserved\.u(?:32|64) = \*\(uint(?:32|64)_t\*\)REX_RAW_ADDR\(ea\);$')
 ATOMIC_CAS = re.compile(r'^\t+[\w.]+\.eq = REX_GUEST_CAS(?:_C)?\((?:ea, )?reinterpret_cast<uint(?:32|64)_t\*>\(REX_RAW_ADDR\(ea\)\), '
                         r'reserved\.s(?:32|64), __builtin_bswap(?:32|64)\([\w.]+\.s(?:32|64)\)\);$')
-ATOMIC_FENCE = re.compile(r'^\t+std::atomic_thread_fence\(std::memory_order_\w+\);$')
+ATOMIC_FENCE = re.compile(r'^\t+(?:std::atomic_thread_fence\(std::memory_order_\w+\)|REX_GUEST_(?:SYNC|LWSYNC|EIEIO)\(\));$')
 
 
 # sasrt-nx (2026-11-11, port 74; its idea 39): store-card runs. Every guest store outside the stack marks its page's card
@@ -602,17 +613,63 @@ def hand_entries(path=HAND):
             continue
         parts = line.split()
         name = parts[0] if not re.fullmatch(r'[0-9A-Fa-f]{8}', parts[0]) else 'sub_' + parts[0].upper()
-        entry = {'id': identifier(name), 'exact': set()}
+        entry = {'id': identifier(name), 'exact': set(), 'calls': []}
         for part in parts[1:]:
             key, _, value = part.partition('=')
             if key == 'exact':
                 entry['exact'] = set(value.split(','))
             elif key == 'id':
                 entry['id'] = value
+            elif key == 'inexact':
+                # blur-nx (2026-11-16): an inexact native (audio) declines while the guard runs, so the guard compares
+                # the exact copy: it adds nothing to the hook's skip set.
+                entry['inexact'] = True
+            elif key == 'calls':
+                # blur-nx (2026-11-16, the 15 ms batch): a native that calls guest functions (see calls_struct).
+                entry['calls'] = ['sub_' + c.upper() if re.fullmatch(r'[0-9A-Fa-f]{8}', c) else c
+                                  for c in value.split(',') if c]
             else:
                 sys.exit(f'localize_native: hand.txt: {part!r} in the line of {name}')
         out[name] = entry
     return out
+
+
+def native_call(entry):
+    """The call of a hand-written native: `::banjo::hand::n_<id>::Native` with, for one that calls guest functions
+    (hand.txt calls=), the header's struct of those calls as its first template argument."""
+    if entry.get('calls'):
+        return '::banjo::hand::n_%s::Native<Calls_%s>' % (entry['id'], entry['id'])
+    return '::banjo::hand::n_%s::Native' % entry['id']
+
+
+def calls_struct(entry, member_set, externs, hand):
+    """blur-nx (2026-11-16, the 15 ms batch): the guest calls of a hand-written native (hand.txt calls=), for one copy
+    header. A native that calls guest functions gets this struct as its template argument C and calls C::sub_X(ctx,
+    base, s) with the callee's arguments in ctx, as the guest code would; then `if (s.Stopped()) return true;`.
+      - A callee in this header's closure runs as its copy f_sub_X (any form: the guard's logged run follows it, its
+        stores recorded).
+      - Any other callee is a real call of the generated function (the in-place copy on the Switch); in the guard's
+        logged forms Open() stops the run there (the call is then not compared), as for the copies' own real calls.
+    The native hands over registers through ctx itself (it holds none of the guest's), and sets ctx.r1 to the frame its
+    original allocates, so the callees' frames land where they would."""
+    lines = ['struct Calls_%s {' % entry['id']]
+    for c in entry['calls']:
+        lines.append('  template <class S>')
+        if c in member_set and c in hand:
+            # A callee with a native of its own (the node loop's child mixers: itself): the native first, as at the
+            # copies' own call sites.
+            lines.append('  [[gnu::always_inline]] static inline void %s(PPCContext& __restrict ctx, uint8_t* base, '
+                         'S& s) { if (!%s(ctx, base, s)) f_%s(ctx, base, s); }' % (c, native_call(hand[c]), c))
+        elif c in member_set:
+            lines.append('  [[gnu::always_inline]] static inline void %s(PPCContext& __restrict ctx, uint8_t* base, '
+                         'S& s) { f_%s(ctx, base, s); }' % (c, c))
+        else:
+            externs.add(c)
+            # The generated function by its global name: inside the struct the bare name is the member itself.
+            lines.append('  [[gnu::always_inline]] static inline void %s(PPCContext& __restrict ctx, uint8_t* base, '
+                         'S& s) { if (s.Open()) return; ::%s(ctx, base); }' % (c, c))
+    lines.append('};')
+    return lines
 
 
 def skip_literal(regs):
@@ -1182,6 +1239,28 @@ def localize(index, hooks, reach, root, what, opts, out_dir, quiet=False, hand=N
             return {'r3', 'r4'}, set(), False  # the trap helper reads two registers and writes none
         return ALL, ALL, False
 
+    sync_memo = {}
+
+    def call_syncs(name):
+        """blur-nx (2026-11-16, CG-11): can a call of this function (or anything under it) synchronise with another
+        thread? True when unsure (a cycle while it is being decided, a function outside the index)."""
+        b = base_name(name) or name
+        if b in sync_memo:
+            return sync_memo[b]
+        sync_memo[b] = True
+        f = index.funcs.get(b)
+        if f is None or f['unknown'] or hooks.replaced(b) or name.startswith('__imp__') or (hand and b in hand):
+            return True
+        if any(s.startswith('host function') or 'setjmp' in s or 'longjmp' in s for s in f['special']):
+            return True
+        for _, l in index.body(b):
+            if ATOMIC_LOAD.match(l) or ATOMIC_CAS.match(l) or ATOMIC_FENCE.match(l) or 'storeFromGuest' in l or \
+                    '__imp__' in l or 'REX_CALL_INDIRECT' in l or 'ppc_trap(' in l:
+                return True
+        result = any(call_syncs(c) for c in f['callees'])
+        sync_memo[b] = result
+        return result
+
     def call_text(m, me, my_regs, my_written, localized, site=None):
         """The replacement of one call statement. my_written: the registers that can be dirty here. site: the guest
         instruction index of the statement in its function (tools/reg_liveness.py's call sites), when known."""
@@ -1219,6 +1298,16 @@ def localize(index, hooks, reach, root, what, opts, out_dir, quiet=False, hand=N
                     CALL_SKIPPED[3] += len(out_regs) - len(kept)
                     out_regs = kept
         in_regs = my_regs if change is ALL else [r for r in my_regs if r in change]
+        # blur-nx (2026-11-17, #232 of docs/cpu-codegen-universal-30-1116.md, near-exact): after a real call, the
+        # PowerPC ABI's non-volatile registers are taken as the callee left them, i.e. as they were: not reloaded. Only
+        # a callee that breaks the ABI (hand-written assembly) tells; the guard then sees this copy's write-back of the
+        # register differ from the original's. BLUR_LOCALIZE_ABI_TRUST=0: every register the callee can change, as before.
+        if ABI_TRUST and not closed:
+            kept_in = [r for r in in_regs if r not in NONVOLATILE]
+            if len(kept_in) < len(in_regs):
+                ABI_SKIPPED[0] += 1
+                ABI_SKIPPED[1] += len(in_regs) - len(kept_in)
+                in_regs = kept_in
         before = ''.join(f'ctx.{r} = l_{r}; ' for r in out_regs)
         after = ''.join(f' l_{r} = ctx.{r};' for r in in_regs)
         stats['synced'].append((len(out_regs), len(in_regs)))
@@ -1231,9 +1320,14 @@ def localize(index, hooks, reach, root, what, opts, out_dir, quiet=False, hand=N
                 # registers their originals write back (hand.txt exact=: the hash and the comparison return r3), and
                 # a caller that read r3 after an inlined native that ran got its own stale r3 (sub_82737F80 and
                 # sub_8271F9C0 took the other branch; the first diet PC run crashed after them).
-                return ('{ ' + before + CARD_FLUSH + 'if (!::banjo::hand::n_%s::Native(ctx, base, s)) { f_%s(ctx, base, s); '
-                        'if (s.Stopped()) return; } else if (s.Stopped()) return;%s }' % (hand[b]['id'], b, after))
-            return '{ ' + before + CARD_FLUSH + 'f_%s(ctx, base, s); if (s.Stopped()) return;' % b + after + ' }'
+                return ('{ ' + before + CARD_FLUSH + 'if (!%s(ctx, base, s)) { f_%s(ctx, base, s); '
+                        'if (s.Stopped()) return; } else if (s.Stopped()) return;%s }' % (native_call(hand[b]), b, after))
+            # blur-nx (2026-11-16, the 15 ms batch, CG-11 of docs/codegen-ideas-3.md): the pending card run is flushed
+            # before a call only when the callee's tree can tell another thread about stores (a fence, an atomic, a
+            # kernel import, an indirect or unknown call, a hook). Otherwise this copy's next flush (at its own
+            # synchronisation or return) marks the page in time for Renut, which reads the cards only after one.
+            flush = CARD_FLUSH if call_syncs(b) else ''
+            return '{ ' + before + flush + 'f_%s(ctx, base, s); if (s.Stopped()) return;' % b + after + ' }'
         stats['calls_open'] += 1
         return '{ if (s.Open()) return; ' + before + CARD_FLUSH + m.group(0) + after + ' }'
 
@@ -1447,7 +1541,8 @@ def localize(index, hooks, reach, root, what, opts, out_dir, quiet=False, hand=N
     hand_members = [m for m in members if m in hand]
     skip = set()
     for m in hand_members:
-        skip |= set(funcs[m]['written']) - hand[m]['exact']
+        if not hand[m].get('inexact'):
+            skip |= set(funcs[m]['written']) - hand[m]['exact']
     # sasrt-nx (2026-11-11, port 74; its idea 37): the registers the hook may leave different from the original: those
     # dead after the root returns (its LiveOut). A member's dropped write-back of a register live after the root is
     # rewritten before the root's exit (or LiveOut would have kept it): still compared (sasrt-nx's round A audit,
@@ -1456,8 +1551,12 @@ def localize(index, hooks, reach, root, what, opts, out_dir, quiet=False, hand=N
     if root_keep is not None:
         skip |= {r for m in members for r in funcs[m]['written'] if not root_keep(r)}
     LIVE_OUT_DROPPED[0] += sum(1 for m, _ in dead_out if m in members)
-    entry = (f'if (!::banjo::hand::n_{hand[root]["id"]}::Native(ctx, base, s)) f_{root}(ctx, base, s);'
+    entry = (f'if (!{native_call(hand[root])}(ctx, base, s)) f_{root}(ctx, base, s);'
              if root in hand else f'f_{root}(ctx, base, s);')
+    # blur-nx (2026-11-16): the guest calls of the natives that make any (hand.txt calls=), after the declarations.
+    for m in hand_members:
+        if hand[m].get('calls'):
+            declarations.extend([''] + calls_struct(hand[m], member_set, externs, hand))
     hand_note = ('' if not hand_members else
                  '\n// Hand-written natives in front of their copies (app/src/cpu/hot/banjo_hand_natives.h): '
                  + ', '.join(hand_members) + '.\n// Registers the guard does not compare for this hook (they leave '
@@ -1573,6 +1672,8 @@ def write_list(entries, out_dir, bulk=()):
                           f'edit): shard {k} of {SHARDS},', f'// {size // 1024} KB of copies, compiled by '
                           f'app/src/cpu/banjo_hot_shard_{k}.cpp.'] + lines) + '\n'
         path = os.path.join(out_dir, f'banjo_hot_bulk_{k}.inc')
+        # blur-nx (2026-11-10): a fresh tree has no generated/hot yet (the first build of a new port stopped here).
+        os.makedirs(out_dir, exist_ok=True)
         try:
             same = open(path, encoding='utf-8').read() == text
         except OSError:
@@ -1661,6 +1762,8 @@ def main():
         print(f'localize_native: {LOOP_STATS[0]} pointer-chase prefetches (idea 52), {LOOP_STATS[1]} counted loops\' '
               f'barriers left out (idea 60), {LOOP_STATS[2]} hand-named prefetches (M-19, prefetch_rules.txt)')
         print(f'localize_native: {CONST_ARG_FORCED[0]} members with a constant argument forced inline (idea 34)')
+        print(f'localize_native: {ABI_SKIPPED[1]} non-volatile register reloads left out after {ABI_SKIPPED[0]} real '
+              f'calls (#232, ABI trust{"" if ABI_TRUST else ": OFF"})')
         # Port 74 (its idea 39; sasrt-nx's batch 2 audit, finding 2): the shards turn the card runs on only for copies
         # written with them (app/src/cpu/banjo_hot_prelude.h reads this header).
         opt = os.path.join(a.out, 'banjo_hot_options.h')

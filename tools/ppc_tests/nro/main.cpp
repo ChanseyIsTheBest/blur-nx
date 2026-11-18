@@ -254,7 +254,7 @@ int main(int argc, char** argv) {
     fprintf(log, "\n%d tests run: %d passed, %d failed, %d known\n", run, run - failed - known_failed, failed,
             known_failed);
     fclose(log);
-    printf("Failures: sdmc:/switch/tw2de_nx_ppc_tests.txt\n");
+    printf("Failures: %s\n", log_path.c_str());
   }
   free(window);
   romfsExit();

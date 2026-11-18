@@ -63,7 +63,7 @@ bool build_db16cyc(BuilderContext& ctx) {
 
 bool build_cctpl(BuilderContext& ctx) {
   // Xenon-specific cache control thread priority low, no effect in recompiled code
-  // Port 146 (spin_hint_yield): or r1,r1,r1 (thread priority low), a spin-wait, as db16cyc.
+  // Port 144 (spin_hint_yield): or r1,r1,r1 (thread priority low), a spin-wait, as db16cyc.
   if (ctx.config().spinHintYield)
     ctx.println("\trex_spin_hint();");
   return true;
