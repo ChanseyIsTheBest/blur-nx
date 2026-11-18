@@ -118,8 +118,21 @@ void RecordHostPresent() {
   g_lastPresent = now;
 }
 
+// blur-nx (2026-11-18): when a Present hook last gave a boundary (FrameBoundaryAtSwap stands aside for a second).
+static std::atomic<int64_t> g_presentBoundaryNs{0};
+void FrameBoundaryAtSwap() {
+  const int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
+  const int64_t present = g_presentBoundaryNs.load(std::memory_order_relaxed);
+  if (present != 0 && now - present < 1'000'000'000)
+    return;
+  FrameBoundary();
+  g_presentBoundaryNs.store(0, std::memory_order_relaxed);  // FrameBoundary marked it as a Present's: not one
+}
+
 void FrameBoundary() {
   const auto now = Clock::now();
+  g_presentBoundaryNs.store(std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count(),
+                            std::memory_order_relaxed);
   if (g_lastFrame != Clock::time_point{}) {
     Store(Series::kApplication, std::chrono::duration<double, std::milli>(now - g_lastFrame).count());
   }

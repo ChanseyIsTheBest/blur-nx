@@ -136,6 +136,7 @@ State& S() {
 
 void OnGameFrame() {
   banjo::renut_gpu::StatsGameFrame();
+  banjo::profiler::FrameBoundaryAtSwap();  // blur-nx (2026-11-18): the profiler's frame marks, for a game without Present
   State& s = S();
   std::lock_guard lock(s.mutex);
   const auto now = Clock::now();
