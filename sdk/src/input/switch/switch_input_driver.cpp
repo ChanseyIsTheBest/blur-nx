@@ -408,6 +408,15 @@ struct SwitchInputDriver::Slot {
    */
   uint64_t menu_shortcuts = 0;
 
+  // blur-nx (2026-11-18): the game menu's chord guard (Poll): the chord buttons held at the last poll, the window a
+  // first shoulder press opens (the six held back until then, ns; 0 none), the chord seen (the six hidden until all
+  // are let go), and a held-back press given to the game after all (until then, ns).
+  uint64_t chord_prev = 0;
+  uint64_t chord_window_ns = 0;
+  bool chord_hidden = false;
+  uint64_t chord_replay = 0;
+  uint64_t chord_replay_until_ns = 0;
+
   // Keystroke synthesis, per pad rather than per guest user.
   uint64_t key_buttons = 0;
   RepeatState repeat_state = RepeatState::kIdle;
@@ -815,14 +824,56 @@ void SwitchInputDriver::Poll(size_t index) {
     RouteRecording(held, left, right);
   }
   DispatchMenuShortcuts(slot, held);
-  // blur-nx (2026-11-18): the game menu's chord (A+B+X+Y+L+R). While L and R are both held, A, B, X and Y do not reach
-  // the game: held first, L and R keep the face buttons of the chord from it (the menu's first console test pressed the
-  // face buttons first, and the game took one of them: its camera changed). L+R with a face button is no game input
-  // here; the face buttons reach the game again when L or R is let go.
+  /*
+   * blur-nx (2026-11-18): the game menu's chord (A+B+X+Y+L+R) kept from the game. The menu's console tests: pressed face
+   * buttons first, then L and R first, the game took the first of them each time (one of L / R changes Blur's camera).
+   * - A shoulder (L or R) pressed with no chord button down opens a window of 120 ms in which the six are held back.
+   * - Three of the six down within the window, or L and R together with a face button, are a chord: the six stay
+   *   hidden until every one is let go (the menu opens at all six, DispatchMenuShortcuts above sees them all).
+   * - No chord: at the window's end the held buttons reach the game (120 ms late); a shoulder let go inside it (a tap)
+   *   is given to the game afterwards for 70 ms, so no tap is lost.
+   * - While L and R are both held, A, B, X and Y never reach the game.
+   * Hold L and R first: a face button pressed before them is not held back (the weapons keep their timing).
+   */
   {
     constexpr uint64_t kShoulders = HidNpadButton_L | HidNpadButton_R;
-    if ((held & kShoulders) == kShoulders)
-      held &= ~uint64_t(HidNpadButton_A | HidNpadButton_B | HidNpadButton_X | HidNpadButton_Y);
+    constexpr uint64_t kFaces = HidNpadButton_A | HidNpadButton_B | HidNpadButton_X | HidNpadButton_Y;
+    constexpr uint64_t kChord = kShoulders | kFaces;
+    constexpr uint64_t kWindowNs = 120'000'000ull;
+    constexpr uint64_t kReplayNs = 70'000'000ull;
+    const uint64_t chord = held & kChord;
+    const uint64_t now_ns = armTicksToNs(armGetSystemTick());
+    if (slot.chord_hidden && chord == 0)
+      slot.chord_hidden = false;
+    if (!slot.chord_hidden) {
+      if ((chord & kShoulders) && !(slot.chord_prev & kChord))
+        slot.chord_window_ns = now_ns + kWindowNs;
+      const bool both = (chord & kShoulders) == kShoulders;
+      if (std::popcount(chord) >= 3 && (slot.chord_window_ns != 0 || both)) {
+        slot.chord_hidden = true;
+        slot.chord_window_ns = 0;
+      } else if (slot.chord_window_ns != 0) {
+        const uint64_t let_go = slot.chord_prev & ~chord & kShoulders;
+        if (let_go) {  // a tap inside the window: the game gets it now
+          slot.chord_replay = slot.chord_prev;
+          slot.chord_replay_until_ns = now_ns + kReplayNs;
+          slot.chord_window_ns = 0;
+        } else if (now_ns >= slot.chord_window_ns) {
+          slot.chord_window_ns = 0;  // no chord: the held buttons go through from now
+        }
+      }
+    }
+    slot.chord_prev = chord;
+    if (slot.chord_hidden || slot.chord_window_ns != 0)
+      held &= ~kChord;
+    else if ((held & kShoulders) == kShoulders)
+      held &= ~kFaces;
+    if (slot.chord_replay_until_ns != 0) {
+      if (now_ns < slot.chord_replay_until_ns && !slot.chord_hidden)
+        held |= slot.chord_replay;
+      else
+        slot.chord_replay_until_ns = 0;
+    }
   }
   X_INPUT_GAMEPAD gamepad{};
   ButtonTable table;  // blur-nx (2026-11-18): a copy (the game menu may rebuild the maps meanwhile)
