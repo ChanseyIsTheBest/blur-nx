@@ -43,6 +43,7 @@ Speed-ups that change results, so they are off unless a game has checked them.
 | `banjo_xma_frame_cache_hash_only` (port 139; blur-nx's near-exact #12) | XMA frame cache nodes matched on their 64-bit key (two CRC32C streams of the packet and the previous one), the format and the sizes, without comparing the packets' bytes. | NOT exact: a key collision (about 2^-64 a lookup) would answer another frame's samples; the cache's report counts the collisions the byte compare finds (0 in blur-nx). | Not measured apart |
 | `BLUR_LOCALIZE_ABI_TRUST=1` (environment at post-codegen, port 150; blur-nx's #232) | The machine copies take the PowerPC ABI's non-volatile registers (r14-r31, f14-f31, v14-v31, v64-v127, cr2-cr4) as a real call left them, without reloading them. | Near-exact: a callee that breaks the ABI (hand-written assembly) is the case it changes; off as every near-exact switch (port 140). | Part of Blur's codegen batches (+10 % with the binds), not measured alone |
 | `BLUR_NEAR_EXACT` (CMake, port 140; blur-nx's near-exact switches; `BLUR_NX_ONLY`, `BLUR_NX_SKIP`) | REX_NX_SNAN_PASS (#1), REX_NX_DIV_NO_CHECK (#17), REX_NX_FCMP_NO_UN (#41), REX_NX_XER_SO_ZERO (#5), REX_NX_NO_TRAPS (#19: a trap only logs); REX_NX_FCTI_NO_NAN (#2) and REX_NX_VMINMAX_FAST (#42) only by `BLUR_NX_ONLY`. | NOT exact in rare cases, which differ per game: the PC census (`banjo_diag_runtime_census`, the "[census] near-exact" lines) counts each. blur-nx's took #2 (NaN conversions, 80 a second) and #42 (4 % of vector max/min lanes differ) out. A compile-time switch: retrain the PGO profile. | blur-nx's console: part of its +5.6 % (27.88 against 26.39 fps) with its other pieces |
+| `banjo_renut_texture_park` (port 168; off since port 181) | Keeps a replaced texture (up to 64, 96 MB) and gives its image back when the same address asks for the same layout and content hash: no upload again. | Blur's console (2026-11-18): ghosting, colour fringes and heavy grain over whole races with it on, clean with it off (bisected, the other keys of ports 161-171 on). Why is not known yet: a content check that answers the hash without the bytes, or Blur's texture pool reusing a parked image, are the guesses. | Saves the uploads of textures that come back (fnxf_xiii: 35 uploads of 36.7 MB in one frame); Katamari never takes one back |
 
 (Port 72's VMX estimates and fused multiply-add are not exact either, but are ON at the user's word: within 1-3 ulp of
 the exact forms, no further from the 360 than before; sasrt-nx's race with them and a fresh profile was +2.4 % fps.
@@ -138,7 +139,7 @@ switch needs a rebuild (and a fresh PGO profile).
 | `crt_xmemcpy_as_memmove` (port 146) | The native XMemCpy (which a game maps its own block copy to) is a memmove. | Exact; off at the user's word (a game's forward block copy may be called with overlapping ranges, which memcpy leaves undefined; from nx-mod/rexglue-sdk-nx). | None |
 | `xconfig_host_time_zone` (port 147) | XConfig's TIME_ZONE_BIAS is the console's time zone (its offset now, DST included), so a game's local time is the player's. | Off at the user's word (the base answered 0: every game showed UTC). | None |
 
-## 6. fnxf_xiii's and rehatched-nx's fixes and accuracy options (ports 158-176), off by the same rule
+## 6. fnxf_xiii's and rehatched-nx's fixes and accuracy options (ports 158-176 and 179), off by the same rule
 
 The user's rule for ports from other games (section 5): fixes and accuracy options off, speed-ups on. A game that needs
 one turns it on in its toml.
@@ -157,6 +158,7 @@ one turns it on in its toml.
 | `banjo_fence_waits_exports` | 170 | a D3D fence completes once pending memexport results are in guest memory (a GPU sync) |
 | `banjo_vblank_from_display` | 172 | the guest's vblanks follow the display's refreshes, not a 60 Hz timer |
 | `banjo_renut_all_surface_headers` | 174 | every bound surface's header kept as bound (with chain reuse and the scan-out hand-over off) |
+| `banjo_renut_edram_carry` | 179 | a colour target first drawn in a frame without a clear starts from the picture last written over its EDRAM base (scaled; idle while blur_renut_edram_inherit is on) |
 
 `banjo_deko3d_swap_interval` (port 165) is a setting, 1 as before.
 

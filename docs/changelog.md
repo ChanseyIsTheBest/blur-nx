@@ -271,3 +271,9 @@ Ports 1-43 are the first round: the universal fixes of the other ports' renderer
 - Port 177 (from blur-nx) adds Blur's Renut host batch (render thread ~16 % faster per draw on its console),
   1 % lows in the 10 s report, the image heap's spare chunk, the UI-upscale band fix and the game menu.
 - Port 178 (from blur-nx) wires the game menu into the base's app (A+B+X+Y+L+R opens it, + closes it).
+- Port 179 (from fnxf_xiii) adds the EDRAM carry, off by default (banjo_renut_edram_carry): a colour target drawn
+  without a clear in a frame starts from the picture last written over its EDRAM base.
+- Port 180 adds menu_background_opacity: the game menu's black background in percent, a row under Menu colour and
+  Menu font.
+- Port 181 turns port 168's texture park off by default: on Blur's console it drew whole races with ghosting,
+  colour fringes and grain.

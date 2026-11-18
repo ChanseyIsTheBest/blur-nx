@@ -135,16 +135,16 @@ REXCVAR_DEFINE_BOOL(banjo_renut_untile_helpers, true, "Banjo/Renut",
                     "threads (cores 0 and 2, the render thread's priority) in bands (fnxf_xiii: a 4096x4096 DXT1 level "
                     "38 ms on the render thread alone). The same bytes. false: the render thread alone, as before")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-// Port 168 (from fnxf_xiii, its note of 2026-11-05): see ParkLocked.
-// blur-nx (2026-11-18, the base sync): off by default. On, Blur's console races showed ghosting, colour fringes and grain
-// over the whole picture from the start (Barcelona Oval and Amboy, both training races of the merged build); the six keys
-// the sync turned on, all off: clean; this one alone off: clean. The PC (Vulkan) race looked right. Sent to RR6 to be
-// off in the base too (docs/off-by-default.md).
+// Port 168 (from fnxf_xiii, its note of 2026-11-05): see ParkLocked. Port 181: off by default (Blur's console,
+// 2026-11-18, bisected on its sync of ports 158-178: ghosting, colour fringes and heavy grain over whole races with it
+// on, clean with it off and the other keys of ports 161-171 on; docs/off-by-default.md section 2). A game that has
+// checked its picture with it turns it on in its toml.
 REXCVAR_DEFINE_BOOL(banjo_renut_texture_park, false, "Banjo/Renut",
                     "A host texture replaced at its address by another description is kept (up to 64, 96 MB, all "
                     "dropped when memory or the bindless table runs low) and taken back when that address asks for the "
                     "same layout and content again, instead of uploading it again (fnxf_xiii: 35 uploads of 36.7 MB in "
-                    "one frame, all content a host texture had already). false: retired at once, as before")
+                    "one frame, all content a host texture had already). Off by default (port 181): it broke Blur's "
+                    "picture on the console. false: retired at once, as before")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 // Port 161 (from fnxf_xiii): see VertexTextureBarrierLocked. A fix, so off by default here (fnxf_xiii: on).
 REXCVAR_DEFINE_BOOL(banjo_deko3d_vertex_texture_barrier, false, "Banjo/Renut",
