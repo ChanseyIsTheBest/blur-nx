@@ -1133,12 +1133,13 @@ if(REXGLUE_PLATFORM_SWITCH)
     # 2026-11-05: version 1.0.1, the game's memory and the NRO's code on 2 MB blocks, and the boot's cvars.
     # blur-nx (2026-11-18, the user's request): the title "blur" (as the game's logo writes it), the icon the user's
     # cover art (D:/blur/i.jpg, 1024x1024, as a 256x256 JPEG: tools/switch/icon/blur_icon.jpg), the author as before.
+    # 2026-11-18: version 1.0.0, the first release (the web installer, blur-nx-installer).
     # The NRO keeps its path (sdmc:/switch/blur-nx/blur-nx.nro): Sphaira's forwarder id comes from it (05A5D8E1BAA3E000),
     # and the four-core NPDM is written for that id (RexSwitchEnsureForwarderNpdm).
     rexglue_switch_add_nro(renut
         NAME "blur"
         AUTHOR "ChanseyIsTheBest"
-        VERSION "0.1.0"
+        VERSION "1.0.0"
         ${RENUT_ICON_ARG})
 endif()
 
