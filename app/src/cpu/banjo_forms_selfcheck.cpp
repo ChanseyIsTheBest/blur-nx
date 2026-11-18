@@ -140,6 +140,22 @@ void Conversions(Tally& t) {
   }
 }
 
+// blur-nx (2026-11-18): the reference follows the build's near-exact switches (BLUR_NEAR_EXACT; docs/cpu-near-exact-
+// 50-1113.md), which change two of these forms by design: #17 REX_NX_DIV_NO_CHECK (the AArch64 divisions give sdiv's
+// INT_MIN for INT_MIN / -1, where the old form gave 0) and #1 REX_NX_SNAN_PASS (QuietSingleBits keeps a signalling
+// NaN's bits, as the Xenon's lfs / stfs pair does). Before, every start of the release reported those four results as
+// failures (banjo_selfcheck_failed.txt on the card) though each is the form the build chose.
+#if defined(REX_NX_DIV_NO_CHECK) && defined(__aarch64__)
+constexpr bool kDivOverflowGivesMin = true;
+#else
+constexpr bool kDivOverflowGivesMin = false;
+#endif
+#if defined(REX_NX_SNAN_PASS)
+constexpr bool kSnanKept = true;
+#else
+constexpr bool kSnanKept = false;
+#endif
+
 void Divisions(Tally& t) {
   struct Signed {
     int64_t n, d;
@@ -151,7 +167,9 @@ void Divisions(Tally& t) {
     const std::string in = fmt::format("{}, {}", p.n, p.d);
     {
       const int32_t n = int32_t(p.n), d = int32_t(p.d);
-      const uint32_t want = (d == 0 || (n == INT32_MIN && d == -1)) ? 0u : uint32_t(int64_t(n) / int64_t(d));
+      const uint32_t want = d == 0 ? 0u
+                            : (n == INT32_MIN && d == -1) ? (kDivOverflowGivesMin ? uint32_t(INT32_MIN) : 0u)
+                                                          : uint32_t(int64_t(n) / int64_t(d));
       t.Expect("divw", in, rex::ppc::divw(Opaque(n), Opaque(d)), want);
       const uint32_t un = uint32_t(n), ud = uint32_t(d);
       t.Expect("divwu", in, rex::ppc::divwu(Opaque(un), Opaque(ud)), ud == 0 ? 0u : un / ud);
@@ -160,6 +178,7 @@ void Divisions(Tally& t) {
       const int64_t n = p.n, d = p.d;
       int64_t want = 0;
       if (d != 0 && !(n == INT64_MIN && d == -1)) want = n / d;
+      if (n == INT64_MIN && d == -1 && kDivOverflowGivesMin) want = INT64_MIN;
       t.Expect("divd", in, uint64_t(rex::ppc::divd(Opaque(n), Opaque(d))), uint64_t(want));
       const uint64_t un = uint64_t(n), ud = uint64_t(d);
       t.Expect("divdu", in, rex::ppc::divdu(Opaque(un), Opaque(ud)), ud == 0 ? 0u : un / ud);
@@ -185,7 +204,7 @@ void FloatCopies(Tally& t) {
     const std::string in = fmt::format("{:08X}", c.single);
     t.Expect("SingleToDoublePure", in, std::bit_cast<uint64_t>(rex::ppc::SingleToDoublePure(Opaque(c.single))),
              c.as_double);
-    t.Expect("QuietSingleBits", in, rex::ppc::QuietSingleBits(Opaque(c.single)), c.stored);
+    t.Expect("QuietSingleBits", in, rex::ppc::QuietSingleBits(Opaque(c.single)), kSnanKept ? c.single : c.stored);
   }
 }
 
