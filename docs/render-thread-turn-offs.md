@@ -23,7 +23,7 @@ From blur-nx (2026-11-20; its docs/renut-host-ideas-25-1118.md, #14, #15 and #31
 | Key (base default) | What the render thread pays | The log line | Off when | Where it pays off |
 |---|---|---|---|---|
 | `ultimate_renut_replay_inherit_same` (true) | Only with `banjo_renut_replay_inherits` on (off in the base). At every replay, BuildInheritRuns' copy and a compare of about 1 KB: if the running device holds every inherited word as the recording had it, the replay keeps the record's answers | `[renut] replays with the inherited words as recorded (ultimate_renut_replay_inherit_same): N of M`, every 65,536 replays | N is 0 | A game whose replays often run on the device they were recorded on |
-| `sasrt_gpu_skip_inert_draws` (true) | At every draw, DrawStateLocked's prologue tests whether the draw can write anything (colour mask, depth write, stencil, memory export) | `[sasrt gpu] GPU round ..., in the last 10 s: sasrt_gpu_skip_inert_draws (on) N` | N is 0 in every gameplay window | sasrt-nx: two inert draws a frame into a 4x depth target cost the console **1.85 ms a frame** |
+| `sasrt_gpu_skip_inert_draws` (true) | At every draw, DrawStateLocked's prologue tests whether the draw can write anything (colour mask, depth write, stencil, memory export) | `[sasrt gpu] GPU round ..., in the last 10 s: ... sasrt_gpu_skip_inert_draws N` (`(off) N` with the key off) | N is 0 in every gameplay window | sasrt-nx: two inert draws a frame into a 4x depth target cost the console **1.85 ms a frame** |
 | `banjo_renut_stream_redeem` (true, port 145) | At every conversion of a dynamic vertex stream, a store-card check (PagesClean) of whether its memory was written since the last one | `[renut] banjo_renut_stream_redeem: N dynamic streams quiet for 60 conversions made cacheable again`, printed only when a stream is made cacheable (the first 16, then every 1,024th). No line over a whole session is 0 | No line over whole gameplay sessions | tw2de_nx: **7-7.7 ms of render thread a frame**, converting streams the game had stopped writing |
 
 What the ports found:
@@ -32,7 +32,7 @@ What the ports found:
 |---|---|---|---|
 | `ultimate_renut_replay_inherit_same` | false: 0 of 131,072 replays (inherits on); about 0.05-0.1 ms a frame, estimated | nothing to change: inherits is off, so the check never runs | - |
 | `sasrt_gpu_skip_inert_draws` | false: 0 draws skipped in every 10 s window of a race; about 0.05-0.15 ms a frame, estimated | already off: "(off) 0" in every window of its runs (55-64 windows each) | sasrt-nx: on, 1.85 ms a frame |
-| `banjo_renut_stream_redeem` | not read yet (on, the base's default) | off: 0-1 streams made cacheable in 12 min of the game, at about 0.24 us of render thread a draw | tw2de_nx: on, 7-7.7 ms a frame. deadpool-nx: off, "for UE3 streaming safety" (no numbers) |
+| `banjo_renut_stream_redeem` | not read yet (on, the base's default) | off: 0-1 streams made cacheable in 12 min of the game, at about 0.24 us of render thread a draw | tw2de_nx: on, 7-7.7 ms a frame. deadpool-nx: off, "for UE3 vertex safety" (no numbers) |
 
 ## 2. The same kind of check on the job threads
 
@@ -76,8 +76,8 @@ The A/B, profile and test tomls turn these on to measure. The player's toml turn
 
 ## For the porting prompt
 
-`porting-a-360-game-prompt.md` already has the step for `ultimate_renut_replay_inherit_same`,
-`sasrt_gpu_skip_inert_draws` and `banjo_renut_tags_check` (port 177). Two more belong in it the same way:
+[porting-a-360-game-prompt.md](porting-a-360-game-prompt.md)'s step for `ultimate_renut_replay_inherit_same`,
+`sasrt_gpu_skip_inert_draws` and `banjo_renut_tags_check` (port 177) has these two as well (2026-11-20):
 
 - `banjo_renut_stream_redeem` (true): no "made cacheable again" line over whole gameplay sessions: false.
 - `switch_perf_count_calls` (true): false in the player's toml.

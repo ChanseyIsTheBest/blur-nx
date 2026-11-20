@@ -202,7 +202,7 @@ own console log. The user (~12:10): no measurement is needed; a log that shows 0
 | Key | The base's default | Blur | What the port's log says (a race, the 10 s report) | Turn it off when |
 |---|---|---|---|---|
 | `ultimate_renut_replay_inherit_same` | true | false (#14) | "[renut] replays with the inherited words as recorded (ultimate_renut_replay_inherit_same): N of M" (every 65,536 replays; only with banjo_renut_replay_inherits on) | N is 0: each replay copies and compares for nothing |
-| `sasrt_gpu_skip_inert_draws` | true | false (#15) | "[sasrt gpu] GPU round ..., in the last 10 s: sasrt_gpu_skip_inert_draws (on) N" | N is 0 in every race window: its test runs before every draw for nothing |
+| `sasrt_gpu_skip_inert_draws` | true | false (#15) | "[sasrt gpu] GPU round ..., in the last 10 s: sasrt_gpu_skip_inert_draws N" ("(off) N" with the key off) | N is 0 in every race window: its test runs before every draw for nothing |
 | `banjo_renut_tags_check` | 32 | 256 (#31) | "[renut] recording from marks (banjo_renut_tags): ..., N whole checks, M chunks changed without a mark" | M is 0 over whole races: 256 checks 8 times less often (not strictly exact: an unmarked write would be caught 256 ops later, not 32); any M above 0 keeps 32 |
 
 With the log showing 0 over a whole race (every race window, not the menus or loads), the port sets the key as in the
