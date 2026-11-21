@@ -323,6 +323,20 @@ REX_HOOK_RAW(sub_82AFF648) {
   static const bool on = REXCVAR_GET(blur_hevc_movies);
   const uint32_t fb = ctx.r3.u32, data = ctx.r6.u32, end = ctx.r8.u32;
   uint32_t id = 0, index = 0;
+  // blur_hevc_log: the first calls as they come (whether the decode reaches this hook, and the video data it is given).
+  static const bool trace = REXCVAR_GET(blur_hevc_log);
+  static std::atomic<uint32_t> g_calls{0};
+  if (trace) {
+    const uint32_t n = g_calls.fetch_add(1, std::memory_order_relaxed);
+    if (n < 6 && data) {
+      const uint8_t* p = Host(base, data);
+      REXLOG_INFO("[hevc] Bink's video decode, call {}: frame buffers {:08X}, video data {:08X} to {:08X}, its first "
+                  "bytes {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}, r4 {:08X} r5 {:08X} "
+                  "r7 {:08X} r10 {:08X}",
+                  n, fb, data, end, p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9], ctx.r4.u32,
+                  ctx.r5.u32, ctx.r7.u32, ctx.r10.u32);
+    }
+  }
   if (!on || !fb || !data || end < data + rex::filesystem::kSfdHevcTagBytes ||
       !rex::filesystem::ParseSfdHevcTag(Host(base, data), &id, &index)) {
     __imp__sub_82AFF648(ctx, base);  // a Bink frame: Bink decodes it
