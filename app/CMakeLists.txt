@@ -203,6 +203,8 @@ set(RENUT_SOURCES
     src/blur_small_alloc.cpp  # blur-nx (2026-11-17, #220: small C++ allocations per thread, Switch)
     src/blur_lzx_native.cpp
     src/blur_job_wake.cpp  # blur-nx (2026-11-13, #34)
+    # blur-nx 1.0.1 (2026-11-21): the movies as H.265 (NAME.bik.hevc beside the game's .bik, rex/filesystem/sfd_hevc.h).
+    src/cpu/blur_bink_hevc.cpp
     # katamari-nx (2026-10-31): DLC packages in the "dlc" folder next to the NRO installed at start (reNut upstream's).
     src/renut_engine/dlc_install.cpp
 	src/renut_engine/FPS.cpp
@@ -1102,6 +1104,40 @@ foreach(_dep imgui xxhash renderdoc)
             $<TARGET_PROPERTY:${_dep},INTERFACE_INCLUDE_DIRECTORIES>)
     endif()
 endforeach()
+
+# blur-nx 1.0.1 (2026-11-21, the user: the movies re-encoded to H.265; rr6-nx's block of 2026-11-21, credit rr6-nx and
+# culdcept-nx): nxvideo (tools/switch/nxvideo, culdcept-nx's), the H.265 decoder on the Switch's NVDEC: devkitPro's
+# switch-ffmpeg 7.1 (built with averne's nvtegra backend) linked with the shim into one object whose only global
+# symbols are nxv_*, so FFmpeg 7.1's names never meet the SDK's FFmpeg (the XMA audio). Built when devkitPro's FFmpeg
+# has nvtegra. Without it the .hevc movies are not shown (src/cpu/blur_bink_hevc.cpp says so in the log).
+if(REXGLUE_PLATFORM_SWITCH)
+    option(BLUR_NXVIDEO "The H.265 movies' NVDEC decoder (tools/switch/nxvideo)" ON)
+    set(_nxv_pl "${DEVKITPRO}/portlibs/switch")
+    if(BLUR_NXVIDEO AND EXISTS "${_nxv_pl}/include/libavutil/hwcontext_nvtegra.h")
+        set(_nxv_src "${CMAKE_CURRENT_SOURCE_DIR}/../tools/switch/nxvideo")
+        set(_nxv_out "${CMAKE_CURRENT_BINARY_DIR}/nxvideo")
+        file(MAKE_DIRECTORY "${_nxv_out}")
+        set(_nxv_keep)
+        foreach(_s nxv_open nxv_decode nxv_flush nxv_close nxv_is_hw nxv_version nxv_stats nxv_options)
+            list(APPEND _nxv_keep "--keep-global-symbol=${_s}")
+        endforeach()
+        add_custom_command(OUTPUT "${_nxv_out}/nxvideo.o"
+            COMMAND "${CMAKE_C_COMPILER}" -O2 -ffunction-sections -fdata-sections -march=armv8-a+crc+crypto
+                    -mtune=cortex-a57 -mtp=soft -ftls-model=local-exec -fPIE -D__SWITCH__ -DNX -D_GNU_SOURCE
+                    "-I${_nxv_pl}/include" "-I${DEVKITPRO}/libnx/include" -c "${_nxv_src}/nxvideo.c" -o "${_nxv_out}/shim.o"
+            COMMAND "${CMAKE_LINKER}" -r -o "${_nxv_out}/full.o" "${_nxv_out}/shim.o"
+                    --start-group "${_nxv_pl}/lib/libavcodec.a" "${_nxv_pl}/lib/libavutil.a" --end-group
+            COMMAND "${CMAKE_OBJCOPY}" ${_nxv_keep} "${_nxv_out}/full.o" "${_nxv_out}/nxvideo.o"
+            DEPENDS "${_nxv_src}/nxvideo.c" "${_nxv_src}/nxvideo.h"
+            COMMENT "nxvideo: FFmpeg 7.1 with nvtegra in one object, only nxv_* global"
+            VERBATIM)
+        set_source_files_properties("${_nxv_out}/nxvideo.o" PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)
+        target_sources(renut PRIVATE "${_nxv_out}/nxvideo.o")
+        target_include_directories(renut PRIVATE "${_nxv_src}")
+        target_compile_definitions(renut PRIVATE BLUR_NXVIDEO=1)
+        message(STATUS "nxvideo: H.265 / NVDEC movies (devkitPro's switch-ffmpeg with nvtegra)")
+    endif()
+endif()
 
 # Nintendo Switch: renut.nro next to the ELF. On the SD card it goes in
 # sdmc:/switch/banjo-nx/ with the extracted disc in game_root/ beside it.
