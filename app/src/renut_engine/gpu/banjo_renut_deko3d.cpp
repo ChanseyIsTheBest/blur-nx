@@ -37,11 +37,13 @@ REXCVAR_DEFINE_BOOL(banjo_deko3d_log_writer, true, "Banjo/Enhancements",
                     "thread of their own instead of the thread that said them (failures still at once). false: every "
                     "line written and flushed where it is said, as before")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-// Port 161 (from fnxf_xiii, its note of 2026-10-30): plume_deko3d.h beforeBufferCopy.
-REXCVAR_DEFINE_BOOL(banjo_deko3d_copy_run_barriers, true, "Banjo/Enhancements",
+// Port 161 (from fnxf_xiii, its note of 2026-10-30): plume_deko3d.h beforeBufferCopy. Off by default since port 250
+// (2026-11-21, blur-nx's console bisect: with it on, Blur's races ghosted; docs/off-by-default.md section 1).
+REXCVAR_DEFINE_BOOL(banjo_deko3d_copy_run_barriers, false, "Banjo/Enhancements",
                     "deko3d: no barrier between back-to-back buffer copies once a full one has run (the copy engine "
-                    "runs them one at a time; each full barrier is 2 GPU submission entries). false: a barrier before "
-                    "every copy, as before")
+                    "was taken to run them one at a time; each full barrier is 2 GPU submission entries). Off by "
+                    "default: with it on, Blur's console races drew ghosting, colour fringes and grain (port 250). "
+                    "false: a barrier before every copy, as before port 161")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(sasrt_deko3d_diag_trace, false, "SASRT/Diagnostics",
                     "deko3d renderer, a measurement (the second GPU round of 2026-11-08): every 600th frame's command "
