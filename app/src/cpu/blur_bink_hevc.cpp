@@ -348,7 +348,7 @@ REX_HOOK_RAW(sub_82AFF648) {
   static const bool on = REXCVAR_GET(blur_hevc_movies);
   const uint32_t fb = ctx.r3.u32, data = ctx.r6.u32, end = ctx.r8.u32;
   uint32_t id = 0, index = 0;
-  // blur_hevc_log: the first calls as they come (whether the decode reaches this hook, the video data it is given and
+  // blur_hevc_log: the first calls and every 60th (whether the decode reaches this hook, the video data it is given and
   // the tag's form), and for a Bink frame, calls 60 and 120, a strip of the picture Bink decoded (its planes' byte
   // order and which of cR / cB is U, against FFmpeg's decode of the same movie).
   static const bool trace = REXCVAR_GET(blur_hevc_log);
@@ -357,7 +357,7 @@ REX_HOOK_RAW(sub_82AFF648) {
   const int form = on && fb && data && end >= data + rex::filesystem::kSfdHevcTagBytes
                        ? FindTag(base, data, &id, &index)
                        : -1;
-  if (trace && call < 6 && data) {
+  if (trace && (call < 6 || call % 60 == 0) && data) {
     const uint8_t* p = Host(base, data);
     REXLOG_INFO("[hevc] Bink's video decode, call {}: frame buffers {:08X}, video data {:08X} to {:08X}, its first "
                 "bytes {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}; tag form {} (movie id {}, "
