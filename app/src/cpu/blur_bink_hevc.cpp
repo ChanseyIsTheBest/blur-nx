@@ -24,6 +24,8 @@
 //                                       into FrameNum's own; it returns a statistic (a percentage the caller keeps the
 //                                       largest of at bink+324). It does not change FrameNum.
 //
+// By the time sub_82AFF648 runs, Bink has byte-swapped the frame's packet in 32-bit words (its bit reader's order), so
+// the tag is read back through that swap (FindTag; found on the PC 2026-11-22, after two green console runs).
 // The hook: sub_82AFF648 with tagged video data decodes nothing; the H.265 picture of the tag's frame goes into the
 // plane set Bink would have decoded into (Y, then U into cB and V into cR), the written rows' store cards marked so the
 // renderer takes them again, and 0 is returned. Timing, audio, the frame buffers' flips and the game's drawing (its
@@ -39,10 +41,12 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -84,6 +88,27 @@ uint32_t Ld32(uint8_t* base, uint32_t a) {
 }
 
 std::atomic<uint64_t> g_tagged{0}, g_shown{0}, g_missing{0}, g_failed{0};
+
+// The tag at a frame's video data. Blur's Bink (the 360's) has byte-swapped the frame's packet in 32-bit words by the
+// time its video decode runs (seen 2026-11-22: the file's A5 5A C3 80 80 81 80 80 read 80 C3 5A A5 80 80 81 80), so the
+// tag is read back through the swap: each byte from its address's mirror in its word. Then the same with the words
+// counted from the video data's start (should a packet ever be swapped from there), then as it is. The tag's magic and
+// checksum make a wrong form fail. Returns the form that matched (0, 1, 2) or -1.
+int FindTag(uint8_t* base, uint32_t data, uint32_t* id, uint32_t* index) {
+  uint8_t t[rex::filesystem::kSfdHevcTagBytes];
+  for (int form = 0; form < 3; ++form) {
+    if (form == 1 && (data & 3) == 0) continue;  // the same bytes as form 0
+    for (uint32_t i = 0; i < rex::filesystem::kSfdHevcTagBytes; ++i) {
+      const uint32_t a = data + i;
+      const uint32_t at = form == 0   ? (a & ~3u) | (3 - (a & 3))
+                          : form == 1 ? data + ((i & ~3u) | (3 - (i & 3)))
+                                      : a;
+      t[i] = *Host(base, at);
+    }
+    if (rex::filesystem::ParseSfdHevcTag(t, id, index)) return form;
+  }
+  return -1;
+}
 
 // The plane set sub_82AFF648 decodes into: FrameNum ^ 1 when that set has a Y buffer, else FrameNum's own.
 struct Planes {
@@ -323,23 +348,40 @@ REX_HOOK_RAW(sub_82AFF648) {
   static const bool on = REXCVAR_GET(blur_hevc_movies);
   const uint32_t fb = ctx.r3.u32, data = ctx.r6.u32, end = ctx.r8.u32;
   uint32_t id = 0, index = 0;
-  // blur_hevc_log: the first calls as they come (whether the decode reaches this hook, and the video data it is given).
+  // blur_hevc_log: the first calls as they come (whether the decode reaches this hook, the video data it is given and
+  // the tag's form), and for a Bink frame, calls 60 and 120, a strip of the picture Bink decoded (its planes' byte
+  // order and which of cR / cB is U, against FFmpeg's decode of the same movie).
   static const bool trace = REXCVAR_GET(blur_hevc_log);
   static std::atomic<uint32_t> g_calls{0};
-  if (trace) {
-    const uint32_t n = g_calls.fetch_add(1, std::memory_order_relaxed);
-    if (n < 6 && data) {
-      const uint8_t* p = Host(base, data);
-      REXLOG_INFO("[hevc] Bink's video decode, call {}: frame buffers {:08X}, video data {:08X} to {:08X}, its first "
-                  "bytes {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}, r4 {:08X} r5 {:08X} "
-                  "r7 {:08X} r10 {:08X}",
-                  n, fb, data, end, p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9], ctx.r4.u32,
-                  ctx.r5.u32, ctx.r7.u32, ctx.r10.u32);
-    }
+  const uint32_t call = trace ? g_calls.fetch_add(1, std::memory_order_relaxed) : 0;
+  const int form = on && fb && data && end >= data + rex::filesystem::kSfdHevcTagBytes
+                       ? FindTag(base, data, &id, &index)
+                       : -1;
+  if (trace && call < 6 && data) {
+    const uint8_t* p = Host(base, data);
+    REXLOG_INFO("[hevc] Bink's video decode, call {}: frame buffers {:08X}, video data {:08X} to {:08X}, its first "
+                "bytes {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}; tag form {} (movie id {}, "
+                "frame {})",
+                call, fb, data, end, p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9], form, id, index);
   }
-  if (!on || !fb || !data || end < data + rex::filesystem::kSfdHevcTagBytes ||
-      !rex::filesystem::ParseSfdHevcTag(Host(base, data), &id, &index)) {
+  if (form < 0) {
     __imp__sub_82AFF648(ctx, base);  // a Bink frame: Bink decodes it
+    Planes pl;
+    if (trace && (call == 60 || call == 120) && fb && BinkPlanes(base, fb, &pl) && pl.w >= 640 && pl.h >= 368) {
+      auto hex = [&](uint32_t at, uint32_t n) {
+        std::string s;
+        char b[4];
+        for (uint32_t i = 0; i < n; ++i) {
+          std::snprintf(b, sizeof(b), "%02X", *Host(base, at + i));
+          s += b;
+        }
+        return s;
+      };
+      REXLOG_INFO("[hevc] Bink decoded call {} ({}x{}, pitch {} / {}): Y row 360 x 600-631 {}; cB row 180 x 300-315 "
+                  "{}; cR row 180 x 300-315 {}",
+                  call, pl.w, pl.h, pl.y_pitch, pl.c_pitch, hex(pl.y + 360 * pl.y_pitch + 600, 32),
+                  hex(pl.u + 180 * pl.c_pitch + 300, 16), hex(pl.v + 180 * pl.c_pitch + 300, 16));
+    }
     return;
   }
   // A tagged frame: Bink decodes nothing (its video data is zero but for the tag).
