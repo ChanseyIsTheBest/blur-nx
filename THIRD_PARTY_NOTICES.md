@@ -46,6 +46,8 @@ Libraries used by the SDK, the NRO and the code generator, in `sdk/thirdparty`, 
 | [libmspack](https://www.cabextract.org.uk/libmspack/) by Stuart Caie (LZX decompression) | LGPL-2.1 |
 | [LZ4](https://github.com/lz4/lz4) 1.10.0 by Yann Collet (`sdk/thirdparty/lz4/lz4.c`: the decoder of the LZ4-packed game files, through rr6-nx) | BSD-2-Clause |
 | [ZXC](https://github.com/hellobertrand/zxc) 0.15.0 by Bertrand Lebonnois (`sdk/thirdparty/zxc`: the decoder of the ZXC-packed videos, through rr6-nx), with [rapidhash](https://github.com/Nicoshev/rapidhash) by Nicolas De Carli | BSD-3-Clause; MIT |
+| [FFmpeg](https://ffmpeg.org) 7.1 (devkitPro's `switch-ffmpeg`, built with `--enable-gpl` and averne's nvtegra backend; linked into the Switch build through culdcept-nx's `tools/switch/nxvideo`: the H.265 movies' decoder on the Switch's NVDEC, 1.0.1) | GPL-2.0-or-later |
+| [libopus](https://opus-codec.org) 1.3 (devkitPro's `switch-libopus`, linked into the Switch build: the decoder of the streamed music and ambience the installer re-encodes to Opus, 1.0.1, through culdcept-nx's and sasrt-nx's `.xmo`/`.xmop` method; a PC build loads the system's at run time) | BSD-3-Clause |
 | [glslang](https://github.com/KhronosGroup/glslang) | BSD-3-Clause and others |
 | [SPIRV-Tools](https://github.com/KhronosGroup/SPIRV-Tools) | Apache-2.0 |
 | [SPIRV-Headers](https://github.com/KhronosGroup/SPIRV-Headers), [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers) | MIT, Apache-2.0 |

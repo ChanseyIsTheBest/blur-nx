@@ -19,6 +19,7 @@
 #include <rex/filesystem/lz4_blocks.h>
 #include <rex/filesystem/opus_pcm.h>
 #include <rex/filesystem/sfd_hevc.h>
+#include <rex/filesystem/xmo.h>  // culdcept-nx / sasrt-nx (2026-11-21); blur-nx 1.0.1
 #include <rex/logging.h>
 #include <rex/math.h>
 #include <rex/memory/mapped_memory.h>
@@ -65,7 +66,29 @@ HostPathEntry* HostPathEntry::Create(Device* device, Entry* parent,
       REXFS_WARN("{} is not a valid packed .hevc movie: left as it is", rex::path_to_utf8(full_path));
     }
   }
-  if (!packed_hevc_name && file_info.type == rex::filesystem::FileInfo::Type::kFile && HasLz4BlocksSuffix(name)) {
+  // sasrt-nx (2026-11-21): NAME.xmop.lz4b (rex/filesystem/xmo.h, a .xmop package stored as ZXC blocks) the same way.
+  const bool packed_xmop_name =
+      file_info.type == rex::filesystem::FileInfo::Type::kFile && HasLz4BlocksSuffix(name) &&
+      HasXmopSuffix(std::string_view(name).substr(0, name.size() - kLz4BlocksSuffix.size()));
+  bool packed_xmop = false;
+  uint64_t packed_xmop_size = 0;
+  if (packed_xmop_name) {
+    std::filesystem::path plain = full_path;
+    plain.replace_extension();  // NAME.xmop
+    plain.replace_extension();  // NAME
+    rex::filesystem::FileInfo plain_info;
+    if (rex::filesystem::GetInfo(plain, &plain_info)) {
+      REXFS_WARN("{} and {} are both in the game folder: the plain file is used (delete one of them)",
+                 rex::path_to_utf8(plain), rex::path_to_utf8(full_path));
+    } else if (ReadXmopSize(full_path, &packed_xmop_size)) {
+      packed_xmop = true;
+      name.resize(name.size() - kXmopSuffix.size() - kLz4BlocksSuffix.size());
+    } else {
+      REXFS_WARN("{} is not a valid packed .xmop package: left as it is", rex::path_to_utf8(full_path));
+    }
+  }
+  if (!packed_hevc_name && !packed_xmop_name && file_info.type == rex::filesystem::FileInfo::Type::kFile &&
+      HasLz4BlocksSuffix(name)) {
     std::filesystem::path plain = full_path;
     plain.replace_extension();
     rex::filesystem::FileInfo plain_info;
@@ -111,16 +134,40 @@ HostPathEntry* HostPathEntry::Create(Device* device, Entry* parent,
       REXFS_WARN("{} is not a valid .hevc movie: left as it is", rex::path_to_utf8(full_path));
     }
   }
+  // culdcept-nx (2026-11-20): NAME.xmo (rex/filesystem/xmo.h, an XMA file whose frames are Opus) the same way; sasrt-nx
+  // (2026-11-21): and NAME.xmop (a file whose XMA sounds are Opus; blur-nx 1.0.1: cache/root_streaming.pak.xmop).
+  bool xmo = false, xmop = false;
+  if (file_info.type == rex::filesystem::FileInfo::Type::kFile && (HasXmoSuffix(name) || HasXmopSuffix(name))) {
+    const bool pack = HasXmopSuffix(name);
+    std::filesystem::path plain = full_path;
+    plain.replace_extension();
+    rex::filesystem::FileInfo plain_info;
+    if (rex::filesystem::GetInfo(plain, &plain_info)) {
+      REXFS_WARN("{} and {} are both in the game folder: the plain file is used (delete one of them)",
+                 rex::path_to_utf8(plain), rex::path_to_utf8(full_path));
+    } else if (pack ? ReadXmopSize(full_path, &lz4_size) : ReadXmoSize(full_path, &lz4_size)) {
+      (pack ? xmop : xmo) = true;
+      name.resize(name.size() - (pack ? kXmopSuffix : kXmoSuffix).size());
+    } else {
+      REXFS_WARN("{} is not a valid {} file: left as it is", rex::path_to_utf8(full_path), pack ? ".xmop" : ".xmo");
+    }
+  }
   if (packed_hevc) {
     sfd_hevc = true;
     lz4_size = packed_hevc_size;
+  }
+  if (packed_xmop) {
+    xmop = true;
+    lz4_size = packed_xmop_size;
   }
   auto path = rex::string::utf8_join_guest_paths(parent->path(), name);
   auto entry = new HostPathEntry(device, parent, path, full_path);
   entry->lz4_blocks_ = lz4_blocks;
   entry->opus_pcm_ = opus_pcm;
   entry->sfd_hevc_ = sfd_hevc;
-  if (lz4_blocks || opus_pcm || sfd_hevc) {
+  entry->xmo_ = xmo;
+  entry->xmop_ = xmop;
+  if (lz4_blocks || opus_pcm || sfd_hevc || xmo || xmop) {
     file_info.total_size = size_t(lz4_size);
   }
 
@@ -197,6 +244,16 @@ X_STATUS HostPathEntry::Open(uint32_t desired_access, File** out_file) {
     }
   } else if (sfd_hevc_) {
     file_handle = OpenSfdHevc(std::move(file_handle));  // logs why when it is not a valid .hevc movie
+    if (!file_handle) {
+      return X_STATUS_NO_SUCH_FILE;
+    }
+  } else if (xmo_) {  // culdcept-nx (2026-11-20)
+    file_handle = OpenXmo(std::move(file_handle));  // logs why when it is not a valid .xmo file
+    if (!file_handle) {
+      return X_STATUS_NO_SUCH_FILE;
+    }
+  } else if (xmop_) {  // sasrt-nx (2026-11-21)
+    file_handle = OpenXmop(std::move(file_handle));  // logs why (it unpacks NAME.xmop.lz4b itself)
     if (!file_handle) {
       return X_STATUS_NO_SUCH_FILE;
     }
@@ -301,6 +358,12 @@ void HostPathEntry::update() {
     } else if (sfd_hevc_) {  // and a .hevc movie
       uint64_t size = 0;
       if (!ReadSfdHevcSize(host_path_, &size)) {
+        return;
+      }
+      file_info.total_size = size_t(size);
+    } else if (xmo_ || xmop_) {  // culdcept-nx / sasrt-nx: and an .xmo or .xmop
+      uint64_t size = 0;
+      if (!(xmop_ ? ReadXmopSize(host_path_, &size) : ReadXmoSize(host_path_, &size))) {
         return;
       }
       file_info.total_size = size_t(size);

@@ -21,6 +21,8 @@ add_library(rexfilesystem OBJECT
     opus_decoder.cpp  # rr6-nx (2026-11-21): NAME.opcm, the music as Opus
     opus_pcm.cpp
     sfd_hevc.cpp      # rr6-nx (2026-11-21): NAME.hevc, the movies as H.265
+    xmo.cpp           # culdcept-nx (2026-11-20) / sasrt-nx (2026-11-21): NAME.xmo / NAME.xmop[.lz4b], XMA as Opus
+                      # (blur-nx 1.0.1, 2026-11-22: cache/root_streaming.pak.xmop, the streamed music and ambience)
 )
 add_library(rex::filesystem ALIAS rexfilesystem)
 

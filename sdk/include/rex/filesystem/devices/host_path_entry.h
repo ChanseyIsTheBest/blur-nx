@@ -41,7 +41,12 @@ class HostPathEntry : public Entry {
   // H.265), shown as NAME with that file's size; opened through OpenSfdHevc, never mapped or written.
   bool sfd_hevc() const { return sfd_hevc_; }
   // Any of them: the guest's file is made from the host's one (read only, not mapped, its size the one it stands for).
-  bool packed() const { return lz4_blocks_ || opus_pcm_ || sfd_hevc_; }
+  // culdcept-nx (2026-11-20) / sasrt-nx (2026-11-21): host_path_ is a NAME.xmo (an XMA file whose frames are Opus)
+  // or a NAME.xmop / NAME.xmop.lz4b (a file whose XMA sounds are Opus; rex/filesystem/xmo.h), shown as NAME with that
+  // file's size; opened through OpenXmo / OpenXmop, never mapped or written (blur-nx 1.0.1).
+  bool xmo() const { return xmo_; }
+  bool xmop() const { return xmop_; }
+  bool packed() const { return lz4_blocks_ || opus_pcm_ || sfd_hevc_ || xmo_ || xmop_; }
 
   /*
    * "All the children of this directory are already known."
@@ -86,6 +91,8 @@ class HostPathEntry : public Entry {
   bool lz4_blocks_ = false;
   bool opus_pcm_ = false;
   bool sfd_hevc_ = false;
+  bool xmo_ = false;
+  bool xmop_ = false;
 };
 
 }  // namespace rex::filesystem
