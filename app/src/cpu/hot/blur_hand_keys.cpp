@@ -58,7 +58,17 @@ BLUR_HAND_KEY(822D7DF0, "the 15 ms batch: the resampler's stereo converter (exac
 BLUR_HAND_KEY(82953880, "the 15 ms batch: Blur's memset (exact)")
 BLUR_HAND_KEY(82954218, "the 15 ms batch: Blur's memcpy (exact)")
 BLUR_HAND_KEY(822E98B0, "the 15 ms batch: audio (inexact allowed)")
-BLUR_HAND_KEY(822D2378, "the 15 ms batch: audio (inexact allowed)")
+// blur-nx 1.0.1 (2026-11-21, GitHub issues #2 and #5: "no music in menus or races" on the Switch): off by default.
+// With this native on and no guard (the Switch's banjo_hot_guard_calls = 0), the menu music played ~5 s and stopped:
+// the game never asked its loader for the music's next block (console I/O trace: only the bank headers read). The PC
+// guard hid it (it runs each thread's first 64 calls as the original; this native declines guarded calls). PC with the
+// guard off: silent after ~45 s; the 86 natives bisected to this one; it alone off -> music. Console with
+// blur_hand_822D2378 = false: menumusic.baf streamed for the whole 130 s. Its bug is not found yet; the copy is exact.
+REXCVAR_DEFINE_BOOL(blur_hand_822D2378, false, "Blur/Enhancements",
+                    "Hand-written native of sub_822D2378 (the 15 ms batch: audio, the voice step), in front of its "
+                    "machine copy. Off by default since 1.0.1: with it on the Switch's music stopped after a few "
+                    "seconds (GitHub issues #2 and #5). Off: the machine copy (exact)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 BLUR_HAND_KEY(822BEDD0, "the 15 ms batch: audio (inexact allowed)")
 BLUR_HAND_KEY(822CBAD0, "the 24-hour run: audio (inexact allowed)")
 BLUR_HAND_KEY(822CD2B0, "the 24-hour run: audio (inexact allowed)")
