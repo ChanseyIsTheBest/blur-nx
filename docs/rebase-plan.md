@@ -135,3 +135,38 @@ draws as 11-21's run does at the same second; its 35 guard differences (17 funct
 run showed in 13 of the same functions (r12 and stack-address leftovers); new to it only by the route: sub_823262D8
 (a NaN's sign through the hand-written sin/cos native 82954478, an input of 2.6e28) and sub_82455348 (a byte of a
 global at 0x82CC00D0, a race function the 11-21 menu run never reached).
+
+Profile (hb16, commit `247be126`): the instrumented build of `45b0379e` trained on the console, one race each of
+Barcelona Oval and Amboy (Proving Grounds' first and second events), 551 profile files. Training note:
+scratch_scripts_1120/one_race_event2.sh's down press had come one confirm early on 11-18 (on the chapter card, where it
+does nothing), so hb13's and hb15's "Amboy" sessions were Barcelona Oval again (the 1.0.0 and pre-sync 1.0.1 profiles
+saw one track). It now presses down after the fifth confirm, and amboy_check.py stops the script in the menus unless a
+shot of the event list shows Amboy selected.
+
+Console (2026-11-22, 22:49-23:41; release builds, `log_level = "info"`, frame cap off, Barcelona Oval, the 240 s quiet
+drive; pacing_sum.py over the race windows, `--gpu-min 0 --cpu-min 150`). The console now runs at higher clocks (GPU
+1305 MHz): an uncapped race sits at the display's 60 Hz, so the mean cannot move; the lows and the render thread show the
+sync. A = the pre-sync 1.0.1 (2026-11-22_release_1_0_1_media, hb15), B = the synced release
+(2026-11-22_release_1_0_1_sync, hb16), in the order A B B A:
+
+| race | mean fps | 1 % low | 0.1 % low | render thread ms | GPU ms |
+|---|---|---|---|---|---|
+| A1 | 59.93 | 39.90 | 31.11 | 10.55 | 14.19 |
+| B1 | 60.05 | 42.63 | 34.53 | 8.07 | 13.77 |
+| B2 | 60.03 | 41.16 | 31.29 | 9.01 | 13.91 |
+| A2 | 59.67 | 35.91 | 15.93 | 10.83 | 14.30 |
+
+B against A: 1 % low 41.9 against 37.9 fps, render thread 8.5 against 10.7 ms a frame (-20 %), the race's CPU about
+250-280 % against 270-300 % (rex_profile.log). A2's 0.1 % low is two frames near 200 ms (the render thread's).
+
+A/B race on B (`banjo_renut_ab_targets = "182,185,179,1"`, 15 s halves; ab_sum.py; the render thread's us a draw, the
+halves catching different scenes): 182 the command stage on 4.61 / off 5.54 (it pays); 185 the warm helper 4.65 / 4.57
+(even, 15 s each); 179 kick submits 4.51 / 4.18 (on about 8 % worse); 1 precise barriers 4.78 / 4.61 (on about 4 %
+worse). One race: 179 and 1 are signs for a longer A/B, not verdicts.
+
+A crash in A2 (the pre-sync build): about 15 s after the drive (near the race's end), std::terminate on std::bad_alloc on
+an XMA decoder thread: XmaContext::DecodeFrame, the frame cache's AddNode (`new uint8_t[need]`, a few KB: past the
+small-alloc arena, so newlib's malloc returned null). The heap report 30 s before: 1496 MB taken of 3074, 830 MB never
+handed out; no growth over the race. Not exhaustion, then: newlib's heap state (a corruption) or something taking
+~800 MB at once. First bad_alloc in any saved Blur crash log; the pre-sync 1.0.1 was the first build with the Opus
+streams and the H.265 movies, which B has too. B passed three race ends (B1, B2, the A/B race). Open.
