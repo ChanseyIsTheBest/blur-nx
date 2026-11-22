@@ -102,3 +102,36 @@ configured with `cmake --fresh` (the old caches in `C:\blur-nx-test\old_caches`)
 **Not touched by this port:** the CPU side's hot lists are this game's (empty machine-copy lists); the SASRT session's
 atomics patch is in `tools/localize_native.py` (not run). The new base's machine-copy round (the SASRT ports) comes in
 with the base and is the one used for step 5 (Blur's own hot lists are made fresh from the profile then).
+
+## Sync 2026-11-22: base cebb46af (ports 182-254)
+
+The user: "sync up with ultimate base please new render thread improvements". The same method as above: base-update
+`56af7712` (the base's committed tree at cebb46af), merged into cycle1 as `4a37ffc2` with `git checkout --conflict=diff3`
+and per-hunk picks (the merge commit lists each file). 22 files in conflict, 34 changed on both sides. Points to know
+for the next sync:
+
+- **git pairs Katamari's dist folder with Blur's** (rename detection): the base's edits to dist/switch/katamari-nx
+  (port 252's forwarder 0100080021954000, port 254's uam line) arrived as conflicts in dist/switch/blur-nx. Resolve them
+  by making the tomls again: `python tools/make_blur_tomls.py --out dist/switch/blur-nx` (from the base's
+  tools/renut_base_banjo.toml, Blur's SHIPPED on top: Blur's forwarder wins), then `python tools/make_blur_builtin.py`.
+- **Device offsets in new base code**: port 213's field map in render/draw.h has Katamari's own-declaration offset
+  (0x2F98); Blur's is 0x3050. draw.cpp's static_assert caught it, but only in the Switch syntax check
+  (scratch_scripts_1120/ninja_syntax_wt.py with switch-release-final's commands). Scan the base's diff for hex offsets in
+  0x2000-0x6000 after a sync.
+- **Port 254 / 251 and Blur's core 3**: the uam compiles moved to core 2 (banjo_system_core_uam false) because port
+  251's command stage (0x2E) and warm helper (0x2F) sit on core 3. Blur's audio threads stay there above them (0x2B,
+  the mixer 0x2D); Blur's game threads also use core 3 (banjo_system_core 2). The stage's gain in Blur is measured on
+  the console (A/B 182, 185, 179).
+- **Codegen**: the generator's source changed (ports 187, 194) and post_codegen.py (224): the PC build with both
+  stamps deleted relinked rexglue.exe and ran codegen (346 s) and post_codegen (about 45 min). cc_entry_census.py ends
+  with "none".
+
+PC checks (C:/blur-nx-test/pc_runs): sync_verify_1122 (banjo_cpu_verify): 84 M calls compared, one difference,
+sub_8230C2D0 (bulk), whose closure has an atomic increment (sub_822F1100, lwarx/stwcx.) of a counter the audio job
+threads share: the guard's copy-then-original passes see it moved by another thread (the differing byte fits a counter
+2 apart); the copy is kept (it has run unguarded in every Switch build). That run stayed on loading screens (black
+captures; the guard's slow loads, as on 11-18). sync_noguard_1122 (the PC's first-64-calls guard): reaches the race and
+draws as 11-21's run does at the same second; its 35 guard differences (17 functions) are the classes 11-21's pre-sync
+run showed in 13 of the same functions (r12 and stack-address leftovers); new to it only by the route: sub_823262D8
+(a NaN's sign through the hand-written sin/cos native 82954478, an input of 2.6e28) and sub_82455348 (a byte of a
+global at 0x82CC00D0, a race function the 11-21 menu run never reached).
