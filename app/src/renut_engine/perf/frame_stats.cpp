@@ -21,6 +21,7 @@ extern "C" void RexSwitchPerfCount(unsigned id);
 #include "renut_engine/gpu/banjo_renut_tuning.h"  // the [renut] report and its in-run A/B
 
 namespace banjo::renderdoc { void GameFrame(); }  // me/banjo_renderdoc.cpp (banjo_renderdoc_game_s)
+namespace blur::small_alloc { void WatchFrame(); }  // blur-nx (2026-11-23): src/blur_small_alloc.cpp (blur_heap_watch)
 
 namespace renut::frame_stats {
 
@@ -144,6 +145,7 @@ void OnGameFrame() {
   // culdcept-nx (2026-11-19): banjo_renderdoc_game_s's frame tick. Its only caller was N&B's appMainDraw hook
   // (renut_engine/FPS.cpp, not built since katamari-nx), so the key captured nothing; the Swap is every port's frame.
   banjo::renderdoc::GameFrame();
+  blur::small_alloc::WatchFrame();  // blur-nx (2026-11-23): newlib's top chunk checked once a frame (blur_heap_watch)
   State& s = S();
   std::lock_guard lock(s.mutex);
   const auto now = Clock::now();
