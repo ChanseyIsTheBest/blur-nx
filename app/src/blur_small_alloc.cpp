@@ -262,14 +262,20 @@ struct Evidence {
   uintptr_t below_from = 0;
   uint8_t below[256] = {};  // [top - 256, top)
   uint8_t at[64] = {};      // [top, top + 64)
-  BigBlock near[12] = {};   // the ring's blocks in the 64 KB below the top chunk, the highest first
+  BigBlock near[12] = {};    // the ring's blocks in the 64 KB below the top chunk, the highest first
   BigBlock largest[4] = {};  // the ring's largest blocks (a shortage: who took the heap)
+  BigBlock recent[8] = {};   // the ring's latest blocks, the latest first
   uint32_t near_n = 0, ring_next = 0;
+  // newlib's chunks from the latest remembered block below the top chunk upwards. After a failed request newlib has
+  // already replaced a top chunk whose size word was too small (malloc_extend_top takes it for another sbrk user's and
+  // starts a new top chunk at the new break, size 0): the old one, with the bytes written over it, is then where this
+  // walk stops (a word that is not a chunk size), below the new one.
   struct Chunk {
-    uintptr_t at, word;
-    uint8_t head[16];
-  } walk[24] = {};  // newlib's chunks from the highest of those up to the top chunk
+    uintptr_t at, prev, word;
+    uint8_t head[32];
+  } walk[32] = {};
   uint32_t walk_n = 0;
+  const char* walk_end = "";
 };
 Evidence g_evidence;
 std::atomic_flag g_reporting = ATOMIC_FLAG_INIT;
@@ -287,6 +293,7 @@ void GatherLocked(Evidence& e, const TopChunk& t) {
   e.ring_next = g_ring_next.load(std::memory_order_relaxed);
   e.near_n = e.walk_n = 0;
   e.below_from = 0;
+  e.walk_end = "";
   for (BigBlock& b : e.largest) b = BigBlock{};
   for (uint32_t i = 0; i < kRing; ++i) {
     const BigBlock b = g_ring[i];
@@ -295,6 +302,10 @@ void GatherLocked(Evidence& e, const TopChunk& t) {
     if (k == std::size(e.largest)) continue;
     for (uint32_t j = uint32_t(std::size(e.largest)) - 1; j > k; --j) e.largest[j] = e.largest[j - 1];
     e.largest[k] = b;
+  }
+  for (uint32_t i = 0; i < std::size(e.recent); ++i) {
+    const BigBlock b = g_ring[(e.ring_next - 1 - i) & (kRing - 1)];
+    e.recent[i] = i < e.ring_next ? b : BigBlock{};
   }
   if (!t.in_heap) return;
   if (t.top >= e.heap_lo + sizeof(e.below)) {
@@ -313,19 +324,39 @@ void GatherLocked(Evidence& e, const TopChunk& t) {
     e.near[k] = b;
     e.near_n = std::min<uint32_t>(e.near_n + 1, uint32_t(std::size(e.near)));
   }
-  // newlib's chunks from the highest ring block's up to the top chunk: each one's size word (its in-use bit is the
-  // next one's bit 0) and first 16 bytes. A word that is not a chunk size ends the walk.
-  if (e.near_n) {
-    uintptr_t c = e.near[0].ptr - 16;
-    while (e.walk_n < std::size(e.walk) && c + 16 <= t.top) {
-      Evidence::Chunk& w = e.walk[e.walk_n++];
-      w.at = c;
-      w.word = reinterpret_cast<const uintptr_t*>(c)[1];
-      std::memcpy(w.head, reinterpret_cast<const void*>(c + 16), std::min<uintptr_t>(16, t.top - (c + 16)));
-      const uintptr_t size = w.word & ~uintptr_t(3);
-      if (size < kMinChunk || (size & 15) || c + size > t.top) break;
-      c += size;
+  // newlib's chunks from the latest remembered block below the top chunk upwards (see Evidence::walk): each one's two
+  // words (prev_size, size: its in-use bit is the next one's bit 0) and first 32 bytes. Up to the top chunk, or a word
+  // that is not a chunk size, or 32 chunks.
+  uintptr_t from = 0;
+  for (const BigBlock& b : e.recent) {
+    if (b.ptr >= e.heap_lo + 16 && b.ptr < t.top && !(b.ptr & 15)) {
+      from = b.ptr - 16;
+      break;
     }
+  }
+  if (!from && e.near_n) from = e.near[0].ptr - 16;
+  e.walk_end = from ? "32 chunks walked" : "no remembered block below the top chunk";
+  for (uintptr_t c = from; c && e.walk_n < std::size(e.walk);) {
+    if (c == t.top) {
+      e.walk_end = "reached the top chunk";
+      break;
+    }
+    if (c + 16 > t.top) {
+      e.walk_end = "a chunk runs past the top chunk";
+      break;
+    }
+    Evidence::Chunk& w = e.walk[e.walk_n++];
+    w.at = c;
+    w.prev = reinterpret_cast<const uintptr_t*>(c)[0];
+    w.word = reinterpret_cast<const uintptr_t*>(c)[1];
+    std::memset(w.head, 0, sizeof(w.head));
+    std::memcpy(w.head, reinterpret_cast<const void*>(c + 16), std::min<uintptr_t>(sizeof(w.head), t.top - (c + 16)));
+    const uintptr_t size = w.word & ~uintptr_t(3);
+    if (size < kMinChunk || (size & 15) || c + size > t.top) {
+      e.walk_end = "stopped at a word that is not a chunk size (the last line)";
+      break;
+    }
+    c += size;
   }
 }
 
@@ -361,7 +392,7 @@ void Hex(char* line, size_t cap, const uint8_t* b, size_t n) {
   for (size_t i = 0; i < n && at + 4 < cap; ++i) at += size_t(std::snprintf(line + at, cap - at, i % 8 ? " %02x" : "  %02x", b[i]));
 }
 
-char g_text[8192];
+char g_text[16384];
 
 void Write(const Evidence& e) {
   const uintptr_t base = reinterpret_cast<uintptr_t>(&_start);
@@ -409,11 +440,20 @@ void Write(const Evidence& e) {
       put("[heap] one of the largest remembered: 0x%" PRIxPTR " %u bytes, called from image+0x%" PRIxPTR
           ", %u blocks ago\n", b.ptr, b.size, b.caller >= base ? b.caller - base : 0, e.ring_next - b.seq);
   }
-  if (e.walk_n) put("[heap] newlib's chunks from the highest of those up to the top chunk:\n");
+  for (const BigBlock& b : e.recent) {
+    if (b.ptr)
+      put("[heap] remembered lately: 0x%" PRIxPTR " %u bytes, called from image+0x%" PRIxPTR ", %u blocks ago\n",
+          b.ptr, b.size, b.caller >= base ? b.caller - base : 0, e.ring_next - b.seq);
+  }
+  put("[heap] newlib's chunks from the latest remembered block below the top chunk (%s):\n", e.walk_end);
   for (uint32_t i = 0; i < e.walk_n; ++i) {
     const Evidence::Chunk& c = e.walk[i];
     Hex(line, sizeof(line), c.head, 16);
-    put("[heap]   0x%" PRIxPTR " word 0x%" PRIxPTR ":%s\n", c.at, c.word, line);
+    put("[heap]   0x%" PRIxPTR " prev 0x%" PRIxPTR " word 0x%" PRIxPTR ":%s\n", c.at, c.prev, c.word, line);
+    if (i + 4 >= e.walk_n) {  // the walk's last chunks: their next 16 bytes too
+      Hex(line, sizeof(line), c.head + 16, 16);
+      put("[heap]   %*s%s\n", 46, "", line);
+    }
   }
   std::fputs(g_text, stderr);
 }
