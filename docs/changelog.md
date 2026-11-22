@@ -277,3 +277,97 @@ Ports 1-43 are the first round: the universal fixes of the other ports' renderer
   Menu font.
 - Port 181 turns port 168's texture park off by default: on Blur's console it drew whole races with ghosting,
   colour fringes and grain.
+- Port 181 corrected (Blur, the same day): the texture park did not break Blur's picture (that was slow
+  instrumented builds); it stays off because it took back no texture in Blur or Katamari.
+- Port 182 (from blur-nx) sends the game menu's combo once a press across pads (Ryujinx with three pads opened
+  and closed the menu at once).
+- Port 183 (from blur-nx): with logging off, stderr stays in memory (a crash report carries it) and nothing is
+  written in logs/; with logging on, rex_stderr.log appears at its first write.
+- Port 184 (from blur-nx): the forms self-check expects what the near-exact switches choose (#1, #17).
+- Port 185 (from blur-nx): tools/run_pc.ps1 -Game and tools/switch_remote.py mv (refuses to replace a file).
+- Port 186 (sasrt-nx's sync): the post-codegen passes find the generated files by the port's project name
+  (<project>_recomp.N.cpp, _pch.h, _init.cpp), not renut_ only; near_exact.py stopped and fp_env_files.py missed
+  the FPSCR writers in a port with another name.
+- Port 187 (sasrt-nx's sync): port 144's builders in rex::codegen::extra_insn, so a port's own build_ldbrx (and
+  the rest) still links.
+- Port 188 (sasrt-nx's sync): A/B targets 256-511 are a port's own; the base's stay 1-255.
+- Port 189 (from sasrt-nx): the game menu leaves out a settings row whose key the build does not define (a port
+  without Katamari's frame_cap needs no edit there).
+- Port 190 (from sa2-nx): FFmpeg's nine configure-made files (config.h, avconfig.h, ffversion.h, six lists) are
+  in the tree; FFmpeg's .gitignore had kept them out, so a fresh clone could not build.
+- Port 191 (from S4ep1-nx, with culdcept-nx): tools/built_ptr_scan.py lists code addresses built in code that no
+  translated function starts at (Sonic 4's Mad Gear crash); pointer_fixpoint.py reads ori's source right.
+- Port 192 (from TFU-nx via S4ep1-nx): a semaphore's release wakes one blocked thread per count, not all.
+- Port 193 (from TFU-nx via S4ep1-nx): a toml that does not parse is reported; logs and crash reports start with
+  the build's stamp; the last launch's logs are kept; the guest crash report on the PC too.
+- Port 194 (from TFU-nx via S4ep1-nx): build fixes, a shader the translator cannot take left out, the shader
+  cache's blobs by #embed.
+- Port 195 (from S4ep1-nx): input_stick_deadzone (off); the game's message boxes at twice the size.
+- Port 196 (from TFU-nx and S4ep1-nx): Renut takes XDK 2.0.6534's and 2.0.11626's device snapshots, render
+  heights from 360, the FPS overlay counts the images shown, GetFunction hook bodies (not bound).
+- Port 197: tools\build_pc.bat runs code generation and post_codegen first on a fresh clone.
+- Port 198 (from deadpool-nx): XMA freeze fixes (a frame split across packets, a decode loop that writes nothing,
+  a disable during a worker's decode).
+- Port 199 (from deadpool-nx): stack forwarding ends at every branch and call.
+- Port 200 (from deadpool-nx): inline_memcalls.py takes several memcpy / memset addresses.
+- Port 201 (from deadpool-nx): the guest spinlock helpers leave another thread's IRQL alone.
+- Port 202: sasrt_renut_depth_restore off by default (it drew Sonic 4's title sky white); sasrt-nx sets it.
+- Port 203 (from sims3-nx): saves on Horizon: delete on close, an open file replaced, one Horizon file per path.
+- Port 204 (from sims3-nx): raw device paths canonical; a module's title-update patch from update:.
+- Port 205 (from sims3-nx): a title's relaunch of itself loads the NRO again with its launch data.
+- Port 206 (from sims3-nx): the L+R+trigger shortcuts fire on release, and not with both triggers.
+- Port 207 (from culdcept-nx): Shader containers of version 0x10.
+- Port 208 (from culdcept-nx): banjo_renderdoc_game_s ticks from the Swap hook.
+- Port 209 (from culdcept-nx): RENUT_ALPHA_TEST_UNORM8.
+- Port 210 (from culdcept-nx): headless_keyboard_text.
+- Port 211 (from culdcept-nx): Renut's GPU callbacks.
+- Port 212 (from culdcept-nx): thread_suspend_log.
+- Port 213 (from culdcept-nx): The device's own vertex declaration.
+- Port 214 (from culdcept-nx): banjo_renut_diag_fast_force.
+- Port 215 (from culdcept-nx): A cancelled keyboard.
+- Port 216 (from culdcept-nx): Switch.
+- Port 217 (from culdcept-nx): XamInputGetState clears the state of a controller that is not connected, as the console does.
+- Port 218 (from culdcept-nx): Read-only game files keep their host handle after the guest closes them.
+- Port 218, its follow-up (from culdcept-nx): an open that fails while game-file handles are parked closes them all and is tried again.
+- Port 219 (from culdcept-nx): With the indirect census on, an indirect call outside the image is logged with its guest function and call site, before the "unregistered function" stop that names only the target.
+- Port 220 (from culdcept-nx): A controller that connects after the game showed its sign-in screen is signed in as a guest.
+- Port 221 (from culdcept-nx): input_script_p2 / _p3 / _p4.
+- Port 222 (from culdcept-nx): The draw log.
+- Port 223 (from banjo-nx): port 87's tiles-once check reads this XDK's device offsets.
+- Port 224 (from banjo-nx): post-codegen tools: indirect sites keyed by their own function, the r1 / lr proofs with the base's own helpers.
+- Port 225 (from banjo-nx): run_pc.ps1 quotes paths with spaces; six diagnosis tools.
+- Port 226 (from banjo-nx): the forms self-check knows REX_NX_FCTI_NO_NAN; banjo_hot_bulk_lines.
+- Port 227 (from banjo-nx): a game may change its Settings rows in the game menu.
+- Port 228 (from banjo-nx): deko3d unpacks a shader's GLSL when it needs it instead of keeping it (the console's out-of-memory crash after level loads).
+- Port 229 (from banjo-nx): pipelines a draw asked for are built before the list's.
+- Port 230 (from banjo-nx): the Switch writes rex_profile.log only with logging on.
+- Port 231 (from banjo-nx): BANJO_GENERATED_NO_TRAPPING_MATH keeps -ftrapping-math on the files that set the rounding mode (the switch stays off).
+- Port 232 (from banjo-nx): the DKSH cache tool's --round-guess; banjo_deko3d_log_misses.
+- Port 233 (from banjo-nx): the stage census's off check costs a load, not a call.
+- Port 234 (from banjo-nx): the shader compiler's share of its core counts every compile.
+- Port 234, its follow-up (from banjo-nx): a draw's shader compile never waits behind the compile rest.
+- Port 235 (from banjo-nx): profile_per_draw.py, ab_halves.py, deko3d_miss_coverage.py --nearest.
+- Port 236 (from banjo-nx): the renderer's diagnostic censuses compiled out of the Switch build (BANJO_SWITCH_DIAG_CENSUS, off).
+- Port 237 (from banjo-nx): the GPU round's On() is one byte load.
+- Port 238 (from banjo-nx): one copy each of FillTextures, PushFloatConstants and Replay; train PGO again after ports 236-238.
+- Port 239 (from banjo-nx): BANJO_SWITCH_RENUT_DEBUG_INFO (-g for the renderer and plume, the same code) and tools/profile_inline.py.
+- Port 240 (from banjo-nx): the NaN flush key read once a constant upload, not once a group.
+- Port 241 (from banjo-nx): an urgent shader compile (a fetch-specialised pipeline) takes no compile rest.
+- Port 242 (from banjo-nx): -fno-threadsafe-statics on the switches' files the draw path calls (ultimate.cpp, banjo_renut_tuning.cpp, render_thread.cpp); AbTargets under std::call_once.
+- Port 243 (from banjo-nx): the A/B word as a plain int for the draw path (g_ab_off_plain); Latch() tests a flag on its own line.
+- Port 244 (from banjo-nx): the 10 s report's per-draw counts off with log_level "off" or banjo_renut_draw_counts = false (the A/B's draw count kept).
+- Port 245 (from banjo-nx): the GPU round's On() answers as plain bytes.
+- Port 246 (from banjo-nx): FillTextures' skips: an unasked call's compare and copy, a slot answer's epoch buckets (A/B 170).
+- Port 247 (from banjo-nx): PrefetchShaderBehind skipped for a stage whose shader is the last op's (A/B 171).
+- Port 248 (from banjo-nx): TextureFetch::FromGuest in NEON.
+- Port 249 (from banjo-nx): banjo_renut_ring_spin_us, an experiment (0, off).
+- Port 250 turns port 161's banjo_deko3d_copy_run_barriers off by default: on Blur's console it drew rainbow colour
+  fringes in races, its release NRO too (the ghosting port 181 blamed on the texture park).
+- Port 251 (from banjo-nx): the deko3d command stage on the system core (4-core mode; the render thread records, a
+  thread on core 3 plays into deko3d), the cache-warming helper and render-thread cycles 1-4: in N&B on the console the
+  render thread -14.9 % a draw, fps +6.4 %. Kick submits off and the SMAA hand-over on, on the Switch.
+- Port 252: four cores for Katamari again (its forwarder 0100080021954000 in its tomls), so port 251's stage has core 3.
+- Port 253 (from rr6-nx): tools/deko3d_variant_cache.py --generic also writes each pipeline's own generic variant
+  (926, 950-973 and 977 stay in it), which the prebuild otherwise compiled blocking: RR6's 10 % GPU gap after the sync.
+- Port 254: the uam compile thread on core 2 by default (banjo_system_core_uam off); port 251's stage and warm helper
+  keep core 3, where a race compile took minutes under them.

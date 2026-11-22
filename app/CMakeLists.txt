@@ -24,6 +24,16 @@ option(BANJO_SWITCH_EARLY_RA "Leave GCC's AArch64 early register allocation pass
 # console profile's samples fall. -g does not change the generated code: an ELF built with this ON has every function
 # at the address of the same sources built with it OFF, so it names the samples of a run of the normal NRO.
 option(BANJO_SWITCH_RENDERER_LINES "Switch: line tables for the hot native renderer files (profiling aid)" OFF)
+# banjo-nx (2026-11-20, the render thread against renut-nx 1.0.2): full debug info (-g, with the inlined functions)
+# for Renut's renderer and plume, so a console profile's samples can be named by the source function they fall in
+# even where PGO and LTO inlined it (1.0.2's ELF had it; the ultimate build's had none). -g does not change the code.
+option(BANJO_SWITCH_RENUT_DEBUG_INFO "Switch: -g for Renut's renderer and plume (profiling aid)" OFF)
+# banjo-nx (2026-11-20): the renderer's diagnostic censuses (blur_renut_diag_stage_census, blur_renut_diag_batch_census)
+# compiled in. OFF (the Switch's default): their checks are constant false and every census block compiles away; the
+# keys do nothing. In Showdown Town the checks with the keys off cost N&B's render thread ~0.1 us a draw.
+option(BANJO_SWITCH_DIAG_CENSUS "Switch: compile in the renderer's diagnostic censuses" OFF)
+# (Set on the renderer's targets below, where they exist: a directory-wide definition recompiled the generated game
+# code, ~1,000 files, for a definition it never reads.)
 if(REXGLUE_PLATFORM_SWITCH AND NOT BANJO_SWITCH_EARLY_RA)
     add_compile_options(-mearly-ra=none)
     add_link_options(-mearly-ra=none)
@@ -191,8 +201,13 @@ endif()
 # katamari-nx (2026-10-30): banjo-nx's app without the files written for N&B's addresses (its cheats and mid-asm
 # hooks, title update and DLC, the D3D hook layer of banjo-nx's PM4 renderer, its XAudio and hand-written natives, the
 # shader harvest): src/blur_keys.cpp defines the keys of those files that the kept ones still read.
+# renut-ultimate (2026-11-20, port 193): the game's name in the build stamp (src/build_stamp.cpp) and the NRO's title. A
+# port sets its own here. blur-nx (2026-11-22, the base sync): "blur", the NRO's title since 1.0.0.
+set(RENUT_GAME_NAME "blur")
+
 set(RENUT_SOURCES
     src/main.cpp
+    src/build_stamp.cpp  # port 193: the build stamp, the first line of every log (cmake/build_stamp.cmake)
     src/blur_keys.cpp
     src/game_menu.cpp  # blur-nx (2026-11-18): the game menu (A+B+X+Y+L+R on the Switch, F8 on the PC)
     # blur-nx (2026-11-11): blur_diag_cube_writer, a write watch on a guest buffer (Windows PC only; empty elsewhere).
@@ -280,6 +295,24 @@ else()
     add_executable(renut ${RENUT_SOURCES})
 endif()
 
+# Port 193 (TFU-nx's): the build stamp header, rewritten on every build when its text changes (a custom target with no
+# output runs every time; the script leaves the header alone when the commit is the same).
+if(REXGLUE_PLATFORM_SWITCH)
+    set(RENUT_BUILD_KIND "switch")
+else()
+    set(RENUT_BUILD_KIND "pc")
+endif()
+set(RENUT_BUILD_STAMP_DIR "${CMAKE_CURRENT_BINARY_DIR}/build_stamp")
+add_custom_target(renut_build_stamp
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${RENUT_BUILD_STAMP_DIR}"
+    COMMAND "${CMAKE_COMMAND}" "-DOUT=${RENUT_BUILD_STAMP_DIR}/build_stamp.h" "-DROOT=${CMAKE_CURRENT_SOURCE_DIR}/.."
+            "-DKIND=${RENUT_BUILD_KIND}" "-DNAME=${RENUT_GAME_NAME}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_stamp.cmake"
+    BYPRODUCTS "${RENUT_BUILD_STAMP_DIR}/build_stamp.h"
+    VERBATIM)
+add_dependencies(renut renut_build_stamp)
+target_include_directories(renut PRIVATE "${RENUT_BUILD_STAMP_DIR}")
+set_source_files_properties(src/build_stamp.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+
 # GPU_PLUGINS stages the emulated-GPU backend (rexgpu-xenos.dll) next to the exe.
 # It is only used when the gpu_plugin cvar is "xenos"; empty means no GPU at all
 # (the game runs but the screen stays black).
@@ -335,12 +368,13 @@ option(BLUR_NO_TRAPPING_MATH "-fno-trapping-math everywhere but the FPSCR writer
 option(BLUR_SDK_MATH_FLAGS "-fno-math-errno on the app, the renderer and the SDK too" ON)
 if(BANJO_GENERATED_MATH_FLAGS AND TARGET renut_recomp AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(renut_recomp PRIVATE -fno-math-errno)
-    if(BANJO_GENERATED_NO_TRAPPING_MATH OR (BLUR_NO_TRAPPING_MATH AND BLUR_FPCR_ONE_MODE))
+    if((BANJO_GENERATED_NO_TRAPPING_MATH OR BLUR_NO_TRAPPING_MATH) AND BLUR_FPCR_ONE_MODE)  # either, as the base (port 231)
         target_compile_options(renut_recomp PRIVATE -fno-trapping-math)
     endif()
 endif()
-if(BLUR_NO_TRAPPING_MATH AND NOT BLUR_FPCR_ONE_MODE)
-    message(WARNING "blur: BLUR_NO_TRAPPING_MATH needs BLUR_FPCR_ONE_MODE (the flush-mode switches); left off")
+if((BLUR_NO_TRAPPING_MATH OR BANJO_GENERATED_NO_TRAPPING_MATH) AND NOT BLUR_FPCR_ONE_MODE)
+    message(WARNING "blur: BLUR_NO_TRAPPING_MATH and BANJO_GENERATED_NO_TRAPPING_MATH need BLUR_FPCR_ONE_MODE (the "
+            "flush-mode switches); left off")
 endif()
 
 # The localized native copies (src/cpu/banjo_hot_guest.cpp includes generated/hot) are game code compiled in the app:
@@ -365,7 +399,7 @@ set(BANJO_HOT_SOURCES src/cpu/banjo_hot_guest.cpp
 )
 if(BANJO_GENERATED_MATH_FLAGS AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     set_property(SOURCE ${BANJO_HOT_SOURCES} APPEND PROPERTY COMPILE_OPTIONS -fno-math-errno)
-    if(BANJO_GENERATED_NO_TRAPPING_MATH OR (BLUR_NO_TRAPPING_MATH AND BLUR_FPCR_ONE_MODE))
+    if((BANJO_GENERATED_NO_TRAPPING_MATH OR BLUR_NO_TRAPPING_MATH) AND BLUR_FPCR_ONE_MODE)  # either, as the base (port 231)
         set_property(SOURCE ${BANJO_HOT_SOURCES} APPEND PROPERTY COMPILE_OPTIONS -fno-trapping-math)
     endif()
 endif()
@@ -688,9 +722,13 @@ message(STATUS "banjo: sa2-nx's CPU rounds: definitions '${_banjo_round_definiti
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     set(_blur_fp_env_list "${CMAKE_CURRENT_SOURCE_DIR}/generated/fp_env_files.txt")
     set(_blur_no_trapping OFF)
-    if(BLUR_NO_TRAPPING_MATH AND BLUR_FPCR_ONE_MODE)
+    # blur-nx (2026-11-22, the base sync): BANJO_GENERATED_NO_TRAPPING_MATH (the base's copy of this form, port 231) gets
+    # the same exceptions; the rest of the program (below) only with BLUR_NO_TRAPPING_MATH.
+    if((BLUR_NO_TRAPPING_MATH OR BANJO_GENERATED_NO_TRAPPING_MATH) AND BLUR_FPCR_ONE_MODE)
         if(EXISTS "${_blur_fp_env_list}")
-            set(_blur_no_trapping ON)
+            if(BLUR_NO_TRAPPING_MATH)
+                set(_blur_no_trapping ON)
+            endif()
             set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_blur_fp_env_list}")
             file(STRINGS "${_blur_fp_env_list}" _blur_fp_env_files)
             foreach(_blur_f ${_blur_fp_env_files})
@@ -703,12 +741,10 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
             message(WARNING "blur: ${_blur_fp_env_list} is missing (tools/post_codegen.py writes it): the game code "
                     "keeps -ftrapping-math")
             # Back to the old option where the blocks above set the new one (the list names the exceptions).
-            if(TARGET renut_recomp AND NOT BANJO_GENERATED_NO_TRAPPING_MATH)
+            if(TARGET renut_recomp)
                 target_compile_options(renut_recomp PRIVATE -ftrapping-math)
             endif()
-            if(NOT BANJO_GENERATED_NO_TRAPPING_MATH)
-                set_property(SOURCE ${BANJO_HOT_SOURCES} APPEND PROPERTY COMPILE_OPTIONS -ftrapping-math)
-            endif()
+            set_property(SOURCE ${BANJO_HOT_SOURCES} APPEND PROPERTY COMPILE_OPTIONS -ftrapping-math)
         endif()
     endif()
     set(_blur_other_math_flags)
@@ -1174,7 +1210,7 @@ if(REXGLUE_PLATFORM_SWITCH)
     # The NRO keeps its path (sdmc:/switch/blur-nx/blur-nx.nro): Sphaira's forwarder id comes from it (05A5D8E1BAA3E000),
     # and the four-core NPDM is written for that id (RexSwitchEnsureForwarderNpdm).
     rexglue_switch_add_nro(renut
-        NAME "blur"
+        NAME "${RENUT_GAME_NAME}"  # port 193: set once, above
         AUTHOR "ChanseyIsTheBest"
         VERSION "1.0.1"
         ${RENUT_ICON_ARG})
@@ -1191,6 +1227,17 @@ if(WIN32)
     if(TARGET banjo_renut_gpu)
         target_compile_options(banjo_renut_gpu PRIVATE -gline-tables-only -gcodeview)
     endif()
+endif()
+
+if(REXGLUE_PLATFORM_SWITCH AND NOT BANJO_SWITCH_DIAG_CENSUS)  # banjo-nx (2026-11-20), see the option above
+    target_compile_definitions(banjo_renut_gpu PRIVATE RENUT_DIAG_CENSUS_OFF)
+    target_compile_definitions(renut PRIVATE RENUT_DIAG_CENSUS_OFF)
+endif()
+
+if(REXGLUE_PLATFORM_SWITCH AND BANJO_SWITCH_RENUT_DEBUG_INFO)
+    target_compile_options(banjo_renut_gpu PRIVATE -g)
+    target_compile_options(plume PRIVATE -g)
+    target_link_options(renut PRIVATE -g)  # LTO: the link writes the late debug info of the units compiled with -g
 endif()
 
 if(REXGLUE_PLATFORM_SWITCH AND BANJO_SWITCH_RENDERER_LINES)

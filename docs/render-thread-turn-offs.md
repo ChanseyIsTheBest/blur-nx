@@ -55,6 +55,9 @@ The A/B, profile and test tomls turn these on to measure. The player's toml turn
 
 **Off by default. Keep them out of the player's toml, or false:**
 
+On the Switch, `blur_renut_diag_stage_census` and `blur_renut_diag_batch_census` are compiled out unless the build
+has `BANJO_SWITCH_DIAG_CENSUS` ON (port 236): their checks cost the render thread ~0.1 us a draw with the keys off.
+
 | Key | What it costs when on |
 |---|---|
 | `blur_renut_diag_stage_census` | Two clock reads and two atomics a stage (blur-nx: about 0.5-1 us of a 9.5 us draw) |
@@ -73,6 +76,10 @@ The A/B, profile and test tomls turn these on to measure. The player's toml turn
 - `blur_renut_record_skip_unused` (on): while replays inherit, NewOp builds no resource objects and no slot
   extents, which those replays never use. In blur-nx building them took 0.44 + 0.39 ms a frame on the job threads.
 - `banjo_renut_replay_inherits` is off in the base. With it off, `ultimate_renut_replay_inherit_same` costs nothing.
+- The 10 s report's per-draw counts (the GPU round's item counts, plume's binds and barriers, the shared and
+  pushed constants, the depth counters) are off with `log_level` "off", a release's (port 244). With the logs kept,
+  `banjo_renut_draw_counts` = false turns them off for a measured run: those lines show zeros, the in-run A/B keeps
+  its per-draw figures (banjo-nx: 0.24 us a draw of N&B's render thread).
 
 ## For the porting prompt
 

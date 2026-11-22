@@ -240,6 +240,10 @@ extern "C" void RexPromotedMismatch(unsigned target) noexcept {
 }
 
 extern "C" void RexIndirectCensus(unsigned function, unsigned site, unsigned target) noexcept {
+  // culdcept-nx (2026-11-19): a call through a pointer outside the image (a null vtable entry, a callback never set)
+  // names its guest function and site before the dispatcher's "unregistered function" stop, which names only the target.
+  if (target < 0x82000000u || target >= 0x84000000u) [[unlikely]]
+    REXLOG_ERROR("[census] indirect call to {:08X} from sub_{:08X} (site {:08X})", target, function, site);
   const uint64_t key = (uint64_t(function) << 32) | site;
   Stripe& stripe = g_stripes[(key * 0x9E3779B97F4A7C15ull) >> 58];
   std::lock_guard<std::mutex> lock(stripe.mutex);
@@ -348,8 +352,10 @@ void RuntimeCensusReport(int seconds) {
     // CG-13's census: where those happen (cumulative, image offset:count; tools/census_sites.py --denormal).
     static int denormal_reports = 0;
     if ((++denormal_reports % 3) == 0) {
-      uint64_t addresses[48], counts[48];
-      const size_t n = CensusDenormalSites(addresses, counts, 48);
+      // banjo-nx (2026-11-19, a handoff): 256 sites, not 48. The forms self-check's own sites took about 20 of the 48,
+      // so a rarer site (a physics function a few hundred times a run) could be missing from the list.
+      static uint64_t addresses[256], counts[256];
+      const size_t n = CensusDenormalSites(addresses, counts, 256);
       std::string list;
       for (size_t i = 0; i < n; ++i) list += fmt::format(" +{:X}:{}", addresses[i] - CensusImageBase(), counts[i]);
       if (n) REXLOG_INFO("[census] denormal sites (CG-13, cumulative, image offset:count):{}", list);

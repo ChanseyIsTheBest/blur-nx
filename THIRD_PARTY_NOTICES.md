@@ -13,6 +13,7 @@ folder it is in (see below).
 | [masseffect-nx](https://github.com/nebadasSwifty/masseffect-nx) by NebadasSwifty | The structure of `app/`, `app/src/me` | GPL-3.0 |
 | [nfsmw-nx](https://github.com/StevensND/nfsmw-nx) by StevensND | The Horizon (Switch) layer of the SDK, the profiling and PGO method, scripts and the toolchain file | GPL-3.0; the SDK parts BSD-3-Clause |
 | [NFSMW Recompiled](https://github.com/madelrandel-blip/NFSMW-Recompiled) by madelrandel-blip | The recompilation project the ports above started from | GPL-3.0 |
+| [S4ep1-nx](https://github.com/FurryLilManChild/S4ep1-nx) by FurryLilManChild (with TFU-nx's work), [sims3-nx](https://github.com/Zumoly/sims3-nx) by Zumoly, [deadpool-nx](https://github.com/BanhMi93P/deadpool-nx) by BanhMi93P | Fixes that reached this port through renut_nx_ultimate_base (its ports 191-206, the 2026-11-22 sync): the build stamp and the kept logs, semaphore wake-ups, the stick dead zone and the message boxes (S4ep1-nx, TFU-nx); saves on Horizon (sims3-nx); the XMA freeze and stack-forwarding fixes (deadpool-nx). Each changed file names its source | GPL-3.0 |
 | [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk) by Tom Clay, with portions from [Xenia](https://xenia.jp) (Ben Vanik and the Xenia contributors) | `sdk/` | BSD-3-Clause (`sdk/LICENSE`) |
 | [XenosRecomp](https://github.com/hedge-dev/XenosRecomp) by hedge-dev and contributors, with the changes of the ports above and this one | `shaders/`, `app/thirdparty/reblue-XenosRecomp` | MIT |
 

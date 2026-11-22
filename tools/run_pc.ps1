@@ -23,6 +23,9 @@ $args = @("--log_file=$log", "--audio_mute=true", "--window_start_minimized=$min
           "--game_data_root=$Game", "--update_data_root=D:/blur/tu", "--user_data_root=$root/out/pc_user",
           "--nfsmw_captura_cada_s=$Every", "--nfsmw_captura_max=$Max", "--log_file_writer=false") +
         @($Extra -split ' ' | Where-Object { $_ })
+# banjo-nx (2026-11-19): Start-Process joins -ArgumentList's elements with spaces and quotes none of them, so a path
+# with a space ("D:\Banjo kazooie port\...") split into two arguments and the run wrote no log.
+$args = @($args | ForEach-Object { if ($_ -match ' ' -and $_ -notmatch '^".*"$') { '"' + $_ + '"' } else { $_ } })
 $style = if ($Visible) { "Normal" } else { "Minimized" }
 $p = Start-Process -FilePath $exe -ArgumentList $args -WorkingDirectory $dir -PassThru -WindowStyle $style `
      -RedirectStandardError (Join-Path $logs "stderr.txt") -RedirectStandardOutput (Join-Path $logs "stdout.txt")

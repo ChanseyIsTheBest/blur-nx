@@ -392,6 +392,11 @@ bool build_mtfsf(BuilderContext& ctx) {
 // the table with fpscr_moves_exact or extra_instructions (instruction_dispatch.cpp). This SDK's FPSCR is the host's
 // rounding mode (loadFromHost / storeFromGuest): the exception bits are not kept, so they read 0 here and writes of them
 // go nowhere, as with mtfsf.
+// renut-ultimate (2026-11-19, port 187; found by sasrt-nx's sync): port 144's builders are in their own namespace,
+// so a port that has its own build_ldbrx (or any other of these) in rex::codegen still links; the dispatch table
+// names them as extra_insn::build_*.
+namespace extra_insn {
+
 bool build_mtfsfi(BuilderContext& ctx) {
   const uint32_t field = ctx.insn.operands[0] & 7;
   const uint32_t shift = 28 - 4 * field;
@@ -418,6 +423,8 @@ bool build_mcrfs(BuilderContext& ctx) {
               28 - 4 * (ctx.insn.operands[1] & 7));
   return true;
 }
+
+}  // namespace extra_insn
 
 bool build_mtxer(BuilderContext& ctx) {
   ctx.println("\t{}.so = ({}.u64 & 0x80000000) != 0;", ctx.xer(), ctx.r(ctx.insn.operands[0]));

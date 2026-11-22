@@ -11,6 +11,7 @@ says otherwise. A new port's differ wherever they name the game: its manifest, i
 | To | Read |
 | --- | --- |
 | Start a new port from the base | [porting-a-360-game-prompt.md](porting-a-360-game-prompt.md), the order of work and its rules as a prompt for a new session, then [building.md](building.md) |
+| Move an existing port onto the base | [rebasing-a-port-prompt.md](rebasing-a-port-prompt.md): a full rebase on the base's tree, grafting only what the game needs from the original project, as a prompt for a new session |
 | Build the base | [building.md](building.md): the game files, code generation, the shaders, the Switch builds, PGO, the installer, tests |
 | See what the base changed from katamari-nx 1.0.1 | [changelog.md](changelog.md), a line per port, then the port's full row in [ultimate-fixes.md](ultimate-fixes.md) |
 | Find out why a switch is off, or turn one on for a game | [off-by-default.md](off-by-default.md) |
@@ -19,6 +20,7 @@ says otherwise. A new port's differ wherever they name the game: its manifest, i
 | Run a build on the console | [porting-a-360-game-prompt.md](porting-a-360-game-prompt.md), appendix A (sys-botbase, sys-ftpd-light, `tools/switch_remote.py`); [building.md](building.md) section 6 on measuring |
 | Take the base's later ports into a port | [building.md](building.md) section 7 (`tools/ult_port_sync.py`), then each port's row in [ultimate-fixes.md](ultimate-fixes.md) |
 | Make the game's CPU side faster | [hand-and-machine-optimising-guide.md](hand-and-machine-optimising-guide.md) (sasrt-nx's, with the later tools), then [optimising-functions.md](optimising-functions.md) (the method in full) and [sasrt-batch-cc2.md](sasrt-batch-cc2.md) (register liveness, stack forwarding, the calling-convention traps) |
+| Take load off the render thread | [render-thread-turn-offs.md](render-thread-turn-offs.md): the keys a port turns off when its own console log shows a 0 over whole gameplay sessions, and the measurements a player's build turns off |
 | Fix a crash the code generation caused | [codegen-crash-fixes.md](codegen-crash-fixes.md): the kinds of bug, and the scans that find more of each |
 | Port a game built with a later XDK | [xdk-notes.md](xdk-notes.md) |
 | See a whole port, step by step | [katamari-notes.md](katamari-notes.md) |
@@ -33,9 +35,11 @@ what in it still applies.
 | --- | --- | --- |
 | [building.md](building.md) | Guide | The tools, the game files, code generation and the shader translator, the shaders, the Switch builds (LTO, PGO, the shader package), the installer, tests (PC verify, Ryujinx, the guard, the difftests, the console, RenderDoc), taking the base's later ports |
 | [porting-a-360-game-prompt.md](porting-a-360-game-prompt.md) | Guide | A fill-in prompt for a new port's session: the placeholders, the rules, the order of work. Appendix A: the console over the network. Appendix B: RenderDoc |
+| [rebasing-a-port-prompt.md](rebasing-a-port-prompt.md) | Guide | A fill-in prompt for moving an existing port onto the base: a full rebase (the base's whole tree, then only what the game needs grafted from the original project), the inventory, the modules, the censuses of the not-exact forms, the package |
 | [ultimate-fixes.md](ultimate-fixes.md) | Reference | Every port by number: its source and commit, the evidence, what was run here, its switch. Also the test runs of 2026-11-07/08, the hooks that need a game's own function address, what sasrt-nx reported, what was left out and why, and what is not done yet |
 | [changelog.md](changelog.md) | Reference | One line per port from port 44 on (ports 1-43 are the first round, in the README's "What's in it") |
 | [off-by-default.md](off-by-default.md) | Reference | The switches that are off and why: fixes that break another game's picture, faster forms that are not exact, speed-ups the console measured as slower or as no gain, trials |
+| [render-thread-turn-offs.md](render-thread-turn-offs.md) | Reference | blur-nx's (2026-11-20): the render thread's per-game checks and the job threads' tags check a port can turn off, each with its cost, the log line that decides it and what the ports found; the measurements a player's build turns off |
 | [xdk-notes.md](xdk-notes.md) | Reference | What ports at a later XDK met: hooks, the device layout |
 | [hand-and-machine-optimising-guide.md](hand-and-machine-optimising-guide.md) | Guide | sasrt-nx's guide (2026-11-11): measuring first, machine copies, hand natives, the order that paid off, a checklist for one function |
 | [optimising-functions.md](optimising-functions.md) | Guide | The hot-function method written for Katamari: the machine track, the hand track, console profiles, checking, measuring, PGO |

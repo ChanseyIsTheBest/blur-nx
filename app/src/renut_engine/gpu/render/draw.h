@@ -118,6 +118,14 @@ bool LookupTablesOn();  // banjo_renut_record_lookups (command_buffers.cpp Recor
 void PrefetchGeometryObject(const GeometryObject *o, bool index);
 void PrefetchTextureObject(const TextureObject *o);
 void PrefetchGeometryCopies(const GeometryObject *o, bool index);
+// banjo-nx (2026-11-21, A/B 181): the store cards and page serial PagesClean reads first for a range at this physical
+// offset (PrefetchCards' lines), and the offset PhysicalOf gives for AddressPtr(address) (UINT32_MAX: no cards there).
+// Replay takes them from a record's header words alone (PrefetchRecordCards). Prefetches only.
+void PrefetchCardsAt(u32 offset);
+// banjo-nx (2026-11-21, batch 2's cache-warming helper): whether 'o' is one of the geometry objects' pool (the helper on
+// another core reads an object only then: the pool is never freed).
+bool GeometryObjectPooled(const GeometryObject *o);
+u32 CardOffsetOfAddress(u32 address);
 // banjo-nx (2026-10-28, ARM audit): kWords 32-bit words equal, as 64-bit loads, XORs and ORs with one test at the end (a
 // memcmp of a constant size is a call or a compare and branch a piece).
 template <u32 kWords>
@@ -221,9 +229,20 @@ enum DrawField : u32 {
   kFieldVertexFetch = 1u << 17,
   kFieldsAll = (1u << 18) - 1,
 };
+// culdcept-nx (2026-11-19): the device's own vertex declaration (the one SetFVF builds inside the device:
+// kDeviceDeclarationOffset in draw.cpp, its elements from +52, at most 15 of 12 bytes). A new FVF rewrites it in place,
+// the declaration word at kDeviceOffsetVertexDeclaration keeping its address, so its bytes count as the declaration
+// too: the fast draw kept the draw before's vertex layout for Culdcept Saga's board panels (FVF quads), which then drew
+// wrong or not at all on deko3d (found with a field-forcing bisection in Ryujinx: forcing kFieldDecl alone brought them
+// back).
+// blur-nx (2026-11-22, the base sync): Blur's device has it at 0x3050 (draw.cpp's kDeviceDeclarationOffset; Katamari's
+// 0x2F98), its 232 bytes inside the tail (0x2FB0 up to the index buffer at 0x3144), as Katamari's are inside its own.
+constexpr u32 kDeviceOwnDeclarationBegin = 0x3050, kDeviceOwnDeclarationEnd = 0x3050 + 52 + 15 * 12;
 constexpr u32 FieldOfOffset(u32 at) {
   if (at < 0x480)
     return 0;
+  if (at >= kDeviceOwnDeclarationBegin && at < kDeviceOwnDeclarationEnd)
+    return kFieldDecl | kFieldTail;
   if (at < 0x6F0)
     return kFieldFetch;
   if (at < 0x780)

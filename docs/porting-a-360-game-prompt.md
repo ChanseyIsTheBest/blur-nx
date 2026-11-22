@@ -87,6 +87,11 @@ The work, in order
    (tools/codegen.ps1, then python tools/post_codegen.py in full), and get it booting to gameplay on the PC with Renut's
    renderer (the Vulkan back end). Fix what stops it (imports, kernel calls, file system, input). Record every
    game-specific fix in docs/<SHORT>-notes.md.
+   After every code generation, before the first long play: `python tools/built_ptr_scan.py` (port 191). It lists the
+   code addresses the game builds in code (lis + addi/ori) that no translated function starts at; each real one is a
+   callback that stops the game with "unregistered function" the first time it runs (Sonic 4's Mad Gear zone, S4ep1-nx
+   0.5.1). Register each with its evidence in app/overrides.toml. An Xbox Live Arcade game that asks
+   XamContentGetLicenseMask runs as its trial with the SDK's default: set license_mask = 1 in its toml (S4ep1-nx).
    Then CG-13's census, as soon as the PC build reaches gameplay: the Switch build runs all of the game's float code in
    the host's flush mode (BLUR_FPCR_ONE_MODE, on by default there: no `msr fpcr` between its VMX and scalar code, a
    large CPU saving), which turns a scalar denormal into zero where the Xenon keeps it. Run
@@ -104,8 +109,14 @@ The work, in order
    (app/src/renut_engine/gpu, app/thirdparty/plume, the uam shader pipeline, tools/switch_shaders.ps1 for the shader
    package, tools/deko3d_variant_cache.py for the DKSH cache). Get it drawing this game, with NVK not linked (deko3d
    only). Nothing Katamari decided carries over untested: the game-specific decisions of porting-guide-renderer.md
-   section 2 ("What your game decides") each get a census first, including where this game keeps its shaders. The
-   base's defaults to settle for this game:
+   section 2 ("What your game decides") each get a census first, including where this game keeps its shaders: scan
+   every data file for shader containers (flags 0x102A11xx) and dump them all into the build. Renut skips every draw
+   whose shader the build lacks, so areas nobody played show invisible objects (S4ep1-nx 0.5.0 shipped 97 of the 282 in
+   Sonic 4's data.cpk). Before the first Renut build, list the argument registers each hooked D3D function reads in the
+   generated code and compare them with the hook's signature: an LTCG-linked Direct3D drops constant arguments (Sonic
+   4's CreateDevice and Present take none; docs/xdk-notes.md). Check where the game reads its controller: banjo_late_input
+   (on) delays the first read after each Swap and assumes it happens on the thread that swaps; Sonic 4 reads on a
+   frame thread of its own, and ran at a quarter speed until it was off. The base's defaults to settle for this game:
    - SMAA is on (banjo_renut_smaa) but runs only right after the draw whose pixel shader is in
      banjo_renut_smaa_after_ps; until this game's final composite (the last full-screen draw before the HUD) is listed
      there, the 10 s line says "SMAA ... 0 frames". Find it with banjo_renut_diag_draw_log_s in gameplay, not a menu.
@@ -130,14 +141,19 @@ The work, in order
    match the old loudness with audio_stereo_frame_gain (compare audio_dump_s dumps, folded). A game that ignores it
    needs patching per game (blur-nx's tools/stereo_mix.py), worth it only when audio is near the top of the CPU
    table. audio_switch_pump_pairs (off) trades +5.3 ms of latency for CPU: my choice.
-   Three keys are decided from this port's own log (blur-nx, 2026-11-18; port 177), in gameplay windows only (not
+   Four keys are decided from this port's own log (blur-nx, 2026-11-18 and 11-20; port 177 and the base's
+   render-thread-turn-offs.md, which has each one's cost and what the ports found), in gameplay windows only (not
    menus or loads), with no A/B: a 0 is enough. The base's defaults stay; set them in the port's own toml:
    - `ultimate_renut_replay_inherit_same` (true): the line "[renut] replays with the inherited words as recorded
      (ultimate_renut_replay_inherit_same): N of M". N is 0: false.
-   - `sasrt_gpu_skip_inert_draws` (true): the line "[sasrt gpu] GPU round ..., in the last 10 s:
-     sasrt_gpu_skip_inert_draws (on) N". N is 0 in every gameplay window: false.
+   - `sasrt_gpu_skip_inert_draws` (true): the line "[sasrt gpu] GPU round ..., in the last 10 s: ...
+     sasrt_gpu_skip_inert_draws N". N is 0 in every gameplay window: false.
    - `banjo_renut_tags_check` (32): the line "[renut] recording from marks (banjo_renut_tags): ..., N whole checks,
      M chunks changed without a mark". M is 0 over whole gameplay sessions: 256.
+   - `banjo_renut_stream_redeem` (true): the line "[renut] banjo_renut_stream_redeem: N dynamic streams quiet for 60
+     conversions made cacheable again", printed only when a stream is. No such line over whole gameplay sessions:
+     false.
+   In the player's toml `switch_perf_count_calls` (true) is false: it feeds only the 10 s report's libnx line.
 6. Hot functions, by the base's optimising-functions.md. Its two tracks replace any fixed top-5 or top-100 target.
    - Machine-optimise as many functions as possible, at every opportunity: every function any session samples (Ryujinx
      and the PC's profiler now, the console when I send a log), with tools/localize_native.py and

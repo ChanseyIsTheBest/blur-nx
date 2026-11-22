@@ -37,7 +37,8 @@ def has_write(path):
 def scan(gen):
     files = []
     for name in sorted(os.listdir(gen)):
-        if name.startswith('renut_recomp.') and name.endswith('.cpp') and has_write(os.path.join(gen, name)):
+        if re.fullmatch(r'\w+_recomp\.\d+\.cpp', name) and has_write(  # port 186: any project's
+            os.path.join(gen, name)):
             files.append('generated/' + name)
     hot = os.path.join(gen, 'hot')
     if os.path.isdir(hot):

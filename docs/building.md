@@ -36,6 +36,16 @@ what the machine copies leave out.
 to a caller that reads only results). Check it on each game before trusting it: `python tools/cc_entry_census.py` must
 end with "none", and every read `python tools/cc_exit_census.py` lists must be value-independent. If a game breaks it,
 generate with `SASRT_REG_LIVENESS_EXIT_ABI=0` (and `SASRT_REG_LIVENESS_HOOKS_ABI=0` for a vector hit).
+A pointer-reached function that reads a scratch vector register on entry (port 224, N&B's v0) can instead be
+listed in `app/config/scratch_vectors_read_on_entry.txt` (a register per line, `#` comments with the function and
+why): that register stays live at every indirect call, and `cc_entry_census.py` names it and ends with "none".
+`python tools/cc_exit_reads.py` names the form of each read `cc_exit_census.py` lists.
+
+**A first configure before any code generation** (banjo-nx's rebase, 2026-11-19) leaves out the generated sources:
+`generated/rexglue.cmake` adds the recomp target and `renut_pch.h`'s folder only when `generated/sources.cmake`
+exists at configure time. `tools/build_pc.bat` generates first when `generated/rexglue.cmake` is missing (port
+197); a build that still stops at "'renut_pch.h' file not found" needs a configure after the code generation
+(touch `app/CMakeLists.txt` and build again). `tools/build_pc.bat` builds without Renut unless `RENUT=ON`.
 
 ## 3. The shaders
 
@@ -114,7 +124,14 @@ its form, so with the defaults these steps make and use `pgo-inplace/`; with `IN
    in place; its configure stops while `pgo-inplace/` has no profile, and `IN_PLACE=OFF` builds the hooked form with
    `pgo/`). It carries no game shader and reads `deko3d_glsl.bin` beside itself. `pgo/` in this repository is the
    profile of the releases before port 81 (the hooked form). A function changed since the instrumented build keeps no
-   profile.
+   profile. So train again after a change to the draw path's own functions: port 179 added calls inside
+   FastDrawLocked and DrawStateLocked, and Blur's NRO with the profile trained before it drew at 14.75 us a draw
+   (render thread) until it was trained again (11.56 us; blur-nx, 2026-11-18).
+   Ports 236-238 change the draw path's functions too: banjo-nx's N&B with the profile trained before them ran 13 %
+   slower (17.7 fps against 20.8) and at 23.1 once trained again. Train in the scenes that matter: N&B's profile
+   trained on the title and the intro left the city's paths cold (banjo-nx, 2026-11-20).
+   Ports 242-248 change them again (banjo-nx's lean batch, 2026-11-21): train again after taking them, before
+   judging them.
 
 Two more PGO options were tried and are not used (blur-nx, 2026-11-12, its CPU batch 3; port 111):
 
@@ -189,6 +206,12 @@ then its `test/release_node.mjs` (its README). `wasm/renut_hlsl` must be rebuilt
   first races compile them (sasrt-nx: 95 compiles, +8 ms of process CPU in that race, gone after two races).
   Over the network, `tools/switch_remote.py` (sys-botbase and sys-ftpd-light; only the port's own folder on the SD
   card, nothing deleted): [porting-a-360-game-prompt.md](porting-a-360-game-prompt.md), appendix A.
+- **The renderer's censuses and inlined profiles on the console:** the Switch build compiles out
+  `blur_renut_diag_stage_census` and `blur_renut_diag_batch_census` (`BANJO_SWITCH_DIAG_CENSUS` OFF, port 236): a
+  census run builds a folder of its own with `CMAKE_EXTRA=-DBANJO_SWITCH_DIAG_CENSUS=ON`. To name a console
+  profile's samples by source function, inlined ones included, build with `-DBANJO_SWITCH_RENUT_DEBUG_INFO=ON` (port
+  239; the same code, so its ELF also names a normal NRO's samples) and run `python tools/profile_inline.py PROFILE
+  ELF RENUT_LOG [PROFILE ELF RENUT_LOG]` (two builds side by side, per draw).
 - **Picture bugs:** a RenderDoc capture first, of the PC build or of Ryujinx (`tools/run_ryujinx_rdc.ps1`, then the
   `tools/rdc_*.py` scripts through `tools/rdc_run.ps1`; `RENDERDOC_DIR` names the RenderDoc folder): the porting
   guide's appendix B.

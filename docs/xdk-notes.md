@@ -62,3 +62,41 @@ address below is Angry Birds'; a port finds its own (tools/xdk_sigmatch.py, the 
   +13072; the device's own (FVF) declaration +12568; the device allocation 0x6080.
 - **Re-pointed headers.** Angry Birds re-points one surface header between three EDRAM views each frame: turn on
   `banjo_renut_all_surface_headers` (port 174) with `banjo_renut_chain_reuse` and `banjo_deko3d_scanout_handover` off.
+
+## XDK 2.0.6534 (TFU-nx, The Force Unleashed) and 2.0.11626 (S4ep1-nx, Sonic 4 Episode I), 2026-11-11 to 11-16; ports 191-196
+
+Evidence: [S4ep1-nx](https://github.com/FurryLilManChild/S4ep1-nx) (GPL-3.0, 0.5.1), which started from TFU-nx's tree
+(itself from rr6-nx 1.0.1) and keeps TFU's notes in docs/from-tfu/. Each is that port's finding on its own image.
+
+- **The device snapshot.** 2.0.6534's is 12,712 bytes (0x31A8, as N&B's), its last 64-byte chunk 40 bytes; 2.0.11626's
+  is 12,888 bytes (0x3258), its last chunk 24 bytes (42 delta read chunks, against Katamari's 39). Port 196's
+  `TakeLastChunk` takes 24, 32 or 40: change d3d.h's snapshot size only.
+- **The device's private part moves.** From Katamari's offsets, TFU's fields from 0x2F98 sit 8 bytes later (0x2FA0, the
+  viewport at 0x3168, the clear colour at 0x3390) and from 0x3504 24 later; Sonic 4's sit 0xB0 past TFU's (the viewport
+  at 0x3218, the resolve flags at 0x3434, the clear colour at 0x3440, the depth target at 0x3264). Every hook that
+  reads the device by offset (draw.h's field ranges, the Resolve, Clear and Swap hooks, CreateDevice's setup) moves.
+- **LTCG.** Sonic 4's Direct3D is linked with link-time code generation: arguments that are always the same are
+  dropped. Its CreateDevice and Present take no arguments, draw calls drop constant ones, SetViewport takes floats.
+  The first Renut run read garbage. For every hooked function, list the argument registers it reads in the generated
+  code and compare them with the hook's signature before the first Renut build.
+- **D3DVertexShader_Bind** at 6534 is (pShader, Flags, pDecl, pStreamStrides, pPixelShader): port 173's
+  `D3DVertexShader_Bind_flags_hook` takes it (both ignore the fifth argument). Unhooked, TFU's own Bind read a Renut
+  declaration record's count (0xF01FFAAE) and walked off the stack.
+- **D3D{Vertex,Pixel}Shader_GetFunction** (6534): TFU reads its shaders' microcode back after creating them; the
+  originals read a guest layout Renut's records do not have (a memcpy 3.7 GB past .data). Port 196's hook bodies answer
+  from the container, kept with `banjo_renut_shader_get_function` on. Sonic 4 does not link them.
+- **POSITION6.** 20 of TFU's 1,416 vertex shaders read it (the base's translator has the input).
+- **Sonic 4's picture.** It draws 1920x1080 with predicated tiling; `sasrt_renut_depth_restore` drew its title's sky
+  white (its reflection pass draws a resolved depth back as colour into EDRAM the main pass's depth shares); off, the
+  console's picture.
+
+## XDK 2.0.7978 (banjo-nx, Banjo-Kazooie: Nuts & Bolts' title update 3, its rebase on the base, 2026-11-19; ports 223-234)
+
+Values written into shared files for Katamari's XDK 2.0.5632, which a port at another XDK changes by hand (banjo-nx's list; better beside
+the other offsets in d3d.h / d3d_native.h one day):
+
+- `render/draw.cpp` `kDeviceDeclarationOffset` (the device's own declaration, port 213): Katamari 0x2F98, N&B 0x2FA8.
+- `d3d/hooks/device.cpp`, port 169's scaler copy: `device_va + 0x3584`; N&B 0x359C.
+- `guest/command_buffers.cpp` `kLastChunkBytes` (port 196's `TakeLastChunk`): 32 at 2.0.5632, 48 at N&B's update.
+- d3d.h `kDeviceOffsetViewport` (port 138): Katamari 0x3160, N&B 0x3170.
+- Port 87's tiles-once check had vivapinata-nx's 2.0.3529 offsets written in; port 223 reads native::off's.

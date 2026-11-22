@@ -25,6 +25,11 @@ std::string XFormEA(BuilderContext& ctx, uint32_t ra, uint32_t rb) {
 }
 }  // namespace
 
+// renut-ultimate (2026-11-19, port 187; found by sasrt-nx's sync): port 144's builders are in their own namespace,
+// so a port that has its own build_ldbrx (or any other of these) in rex::codegen still links; the dispatch table
+// names them as extra_insn::build_*.
+namespace extra_insn {
+
 // vaddcuw: each word, the carry out of a + b (unsigned): 1 when b > ~a.
 bool build_vaddcuw(BuilderContext& ctx) {
   ctx.println("\t{{");
@@ -161,6 +166,9 @@ bool build_mtvscr(BuilderContext& ctx) {
 // The record forms' CR0 comes after, so that its SO is the new one. They had no table entry (REX_UNIMPLEMENTED).
 //=============================================================================
 
+}  // namespace extra_insn
+
+// The base instructions the OE forms build on (rex::codegen's).
 bool build_add(BuilderContext& ctx);
 bool build_addc(BuilderContext& ctx);
 bool build_adde(BuilderContext& ctx);
@@ -178,6 +186,8 @@ bool build_divw(BuilderContext& ctx);
 bool build_divwu(BuilderContext& ctx);
 bool build_divd(BuilderContext& ctx);
 bool build_divdu(BuilderContext& ctx);
+
+namespace extra_insn {
 
 namespace {
 // ov: an expression of oa / ob (the operands' low words, or oA / oB, 64-bit), oc (the carry in) and r / R (the
@@ -238,5 +248,7 @@ bool build_divdo(BuilderContext& ctx) {
   return EmitOE(ctx, build_divd, "oB == 0 || (oA == 0x8000000000000000ull && oB == ~0ull)", true, "");
 }
 bool build_divduo(BuilderContext& ctx) { return EmitOE(ctx, build_divdu, "oB == 0", true, ""); }
+
+}  // namespace extra_insn
 
 }  // namespace rex::codegen

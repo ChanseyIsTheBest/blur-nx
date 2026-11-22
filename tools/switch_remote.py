@@ -20,9 +20,9 @@ card or write memory. The Album is read-only; /atmosphere is not read. Every con
   peek ADDR SIZE             SIZE bytes at the absolute address, hex
   ls [PATH]                  ftp listing (default /switch/blur-nx)
   get REMOTE [LOCAL]         ftp download (a folder: every file in it, one level)
-  put LOCAL REMOTE           ftp upload
+  put LOCAL REMOTE           ftp upload (overwrites a file of that name in the folder)
   rm REMOTE                  ftp delete (a file)
-  mv REMOTE NEW              ftp rename inside the port's folder (2026-11-18)
+  mv REMOTE NEW              ftp rename inside the port's folder; refused when NEW exists (it would be replaced)
   raw "CMD ..."              a sys-botbase command as it is, the reply printed
   album-ls [PATH]            the Album, read only: /Nintendo/Album... or /emuMMC/<folder>/Nintendo/Album...
   album-get REMOTE [LOCAL]   one Album file downloaded (read only; nothing in the Album is written or deleted)
@@ -419,9 +419,15 @@ def main():
             ftp_retry(host, lambda f: f.delete(sd_path(rest[0])))
             print('deleted', sd_path(rest[0]))
         elif cmd == 'mv':
-            # blur-nx (2026-11-18): a rename inside the port's folder (both paths checked), in place of a delete:
-            # the A/B of packed and raw game files sets the raw ones aside and puts them back.
+            # blur-nx (2026-11-18): a rename inside the port's folder (both paths checked), in place of a delete: an A/B of
+            # packed and raw game files sets the raw ones aside and puts them back. Here it also refuses a destination
+            # that exists: a rename over it would replace it, and this tool deletes nothing on the card.
             src, dst = sd_path(rest[0]), sd_path(rest[1])
+            parent, name = posixpath.split(dst)
+            listed = []
+            ftp_retry(host, lambda f: (f.cwd(parent), f.retrlines('NLST', listed.append)))
+            if any(posixpath.basename(n.rstrip('/')) == name for n in listed):
+                sys.exit('refused: %s exists (a rename over it would replace it)' % dst)
             ftp_retry(host, lambda f: f.rename(src, dst))
             print('renamed', src, '->', dst)
     else:

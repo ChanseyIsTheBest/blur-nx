@@ -29,6 +29,10 @@
 #include <vector>
 
 namespace plume {
+    // banjo-nx (2026-11-20): plume's atomic statistics bumps (Deko3DStats: binds, barriers, the GPU round's counts),
+    // off when the renderer's report counts are (banjo_renut_draw_counts, log_level "off"). The plain per-list counts
+    // (statDraws, statTexRuns...) stay.
+    extern bool g_deko3dCounts;
     // RenderShaderFormat::DEKO3D's container.
     struct Deko3DShaderBlob {
         static constexpr uint32_t Magic = 0x334B4442; // "BDK3"
@@ -107,6 +111,16 @@ namespace plume {
 
     struct Deko3DDevice;
     struct Deko3DCommandQueue;
+
+    // banjo-nx (2026-11-21, the core-3 command stage): called first by the destructors of the objects a command list's
+    // calls name (buffers, textures, views, framebuffers, descriptor sets, query pools, pipelines): the renderer's
+    // command stage plays what it holds first when such an object goes on the thread that records (a command naming it
+    // may not be played yet). Null: none.
+    extern void (*g_deko3dBeforeDestroyHook)();
+    inline void Deko3DBeforeDestroy() {
+        if (g_deko3dBeforeDestroyHook)
+            g_deko3dBeforeDestroyHook();
+    }
 
     struct Deko3DBuffer : RenderBuffer {
         Deko3DDevice *device = nullptr;
@@ -191,6 +205,7 @@ namespace plume {
         // first write. Renut gives every texture slot a view, so this is the cache that serves it.
         mutable DkImageDescriptor sampledDescriptor{};
         mutable std::atomic<bool> sampledDescriptorReady{false};
+        ~Deko3DTextureView() { Deko3DBeforeDestroy(); }  // banjo-nx (2026-11-21)
     };
 
     struct Deko3DSampler : RenderSampler {
@@ -235,12 +250,27 @@ namespace plume {
         bool writesClipDistance = true;
     };
 
+    // banjo-nx (2026-11-01, the console's out-of-memory crash): a shader's GLSL, unpacked when it is needed. Every shader
+    // object kept its whole text (35 KB on average, 161 MB for the whole package) for as long as it lived, and the game
+    // loads more shaders in every area. With a loader (Deko3DShaderSetGlslLoader: the text unpacked again from the
+    // package in memory), the text lives only while a lookup or a compile uses it, plus the last few used
+    // (Deko3DGlslSource::text). Without one it is kept, as before.
+    struct Deko3DGlslSource {
+        std::mutex mutex;
+        std::shared_ptr<const std::string> kept;     // no loader: the text, for good
+        std::weak_ptr<const std::string> unpacked;   // with a loader: the text while something holds it
+        std::function<std::string()> loader;  // the text again; empty when it cannot
+        // The text (nullptr if the loader fails).
+        std::shared_ptr<const std::string> text();
+    };
+
     struct Deko3DShader : RenderShader {
         Deko3DDevice *device = nullptr;
         DkStage stage = DkStage_Vertex;
         // banjo-nx (2026-10-21): shared, so a background compile (and a pipeline waiting for one) holds the text without
-        // a copy, also after the shader object is gone (Renut's prebuild workers destroy theirs).
-        std::shared_ptr<const std::string> glsl;
+        // a copy, also after the shader object is gone (Renut's prebuild workers destroy theirs). 2026-11-01: the source
+        // (Deko3DGlslSource), not the text itself.
+        std::shared_ptr<Deko3DGlslSource> glsl;
         std::vector<uint8_t> defaultDksh;
         Deko3DShaderUsage usage;
         // Specialization constant ids the GLSL defines (SPIRV_CROSS_CONSTANT_ID_n), so a variant key holds only those.
@@ -296,6 +326,10 @@ namespace plume {
         std::vector<std::array<uint32_t, 3>> imageSizes;
         // sasrt-nx (2026-11-08, Deko3DOptions::trackedImageInvalidate): per image id, the texture written there (null: none).
         std::vector<const struct Deko3DTexture *> imageTextures;
+        // banjo-nx (2026-11-21, the core-3 command stage): both tables are sized to imageCount when the set is made, so
+        // no later write reallocates them under a reader on another thread (the command lists read them in bindTextures
+        // and markSampled). With Deko3DSetImageTrackHook set, setTexture hands the tables' update to the hook (which
+        // queues it in order with the draws recorded so far, for the thread that plays them) instead of writing it.
 
         Deko3DDescriptorSet(Deko3DDevice *device, const RenderDescriptorSetDesc &desc);
         ~Deko3DDescriptorSet() override;
@@ -320,7 +354,7 @@ namespace plume {
     // shared text, the defines plume inserts after its first line, the stage and the shader's name (for the log).
     struct Deko3DVariantRequest {
         uint64_t key = 0;
-        std::shared_ptr<const std::string> glsl;
+        std::shared_ptr<Deko3DGlslSource> glsl;  // banjo-nx (2026-11-01): the source; the uam thread unpacks the text
         std::string defines;
         DkStage stage = DkStage_Vertex;
         std::string name;
@@ -346,6 +380,7 @@ namespace plume {
         bool dynamicStencilReference = false;
         bool dynamicDepthBias = false;
         std::atomic<bool> provisional{false};  // (see pending, below; counted in g_deko3dProvisionalPipelines)
+        Deko3DGraphicsPipeline();   // banjo-nx (2026-11-01): counted (Deko3DPipelineCount)
         ~Deko3DGraphicsPipeline();  // banjo-nx (2026-10-28): a provisional pipeline that goes leaves the count
         DkPrimitive primitive = DkPrimitive_Triangles;
         uint32_t stageMask = 0;
@@ -393,6 +428,7 @@ namespace plume {
         const DkShader *shader = nullptr;
         bool valid = false;
         uint32_t uboMask = 0, ssboMask = 0;
+        ~Deko3DComputePipeline() { Deko3DBeforeDestroy(); }  // banjo-nx (2026-11-21)
     };
 
     struct Deko3DCommandFence : RenderCommandFence {
@@ -416,6 +452,7 @@ namespace plume {
         bool srgb[8] = {};
         uint32_t getWidth() const override { return width; }
         uint32_t getHeight() const override { return height; }
+        ~Deko3DFramebuffer() { Deko3DBeforeDestroy(); }  // banjo-nx (2026-11-21)
     };
 
     struct Deko3DQueryPool : RenderQueryPool {
@@ -446,6 +483,14 @@ namespace plume {
         // submission before it begins it again, as Vulkan requires).
         std::vector<std::pair<DkMemBlock, uint32_t>> memory;
         size_t memoryUsed = 0;
+        // banjo-nx (2026-11-21, Deko3DOptions::cachedCommands): a list begun with the option on writes its commands into
+        // CPU-cached blocks of its own (memoryCached), and end() cleans what it wrote of each (cachedWritten: from a
+        // block's start to deko3d's write position when it left the block, or at the list's end).
+        std::vector<std::pair<DkMemBlock, uint32_t>> memoryCached;
+        size_t memoryCachedUsed = 0;
+        bool cachedList = false;
+        uint8_t *cachedChunk = nullptr;
+        std::vector<std::pair<uint8_t *, uint8_t *>> cachedWritten;
         // Transient data (compute push constants): a linear area per list, reset at begin().
         std::vector<std::pair<DkMemBlock, uint32_t>> transient;
         size_t transientBlock = 0;
@@ -619,6 +664,12 @@ namespace plume {
         // (copyRunFenced: nothing but buffer copies since it), a barrier recorded before another buffer copy stays
         // pending, as a Full, and is emitted before the next command the copy engine does not run: every other
         // command calls flushBarriers. Without a Full first nothing is held back.
+        // Port 250 (2026-11-21, blur-nx's console bisect): off by default. With it on, Blur's races drew rainbow colour
+        // fringes (4 of 5 races, its release NRO with the installer's package and a warm cache among them; off, none
+        // in 4 of 4). The NRO's own GLSL package and an empty DKSH cache make it show reliably (timing, not the
+        // shaders). So the ordering above does not hold
+        // somewhere; why is not known (blur-nx's guess: copies that depend on one another, or on GPU writes since the
+        // last Full barrier, are not ordered without the barrier).
         bool copyRunFenced = false;
         uint32_t sampleMaskSet = 0xFFFFFFFFu;  // port 166: the mask last recorded (none yet in this list)
         void flushBarriers() {
@@ -643,8 +694,13 @@ namespace plume {
         void markTargetsWritten();  // sasrt-nx (2026-11-08, trackedReadWait): the bound framebuffer's textures
         uint32_t extraFragTex[8] = {};  // Deko3DBindFragmentTextures' ids (not in boundTex)
         uint32_t extraFragTexCount = 0;
-        static void bumpStat(std::atomic<uint64_t> &c) { c.store(c.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed); }
+        static void bumpStat(std::atomic<uint64_t> &c) {
+            if (g_deko3dCounts)
+                c.store(c.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
+        }
         static void bumpRound(int i) {
+            if (!g_deko3dCounts)
+                return;
             std::atomic<uint64_t> &c = GetDeko3DStats().sasrtRound[i];
             c.store(c.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
         }
@@ -773,6 +829,9 @@ namespace plume {
             bool async = false;
             bool cached = false;  // banjo-nx (2026-10-23): read from the cache file, not compiled (asyncCacheReads)
             bool drawWaits = false;  // banjo-nx (2026-10-23): blocking, and the waiting thread draws (the game stops)
+            // banjo-nx (2026-11-20): blocking, for a pipeline its draws badly need (Deko3DSetUrgentVariants: Renut's
+            // fetch-specialised pipelines, built on the prebuild thread while the draws use the generic one): no rest.
+            bool urgent = false;
             bool background = false;  // asked by a thread that does not draw (Deko3DSetBackgroundThread): queued last
             Deko3DVariantRequest request;  // the text is made from it on the uam thread, one at a time
             std::string ownSource;
@@ -780,6 +839,10 @@ namespace plume {
             std::string ownLog;
         };
         std::vector<CompileJob *> compileQueue;
+        // banjo-nx (2026-11-20, the user: the shader compiler at most backgroundCompileShare % of its core): the time
+        // until which the uam thread rests; every compile adds its time x (100 - share) / share, and only a compile a
+        // drawing thread waits for (or a cache read) starts before it.
+        uint64_t compileRestUntilNs = 0;
         // banjo-nx (2026-10-18): the uam thread's handle, the priorities of the threads waiting for a compile, and the
         // priority last set (applyCompilePriority).
         uint32_t compileThreadHandle = 0;
@@ -990,6 +1053,20 @@ namespace plume {
         return Deko3DPushUniformSlow(commandList, address, uboSize, offset, data, size);
     }
     bool Deko3DSetSharedWords(RenderCommandList *commandList, const void *cpu, uint32_t size);
+    // banjo-nx (2026-11-21, the core-3 command stage): a descriptor set's CPU tables' update for image id 'id'
+    // (Deko3DDescriptorSet::imageSizes / imageTextures), as setTexture makes it: 'texture' null empties the id (its size
+    // stays). The hook returns true when it took the update (queued for the thread that plays the command lists, which
+    // applies it with Deko3DApplyImageTrack), false to have setTexture write it now. One hook; null: none.
+    struct Deko3DImageTrack {
+        struct Deko3DDescriptorSet *set;
+        uint32_t id;
+        const struct Deko3DTexture *texture;
+        uint32_t size[3];
+        bool sized;  // 'size' holds the view's size (a valid texture was written)
+    };
+    using Deko3DImageTrackHook = bool (*)(const Deko3DImageTrack &track);
+    void Deko3DSetImageTrackHook(Deko3DImageTrackHook hook);
+    void Deko3DApplyImageTrack(const Deko3DImageTrack &track);
     // banjo-nx: the queue lost (dkQueueIsInErrorState).
     bool Deko3DDeviceLost(RenderDevice *device);
     // banjo-nx (2026-10-21, Deko3DOptions::asyncVariants): a pipeline made while some of its variants were compiled in
@@ -1003,8 +1080,22 @@ namespace plume {
     // banjo-nx (2026-10-21, asyncVariants): this thread does not draw (Renut's pipeline prebuild workers): the variants it
     // asks for are compiled after the draws' ones, and only so many wait at a time (the rest when a draw needs them).
     void Deko3DSetBackgroundThread(bool background);
+    // banjo-nx (2026-10-31): on such a thread, the pipeline it builds next is one a draw waits for (Renut's specialised
+    // pipelines; the draw goes on with the generic one): its variants are queued as a draw's (ahead of the background
+    // ones). Set before the build, cleared after it.
+    void Deko3DSetDrawVariants(bool draw);
     // banjo-nx (2026-11-01): the pipeline this thread builds draws much slower with its generic variants: compile them now, here.
     void Deko3DSetUrgentVariants(bool urgent);
+    // banjo-nx (2026-11-20): this thread waits (true) or no longer waits (false) for a pipeline a background thread builds
+    // (Renut's render thread in TakePrebuilt): the blocking compiles skip the compile rest meanwhile. Calls in pairs.
+    void Deko3DHurryCompiles(bool waiting);
+    // banjo-nx (2026-11-01): the shader's GLSL is unpacked by 'loader' when it is needed instead of being kept (see
+    // Deko3DGlslSource). The loader must give the same text every time.
+    void Deko3DShaderSetGlslLoader(RenderShader *shader, std::function<std::string()> loader);
+    // banjo-nx (2026-11-01): shader objects alive, and the GLSL bytes kept or unpacked now (for the memory report).
+    void Deko3DShaderMemory(uint64_t &shaders, uint64_t &glslBytes);
+    // banjo-nx (2026-11-01): graphics pipeline objects alive (for the memory report).
+    uint64_t Deko3DPipelineCount();
     // banjo-nx (2026-10-28, the console's OOM): called when a memory block's storage cannot be had from the heap, before
     // asking again (any thread; it must not take the application's renderer lock): the application's spares go back.
     void Deko3DSetMemoryPressureCallback(void (*callback)());
@@ -1138,6 +1229,10 @@ namespace plume {
         // uam's banjo-nx codegen passes (uam_api.h setBanjoFlags): 1 PRMT byte moves, 2 storage buffer offsets in the
         // load, 4 shift distribution, 8 + 16 the input interpolation cache where it pays.
         unsigned uamFlags = 447;
+        // banjo-nx (2026-11-20): every variant a draw got the generic one for (not loaded, not in the cache file) logged
+        // once, as the compile log's "run-time variant" lines (tools/deko3d_variant_cache.py --runtime-log reads both):
+        // the variants a DKSH cache made from pipeline lists still lacks. A diagnostic: off by default.
+        bool logMisses = false;
         // The uam thread's core (-1: any) and priority (Horizon: a higher number is a lower priority; 0: unchanged).
         // A thread that waits for a compile lends its priority to the uam thread while it waits.
         int compileCore = -1;
@@ -1235,6 +1330,13 @@ namespace plume {
         // fragments for it (DkBarrier_Tiles / _Fragments), its fences flush it; a full barrier (the copy engine next)
         // gets a tiled cache flush ahead of it here. Off: a list starts with it off when it was ever on (the in-run A/B).
         bool tiledCache = false;
+        // banjo-nx (2026-11-21, banjo_deko3d_cached_commands, A/B 173; the render thread to 33 ms): command memory CPU-cached
+        // (deko3d's own advice is uncached: every command word and every pushed constant went to the bus a store at a time,
+        // and the profile's memcpy, 4.6 % of the render thread, ran its long loop at about 0.9 GB/s). The list's written
+        // ranges are cleaned (dc cvac) after its FinishList, before any submission reads them; the GPU never writes
+        // command memory. The same words reach the GPU. Read at each begin(); off when deko3d's command buffer layout is
+        // not the one this was written against (checked at every block fed).
+        bool cachedCommands = false;
         // sasrt-nx (2026-11-08, sasrt_gpu_lazy_depth_resolve; off by default, for the console to judge): with depthResolve
         // and preciseDepthResolve, a written compressed depth target (one layer, one level) is not decompressed when it
         // leaves the bind point or at a list's end, but right before something reads it (a texture barrier into a read

@@ -61,7 +61,7 @@ def main():
     ap.add_argument('--gen', required=True)
     ap.add_argument('--check', action='store_true', help='report only')
     args = ap.parse_args()
-    files = sorted(glob.glob(os.path.join(args.gen, 'renut_recomp.*.cpp')))
+    files = sorted(glob.glob(os.path.join(args.gen, '*_recomp.*.cpp')))  # port 186: any project's name
     if not files:
         sys.exit('near_exact: no generated sources in %s' % args.gen)
     counts = {}

@@ -63,6 +63,17 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import reg_liveness as reg_liveness_mod  # noqa: E402  (sasrt-nx 2026-11-12, stage 1; port 121: tools/reg_liveness.py)
 
+
+def gen_file(gen, suffix):
+    """renut-ultimate (2026-11-19, port 186; found by sasrt-nx's sync): the generator names its files after the project
+    (<project>_pch.h, <project>_init.cpp, <project>_recomp.N.cpp): renut_ in the base, a port's own name otherwise."""
+    for name in sorted(os.listdir(gen)):
+        m = re.fullmatch(r'(\w+)_recomp\.\d+\.cpp', name)
+        if m:
+            return os.path.join(gen, m.group(1) + '_' + suffix)
+    return os.path.join(gen, 'renut_' + suffix)
+
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP = os.path.join(ROOT, 'app')
 GEN = os.path.join(APP, 'generated')
@@ -1073,7 +1084,7 @@ def addresses(gen):
     """name -> (guest address, bytes up to the next function) from the generated function table."""
     global _ADDRESSES
     if _ADDRESSES is None:
-        text = open(os.path.join(gen, 'renut_init.cpp'), encoding='utf-8').read()
+        text = open(gen_file(gen, 'init.cpp'), encoding='utf-8').read()
         table = [(int(a, 16), n) for a, n in re.findall(r'^\t\{ 0x([0-9A-F]{8}), (\w+) \},$', text, re.M)]
         table.sort()
         _ADDRESSES = {}

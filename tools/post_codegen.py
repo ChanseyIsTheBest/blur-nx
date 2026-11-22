@@ -49,6 +49,17 @@ import re
 import subprocess
 import sys
 
+
+def gen_file(gen, suffix):
+    """renut-ultimate (2026-11-19, port 186; found by sasrt-nx's sync): the generator names its files after the project
+    (<project>_pch.h, <project>_init.cpp, <project>_recomp.N.cpp): renut_ in the base, a port's own name otherwise."""
+    for name in sorted(os.listdir(gen)):
+        m = re.fullmatch(r'(\w+)_recomp\.\d+\.cpp', name)
+        if m:
+            return os.path.join(gen, m.group(1) + '_' + suffix)
+    return os.path.join(gen, 'renut_' + suffix)
+
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP = os.path.join(ROOT, 'app')
 GEN = os.path.join(APP, 'generated')
@@ -74,7 +85,7 @@ def tool(name):
 def main():
     gen = sys.argv[sys.argv.index('--gen') + 1] if '--gen' in sys.argv else GEN
     scratch = os.path.abspath(gen) != os.path.abspath(GEN)  # a copy for measurements: no flavour file
-    pch = os.path.join(gen, 'renut_pch.h')
+    pch = gen_file(gen, 'pch.h')
     if not os.path.isfile(IMAGE):
         sys.exit('post_codegen: out/renut_image.bin is missing (the image dump of the code generator): run the PC '
                  'build through tools\\pc_env.bat, which sets REXGLUE_DUMP_IMAGE, or set it for one codegen run')
