@@ -92,6 +92,11 @@ REXCVAR_DEFINE_INT32(blur_nv_stress_s, 0, "Blur/Debug",
                      "its own, the refusals counted (a test boot only)")
     .range(0, 600)
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_INT32(blur_nv_stress_live, 1, "Blur/Debug",
+                     "Switch: blur_nv_stress_s's pieces kept pinned and mapped at once (the oldest dropped for each new "
+                     "one, as deko3d's blocks live on)")
+    .range(1, 64)
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 #if defined(__SWITCH__)
 
@@ -108,6 +113,7 @@ REXCVAR_DEFINE_INT32(blur_nv_stress_s, 0, "Blur/Debug",
 #include <cstring>
 #include <iterator>
 #include <thread>
+#include <vector>
 
 // newlib's malloc state (devkitA64 libc.a, mallocr.c): the bins (the third word is the top chunk), the totals, the
 // lock; libnx's heap bounds; the image's start (the crash report's base for image offsets).
@@ -711,7 +717,22 @@ void RunSbrkRaceTest() {
 }
 
 // --- blur_nv_stress_s (see above) ---
-void NvStressMain(int seconds) {
+struct StressPiece {
+  void* mem = nullptr;
+  NvMap map{};
+  iova_t iova = 0;
+  bool mapped = false;
+};
+
+void DropPiece(NvAddressSpace& as, StressPiece& s) {
+  if (!s.mem) return;
+  if (s.mapped) nvAddressSpaceUnmap(&as, s.iova);
+  nvMapClose(&s.map);
+  free(s.mem);
+  s = StressPiece{};
+}
+
+void NvStressMain(int seconds, int live) {
   uint64_t rounds = 0, map_fail = 0, gpu_fail = 0, no_mem = 0;
   uint64_t map_ticks = 0, gpu_ticks = 0, max_map = 0, max_gpu = 0;
   Result first_map = 0, first_gpu = 0;
@@ -721,52 +742,51 @@ void NvStressMain(int seconds) {
   const Result rc_as = R_SUCCEEDED(rc_map) ? nvAddressSpaceCreate(&as, 0x10000) : rc_map;
   const uint64_t t0 = armGetSystemTick();
   if (R_SUCCEEDED(rc_as)) {
+    std::vector<StressPiece> ring(size_t(std::max(live, 1)));
     const uint64_t until = t0 + armNsToTicks(uint64_t(seconds) * 1000000000ull);
     while (armGetSystemTick() < until) {
+      StressPiece& s = ring[rounds % ring.size()];
+      DropPiece(as, s);  // the oldest goes for the new one
       const uint32_t size = ((rounds & 1) ? (8u << 20) : (4u << 20)) + uint32_t(rounds % 7) * 0x10000u;
-      void* p = memalign(0x10000, size);
-      if (!p) {
+      s.mem = memalign(0x10000, size);
+      if (!s.mem) {
         ++no_mem;
         svcSleepThread(5000000);
         continue;
       }
-      NvMap m;
       uint64_t t = armGetSystemTick();
-      const Result r1 = nvMapCreate(&m, p, size, 0x10000, NvKind_Pitch, (rounds % 3) == 0);
+      const Result r1 = nvMapCreate(&s.map, s.mem, size, 0x10000, NvKind_Pitch, (rounds % 3) == 0);
       t = armGetSystemTick() - t;
       map_ticks += t;
       max_map = std::max(max_map, t);
+      ++rounds;
       if (R_FAILED(r1)) {
         if (!map_fail++) first_map = r1;
-        free(p);
-        ++rounds;
+        free(s.mem);
+        s = StressPiece{};
         continue;
       }
-      iova_t iova = 0;
       t = armGetSystemTick();
-      const Result r2 = nvAddressSpaceMap(&as, nvMapGetHandle(&m), true, NvKind_Pitch, &iova);
+      const Result r2 = nvAddressSpaceMap(&as, nvMapGetHandle(&s.map), true, NvKind_Pitch, &s.iova);
       t = armGetSystemTick() - t;
       gpu_ticks += t;
       max_gpu = std::max(max_gpu, t);
-      if (R_SUCCEEDED(r2))
-        nvAddressSpaceUnmap(&as, iova);
-      else if (!gpu_fail++)
-        first_gpu = r2;
-      nvMapClose(&m);
-      free(p);
-      ++rounds;
+      s.mapped = R_SUCCEEDED(r2);
+      if (!s.mapped && !gpu_fail++) first_gpu = r2;
     }
+    for (StressPiece& s : ring) DropPiece(as, s);
     nvAddressSpaceClose(&as);
   }
   if (R_SUCCEEDED(rc_map)) nvMapExit();
   if (R_SUCCEEDED(rc_nv)) nvExit();
   const auto ms = [](uint64_t ticks) { return double(armTicksToNs(ticks)) / 1e6; };
   const uint64_t made = rounds - map_fail;
-  REXLOG_WARN("[nv] stress (blur_nv_stress_s, {} s, {:.0f} s run): {} rounds of a 4-8 MB piece pinned (nvMapCreate) and "
-              "mapped for the GPU, then dropped. Refused after switch_nv_map_retry_ms's tries: the pin {} (the first "
-              "0x{:X}), the mapping {} (the first 0x{:X}); no memory {}. The pin {:.2f} ms on average (the longest "
-              "{:.1f}), the mapping {:.2f} (the longest {:.1f}). Set up: 0x{:X} 0x{:X} 0x{:X}",
-              seconds, ms(armGetSystemTick() - t0) / 1000.0, rounds, map_fail, first_map, gpu_fail, first_gpu, no_mem,
+  REXLOG_WARN("[nv] stress (blur_nv_stress_s, {} s, {:.0f} s run, {} live): {} rounds of a 4-8 MB piece pinned "
+              "(nvMapCreate) and mapped for the GPU, the oldest dropped. Refused after switch_nv_map_retry_ms's tries: "
+              "the pin {} (the first 0x{:X}), the mapping {} (the first 0x{:X}); no memory {}. The pin {:.2f} ms on "
+              "average (the longest {:.1f}), the mapping {:.2f} (the longest {:.1f}). Set up: 0x{:X} 0x{:X} 0x{:X}",
+              seconds, ms(armGetSystemTick() - t0) / 1000.0, live, rounds, map_fail, first_map, gpu_fail, first_gpu,
+              no_mem,
               rounds ? ms(map_ticks) / double(rounds) : 0.0, ms(max_map), made ? ms(gpu_ticks) / double(made) : 0.0,
               ms(max_gpu), rc_nv, rc_map, rc_as);
 }
@@ -785,7 +805,10 @@ void Enable() {
   if (REXCVAR_GET(blur_nv_stress_s) > 0 && !nv_stressed) {
     nv_stressed = true;
     const int seconds = REXCVAR_GET(blur_nv_stress_s);
-    std::thread([seconds] { NvStressMain(seconds); }).detach();
+    const int live = REXCVAR_GET(blur_nv_stress_live);
+    // Kept, never detached or joined: devkitA64's std::thread::detach throws "Function not implemented" (pthread_detach
+    // is missing; the nvstress1 boot of 2026-11-23 ended in std::terminate there).
+    new std::thread([seconds, live] { NvStressMain(seconds, live); });
   }
   if (REXCVAR_GET(blur_heap_watch) && !g_watch.exchange(true)) {
     const TopChunk t = ReadTop();
