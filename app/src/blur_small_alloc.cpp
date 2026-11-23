@@ -43,8 +43,8 @@ REXCVAR_DEFINE_INT32(blur_small_alloc_mb, 32, "Blur/Enhancements",
 // sbrk(0)). A write over the top chunk's size word (an overrun of the last block carved before it, a stale pointer)
 // breaks that, and then the next request the top chunk serves fails, and every one after it. With blur_heap_watch
 // (Switch): the blocks operator new takes from newlib go into a ring with their callers; the top chunk is checked once
-// a game frame (OnGameFrame: three loads, no lock unless they disagree) and whenever malloc returns null to operator
-// new. A broken one is reported on stderr (rex_stderr.log with logging on; the crash report's stderr lines with it off):
+// a game frame (OnGameFrame: two loads and sbrk(0), which takes malloc's lock: see _sbrk_r) and whenever malloc
+// returns null to operator new. A broken one is reported on stderr (rex_stderr.log with logging on; the crash report's stderr lines with it off):
 // its words, the bytes around it, the ring's blocks just below it with their callers (image offsets: addr2line with the
 // build's ELF) and the chunks from there up to it. Then its size is set back to the break (the memory between is the
 // top chunk's own: no block lies there) and the request is tried again, so the game goes on. A real shortage (the top
@@ -54,12 +54,34 @@ REXCVAR_DEFINE_BOOL(blur_heap_watch, true, "Blur/Debug",
                     "frame and when malloc fails, a broken one reported on stderr with the blocks below it and mended")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+// blur-nx (2026-11-23): the cause found. libsysbase's _sbrk_r (devkitA64, a weak symbol) moves the break with a plain
+// load and store of a static and no lock, sbrk(0) included (it stores the break it read). newlib's own calls hold
+// malloc's lock; the base's do not: renut's AdvanceStreamCacheFrameLocked (every frame, the render thread),
+// QueryGpuMemory, the memory report, the heap-short checks of the command buffers, the pipelines and the upload ring,
+// and plume's memoryFigures, memoryFiguresQuick (after it lets the lock go), heapRoomShort and Deko3DHeapRoomBytes all
+// read the heap's room with sbrk(0) from their own threads. One of them that loads the break just before malloc moves
+// it and stores it just after undoes malloc's move. A lost extend leaves the break below the top chunk's end: newlib's
+// next extend gets a break below its top's end (malloc_extend_top: "a foreign sbrk call killed our space") and malloc
+// returns null with the heap's room untouched, the 2026-11-22 race-end bad_alloc. A lost trim leaks what it trimmed.
+// The _sbrk_r below replaces libsysbase's (the strong symbol wins and sbrk.o is never linked): the same moves, under
+// malloc's recursive lock, so every caller of sbrk is serialized with malloc. blur_sbrk_race_test (off) shows the race
+// on the console at the start: 1.5 s of a 64 MB block malloc'd and freed in a loop (newlib extends its top chunk for it
+// and trims it back each time) while a thread on another core reads the break, first the old way (the unlocked load
+// and store), then through this _sbrk_r; the moves undone and the nulls of each are logged.
+REXCVAR_DEFINE_BOOL(blur_sbrk_race_test, false, "Blur/Debug",
+                    "Switch: at the start, the race of an unlocked sbrk(0) against malloc's moves of the break shown "
+                    "(1.5 s the old way, 1.5 s through the locked _sbrk_r); a test boot only")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 #if defined(__SWITCH__)
 
 #include <malloc.h>
 #include <switch.h>
 #include <unistd.h>
 
+#include <sys/reent.h>
+
+#include <cerrno>
 #include <cinttypes>
 #include <cstdio>
 #include <cstring>
@@ -74,6 +96,34 @@ extern char* __malloc_sbrk_base;
 extern size_t __malloc_max_sbrked_mem;
 extern char *fake_heap_start, *fake_heap_end;
 extern char _start;
+}
+
+namespace {
+// The break (libsysbase's heap_start): moved only by _sbrk_r below, under malloc's lock (blur_sbrk_race_test's old way
+// and its putting back are the exceptions).
+char* g_break = nullptr;
+}  // namespace
+
+// libsysbase's _sbrk_r (devkitA64 libsysbase.a, sbrk.o: weak) with malloc's lock around it; see blur_sbrk_race_test
+// above. The same moves: the break starts at libnx's fake_heap_start (libsysbase falls back to the image's end, which
+// libnx never leaves it to: __libnx_initheap sets the bounds before any malloc), the end is fake_heap_end (plume's GPU
+// region lowers it under the same lock) or, with none set, the caller's stack; past the end it fails with ENOMEM.
+// newlib's own calls (malloc_extend_top, malloc_trim) already hold the lock, which is recursive.
+extern "C" __attribute__((used)) void* _sbrk_r(struct _reent* r, ptrdiff_t incr) {
+  __malloc_lock(r);
+  if (!g_break) g_break = fake_heap_start;
+  char* const prev = g_break;
+  char* const end = fake_heap_end ? fake_heap_end : static_cast<char*>(__builtin_frame_address(0));
+  void* result;
+  if (!prev || prev + incr > end) {
+    r->_errno = ENOMEM;
+    result = reinterpret_cast<void*>(-1);
+  } else {
+    g_break = prev + incr;
+    result = prev;
+  }
+  __malloc_unlock(r);
+  return result;
 }
 
 namespace {
@@ -524,11 +574,117 @@ void* SystemNewNothrow(size_t n, void* caller) noexcept {
   return p;
 }
 
+// --- blur_sbrk_race_test (see above) ---
+
+// What libsysbase's _sbrk_r did for sbrk(0), on the real break and without malloc's lock: the load, the end's check
+// and the store of the break it loaded. What the base's callers of sbrk(0) amounted to before.
+void* OldSbrk0() {
+  char* volatile* const brk = &g_break;
+  char* const prev = *brk;
+  char* const end = *static_cast<char* volatile*>(&fake_heap_end);
+  if (end && prev > end) return reinterpret_cast<void*>(-1);
+  *brk = prev;
+  return prev;
+}
+
+struct RaceReader {
+  std::atomic<bool> stop{false};
+  bool old_way = true;
+  uint64_t reads = 0;
+};
+
+void RaceReaderMain(void* arg) {
+  RaceReader& rr = *static_cast<RaceReader*>(arg);
+  uint64_t n = 0;
+  while (!rr.stop.load(std::memory_order_relaxed)) {
+    if (rr.old_way)
+      OldSbrk0();
+    else
+      (void)sbrk(0);
+    ++n;
+  }
+  rr.reads = n;
+}
+
+struct RacePhase {
+  uint64_t rounds = 0, extended = 0, reads = 0, lost = 0, nulls = 0;
+  int core = -1;
+  Result rc = 0;
+};
+
+constexpr size_t kRaceBlock = size_t(64) << 20;
+
+// One phase: a reader of the break on another of the application's cores, and here a 64 MB block malloc'd and freed in
+// a loop. Each round, under malloc's lock: did the break move for the block (newlib extended its top chunk), and does
+// the top chunk end at the break afterwards; where it does not, a move of the break was undone, and the break is put
+// back at the top chunk's end (no other part of the process takes memory from sbrk: what lies between is unused).
+RacePhase RunRacePhase(bool old_way, uint64_t ms) {
+  RacePhase ph;
+  RaceReader rr;
+  rr.old_way = old_way;
+  ph.core = int((svcGetCurrentProcessorNumber() + 1) % 3);
+  Thread th;
+  ph.rc = threadCreate(&th, RaceReaderMain, &rr, nullptr, 0x10000, 0x2C, ph.core);
+  if (R_FAILED(ph.rc)) return ph;
+  ph.rc = threadStart(&th);
+  if (R_FAILED(ph.rc)) {
+    threadClose(&th);
+    return ph;
+  }
+  const uint64_t until = armGetSystemTick() + armNsToTicks(ms * 1000000ull);
+  while (armGetSystemTick() < until) {
+    __malloc_lock(_REENT);
+    char* const before = g_break;
+    __malloc_unlock(_REENT);
+    void* p = std::malloc(kRaceBlock);
+    __malloc_lock(_REENT);
+    if (g_break != before) ++ph.extended;
+    __malloc_unlock(_REENT);
+    if (p) {
+      static_cast<volatile uint8_t*>(p)[0] = 1;
+      std::free(p);
+    } else {
+      ++ph.nulls;
+    }
+    __malloc_lock(_REENT);
+    void* volatile* const av = __malloc_av_;
+    const uintptr_t top = reinterpret_cast<uintptr_t>(av[2]);
+    const uintptr_t top_end = top + (reinterpret_cast<const volatile uintptr_t*>(top)[1] & ~uintptr_t(3));
+    if (top_end != reinterpret_cast<uintptr_t>(g_break)) {
+      ++ph.lost;
+      g_break = reinterpret_cast<char*>(top_end);
+    }
+    __malloc_unlock(_REENT);
+    ++ph.rounds;
+  }
+  rr.stop.store(true, std::memory_order_relaxed);
+  threadWaitForExit(&th);
+  threadClose(&th);
+  ph.reads = rr.reads;
+  return ph;
+}
+
+void RunSbrkRaceTest() {
+  const RacePhase a = RunRacePhase(true, 1500);
+  const RacePhase b = RunRacePhase(false, 1500);
+  REXLOG_WARN("[heap] sbrk race test (blur_sbrk_race_test): a 64 MB block malloc'd and freed in a loop, 1.5 s each, "
+              "while a thread on another core reads the break. The old way (unlocked load and store; core {}, "
+              "rc 0x{:X}): {} rounds ({} extended the top chunk), {} reads, {} moves of the break undone, {} mallocs null. Through "
+              "the locked _sbrk_r (core {}, rc 0x{:X}): {} rounds ({} extended), {} reads, {} undone, {} null",
+              a.core, a.rc, a.rounds, a.extended, a.reads, a.lost, a.nulls, b.core, b.rc, b.rounds, b.extended,
+              b.reads, b.lost, b.nulls);
+}
+
 }  // namespace
 
 namespace blur::small_alloc {
 
 void Enable() {
+  static bool race_tested = false;
+  if (REXCVAR_GET(blur_sbrk_race_test) && !race_tested) {
+    race_tested = true;
+    RunSbrkRaceTest();
+  }
   if (REXCVAR_GET(blur_heap_watch) && !g_watch.exchange(true)) {
     const TopChunk t = ReadTop();
     REXLOG_INFO("[heap] watch on (blur_heap_watch): top chunk 0x{:x} word 0x{:x}, break 0x{:x} ({}), heap 0x{:x}-0x{:x}",
@@ -556,8 +712,9 @@ void Enable() {
 
 uint64_t Exhausted() { return G().exhausted; }
 
-// blur-nx (2026-11-23): the heap watch's look once a game frame (renut::frame_stats::OnGameFrame, at the Swap). Three
-// plain loads; malloc's lock only when they disagree (a block carved meanwhile, or a broken top chunk).
+// blur-nx (2026-11-23): the heap watch's look once a game frame (renut::frame_stats::OnGameFrame, at the Swap). Two
+// plain loads and sbrk(0) (malloc's lock for that one: _sbrk_r); the whole check under the lock only when they
+// disagree (a block carved meanwhile, or a broken top chunk).
 void WatchFrame() {
   if (!g_watch.load(std::memory_order_relaxed)) return;
   g_frames.fetch_add(1, std::memory_order_relaxed);
