@@ -14,8 +14,9 @@ Bink 1's layout (little-endian; the frame index right after the header, frame 0 
   A frame: for each audio track a u32 size and that many bytes, then the video data to the frame's end.
 
 usage:
-  python -P tools/bik_hevc_pack.py IN.bik OUT.bik.hevc [--fraction 0.22] [--gop 120] [--encoder libx265|hevc_nvenc]
-      [--ffmpeg C:/ffmpeg/ffmpeg.exe]
+  python -P tools/bik_hevc_pack.py IN.bik OUT.bik.hevc [--fraction 0.22] [--min-kbps 300] [--gop 120]
+      [--encoder libx265|hevc_nvenc] [--ffmpeg C:/ffmpeg/ffmpeg.exe]
+      the bitrate: the Bink video's times --fraction, at least --min-kbps (the installer's lib/biks.js reencodeBink)
   python -P tools/bik_hevc_pack.py --check IN.bik OUT.bik.hevc [--psnr-every 30]
       the movie the port shows the game (every byte outside the frames' video data as in IN, each frame's tag at its
       video data's start, zeros after it) and the H.265's PSNR against ffmpeg's Bink decode, every Nth frame
@@ -203,6 +204,7 @@ def main():
     ap.add_argument('src')
     ap.add_argument('dst')
     ap.add_argument('--fraction', type=float, default=0.22)
+    ap.add_argument('--min-kbps', type=int, default=300)
     ap.add_argument('--gop', type=int, default=120)
     ap.add_argument('--encoder', default='libx265', choices=['libx265', 'hevc_nvenc'])
     ap.add_argument('--ffmpeg', default='C:/ffmpeg/ffmpeg.exe')
@@ -215,7 +217,7 @@ def main():
         return check(a, d, vids)
     video_bytes = sum(ve - vs for vs, ve, _ in vids)
     seconds = len(vids) / fps
-    bitrate = int(video_bytes * 8 / seconds * a.fraction)
+    bitrate = int(max(a.min_kbps * 1000, video_bytes * 8 / seconds * a.fraction))
     with tempfile.TemporaryDirectory() as tmp:
         h265 = os.path.join(tmp, 'v.hevc')
         encode(a.ffmpeg, a.src, h265, a.encoder, bitrate, a.gop)
