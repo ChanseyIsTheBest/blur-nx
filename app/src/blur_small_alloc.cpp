@@ -77,9 +77,16 @@ REXCVAR_DEFINE_BOOL(blur_sbrk_race_test, false, "Blur/Debug",
 // a block, as the title screen loaded; the 11-13 21:16 crash the same, in a race load): the SDK's wrappers of nvMapCreate
 // and the GPU mapping (sdk/src/ui/switch_perf.cpp, RexNvRetry) make a failed call again for up to this long, with waits
 // of 1 to 250 ms, and log each failure ("nv failure" in the deko3d lines). 0: no second call (the abort, as before).
-REXCVAR_DEFINE_INT32(switch_nv_map_retry_ms, 3000, "Blur/Enhancements",
+// 10 s: a game held still for seconds is better than one closed (the refusal's length is not known yet: in 19 boots of
+// 2026-11-23 it came once, and neither 13,463 pins under load nor 94 screenshots in a boot brought it on).
+REXCVAR_DEFINE_INT32(switch_nv_map_retry_ms, 10000, "Blur/Enhancements",
                      "Switch: how long a refused nvMapCreate or GPU mapping is tried again before deko3d's abort (ms)")
     .range(0, 60000)
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_INT32(blur_nv_fail_inject, 0, "Blur/Debug",
+                     "Switch: every this many pins and GPU mappings, the first call is failed before it reaches "
+                     "nvservices, so switch_nv_map_retry_ms's second tries are seen to work (0: off; a test boot only)")
+    .range(0, 100000)
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 // blur-nx (2026-11-23, the boot crash): a load on the calls that failed, to see how often nvservices refuses them and

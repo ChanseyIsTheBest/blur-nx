@@ -56,6 +56,12 @@ REXCVAR_DEFINE_INT32(audio_switch_frames_in_queue, 10, "Audio",
                      "(cushion; 10 = 53 ms, 6 up to build 105). A longer queue lets the game wait without cutting the "
                      "output, at the cost of latency: masseffect_audio_wait_server_ms waits up to 30 ms; read "
                      "when the audio is opened");
+// blur-nx (2026-11-23): a test of the refused appends' second tries (the boot crash of 17:32:19 had three in a row).
+REXCVAR_DEFINE_INT32(blur_audout_fail_inject, 0, "Blur/Debug",
+                     "Switch: every this many audout appends, one is refused here as audout did (0x1099) before it is "
+                     "sent, so the buffer goes the way of a refused one (0: off; a test boot only)")
+    .range(0, 100000)
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 namespace rex::audio::nx {
 
@@ -203,6 +209,8 @@ struct SwitchAudioSystem::Output {
   // appended again, as filled, every few ms until audout takes them.
   uint32_t unappended = 0;
   uint64_t append_failures = 0, append_retried = 0;
+  uint32_t fail_inject = 0;  // blur_audout_fail_inject, read when audio is opened
+  uint64_t appends = 0;
   uint64_t unappended_since = 0;  // the tick of the first refusal still outstanding
 };
 
@@ -249,6 +257,7 @@ void SwitchAudioSystem::DestroyDriver(AudioDriver* driver) {
 bool SwitchAudioSystem::StartOutput() {
   auto output = std::make_unique<Output>();
   output->pump = REXCVAR_GET(audio_switch_pump);
+  output->fail_inject = static_cast<uint32_t>(std::max(REXCVAR_GET(blur_audout_fail_inject), 0));
   output->frames_per_tick = REXCVAR_GET(audio_switch_pump_pairs) ? 2 : 1;  // blur-nx (2026-11-13, M-43)
   if (const int32_t n = REXCVAR_GET(audio_switch_pump_frames); n >= 1) {  // blur-nx (2026-11-16, #196)
     output->frames_per_tick = uint32_t(n > 4 ? 4 : n);
@@ -390,7 +399,10 @@ void SwitchAudioSystem::FillAndAppend(size_t buffer_index) {
   RexSwitchPerfMax(23, static_cast<u64>(std::min(pico, 100.0f) * 10000.0f));
   output.buffers[buffer_index].data_size = kBufferBytes;
   output.buffers[buffer_index].data_offset = 0;
-  Result rc = audoutAppendAudioOutBuffer(&output.buffers[buffer_index]);
+  ++output.appends;
+  Result rc = (output.fail_inject && output.appends % output.fail_inject == 0)
+                  ? MAKERESULT(153, 8)  // blur_audout_fail_inject: as audout's refusal (0x1099)
+                  : audoutAppendAudioOutBuffer(&output.buffers[buffer_index]);
   RexSwitchPerfAdd(24, frames_mixed);
   RexSwitchPerfAdd(25, frames_missing);
   if (R_SUCCEEDED(rc)) {

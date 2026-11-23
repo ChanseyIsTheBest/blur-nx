@@ -1395,11 +1395,27 @@ static u32 RexNvRetryBudgetMs(void) {
   s64 v = g_rex_nv_retry_ms.load(std::memory_order_relaxed);
   if (v < 0) {
     const std::string s = rex::cvar::GetFlagByName("switch_nv_map_retry_ms");
-    v = s.empty() ? 3000 : std::strtol(s.c_str(), nullptr, 10);
+    v = s.empty() ? 10000 : std::strtol(s.c_str(), nullptr, 10);
     if (v < 0) v = 0;
     g_rex_nv_retry_ms.store(v, std::memory_order_relaxed);
   }
   return static_cast<u32>(v);
+}
+
+// blur_nv_fail_inject (Blur's cvar, a test): every this many pins and GPU mappings, the first call is failed here
+// (LibnxNvidiaError_Timeout, without reaching nvservices) so the second tries above are seen to work. Read at the first
+// call (the config is loaded before deko3d's device is made).
+static std::atomic<s64> g_rex_nv_inject{-1};
+static std::atomic<u32> g_rex_nv_inject_calls{0};
+static bool RexNvInjectFailure(void) {
+  s64 k = g_rex_nv_inject.load(std::memory_order_relaxed);
+  if (k < 0) {
+    const std::string s = rex::cvar::GetFlagByName("blur_nv_fail_inject");
+    k = s.empty() ? 0 : std::strtol(s.c_str(), nullptr, 10);
+    if (k < 0) k = 0;
+    g_rex_nv_inject.store(k, std::memory_order_relaxed);
+  }
+  return k > 0 && (g_rex_nv_inject_calls.fetch_add(1, std::memory_order_relaxed) + 1) % static_cast<u32>(k) == 0;
 }
 
 // The process's memory regions as svcQueryMemory lists them (the kernel's blocks after merging), and those with an
@@ -1469,7 +1485,8 @@ extern "C" {
 
 Result __wrap_nvMapCreate(NvMap* m, void* cpu_addr, u32 size, u32 align, NvKind kind, bool is_cpu_cacheable) {
   const u64 from = armGetSystemTick();
-  Result rc = __real_nvMapCreate(m, cpu_addr, size, align, kind, is_cpu_cacheable);
+  Result rc = RexNvInjectFailure() ? MAKERESULT(Module_LibnxNvidia, LibnxNvidiaError_Timeout)
+                                   : __real_nvMapCreate(m, cpu_addr, size, align, kind, is_cpu_cacheable);
   if (R_FAILED(rc)) {
     rc = RexNvRetry(1, rc, size, reinterpret_cast<u64>(cpu_addr),
                     static_cast<u32>(kind) | (is_cpu_cacheable ? 0x80000000u : 0u),
@@ -1540,8 +1557,10 @@ Result __wrap_nvAddressSpaceAllocFixed(NvAddressSpace* a, bool sparse, u64 size,
 Result __wrap_nvioctlNvhostAsGpu_MapBufferEx(u32 fd, u32 flags, u32 kind, u32 nvmap_handle, u32 page_size,
                                              u64 buffer_offset, u64 mapping_size, u64 input_offset, u64* offset) {
   const u64 from = armGetSystemTick();
-  Result rc = __real_nvioctlNvhostAsGpu_MapBufferEx(fd, flags, kind, nvmap_handle, page_size, buffer_offset,
-                                                    mapping_size, input_offset, offset);
+  Result rc = RexNvInjectFailure() ? MAKERESULT(Module_LibnxNvidia, LibnxNvidiaError_Timeout)
+                                   : __real_nvioctlNvhostAsGpu_MapBufferEx(fd, flags, kind, nvmap_handle, page_size,
+                                                                           buffer_offset, mapping_size, input_offset,
+                                                                           offset);
   if (R_FAILED(rc)) {  // blur-nx (2026-11-23): see RexNvRetry
     rc = RexNvRetry(2, rc, mapping_size, nvmap_handle, (flags & 0xFFFF) | (kind << 16), [&] {
       return __real_nvioctlNvhostAsGpu_MapBufferEx(fd, flags, kind, nvmap_handle, page_size, buffer_offset,
