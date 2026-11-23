@@ -73,6 +73,26 @@ REXCVAR_DEFINE_BOOL(blur_sbrk_race_test, false, "Blur/Debug",
                     "(1.5 s the old way, 1.5 s through the locked _sbrk_r); a test boot only")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+// blur-nx (2026-11-23, the boot crash of 17:32:19: deko3d's dkMemBlockCreate aborted the process when nvservices refused
+// a block, as the title screen loaded; the 11-13 21:16 crash the same, in a race load): the SDK's wrappers of nvMapCreate
+// and the GPU mapping (sdk/src/ui/switch_perf.cpp, RexNvRetry) make a failed call again for up to this long, with waits
+// of 1 to 250 ms, and log each failure ("nv failure" in the deko3d lines). 0: no second call (the abort, as before).
+REXCVAR_DEFINE_INT32(switch_nv_map_retry_ms, 3000, "Blur/Enhancements",
+                     "Switch: how long a refused nvMapCreate or GPU mapping is tried again before deko3d's abort (ms)")
+    .range(0, 60000)
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+// blur-nx (2026-11-23, the boot crash): a load on the calls that failed, to see how often nvservices refuses them and
+// whether the tries again save it. At the start (over the boot movies and the title screen's loading), a thread of its
+// own pins a 4-8 MB piece of the heap for the GPU (nvMapCreate, as deko3d's blocks; two in three uncached) and maps it
+// in an address space of its own, then unmaps and drops it, in a loop for this many seconds; the failures left after
+// the wrappers' tries, the counts and times are logged ("[nv] stress"). 0: off. A test boot only.
+REXCVAR_DEFINE_INT32(blur_nv_stress_s, 0, "Blur/Debug",
+                     "Switch: at the start, this many seconds of GPU pins and mappings made and dropped on a thread of "
+                     "its own, the refusals counted (a test boot only)")
+    .range(0, 600)
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 #if defined(__SWITCH__)
 
 #include <malloc.h>
@@ -81,11 +101,13 @@ REXCVAR_DEFINE_BOOL(blur_sbrk_race_test, false, "Blur/Debug",
 
 #include <sys/reent.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cinttypes>
 #include <cstdio>
 #include <cstring>
 #include <iterator>
+#include <thread>
 
 // newlib's malloc state (devkitA64 libc.a, mallocr.c): the bins (the third word is the top chunk), the totals, the
 // lock; libnx's heap bounds; the image's start (the crash report's base for image offsets).
@@ -660,6 +682,19 @@ RacePhase RunRacePhase(bool old_way, uint64_t ms) {
   rr.stop.store(true, std::memory_order_relaxed);
   threadWaitForExit(&th);
   threadClose(&th);
+  // 2026-11-23 (sbrk1, sbrk2): the reader's last unlocked store can land after the loop's last check; the next phase
+  // then counted it (1 undone, and in sbrk2 1 null). Checked once more with the reader gone, counted here.
+  {
+    __malloc_lock(_REENT);
+    void* volatile* const av = __malloc_av_;
+    const uintptr_t top = reinterpret_cast<uintptr_t>(av[2]);
+    const uintptr_t top_end = top + (reinterpret_cast<const volatile uintptr_t*>(top)[1] & ~uintptr_t(3));
+    if (top_end != reinterpret_cast<uintptr_t>(g_break)) {
+      ++ph.lost;
+      g_break = reinterpret_cast<char*>(top_end);
+    }
+    __malloc_unlock(_REENT);
+  }
   ph.reads = rr.reads;
   return ph;
 }
@@ -675,6 +710,67 @@ void RunSbrkRaceTest() {
               b.reads, b.lost, b.nulls);
 }
 
+// --- blur_nv_stress_s (see above) ---
+void NvStressMain(int seconds) {
+  uint64_t rounds = 0, map_fail = 0, gpu_fail = 0, no_mem = 0;
+  uint64_t map_ticks = 0, gpu_ticks = 0, max_map = 0, max_gpu = 0;
+  Result first_map = 0, first_gpu = 0;
+  const Result rc_nv = nvInitialize();
+  const Result rc_map = R_SUCCEEDED(rc_nv) ? nvMapInit() : rc_nv;
+  NvAddressSpace as{};
+  const Result rc_as = R_SUCCEEDED(rc_map) ? nvAddressSpaceCreate(&as, 0x10000) : rc_map;
+  const uint64_t t0 = armGetSystemTick();
+  if (R_SUCCEEDED(rc_as)) {
+    const uint64_t until = t0 + armNsToTicks(uint64_t(seconds) * 1000000000ull);
+    while (armGetSystemTick() < until) {
+      const uint32_t size = ((rounds & 1) ? (8u << 20) : (4u << 20)) + uint32_t(rounds % 7) * 0x10000u;
+      void* p = memalign(0x10000, size);
+      if (!p) {
+        ++no_mem;
+        svcSleepThread(5000000);
+        continue;
+      }
+      NvMap m;
+      uint64_t t = armGetSystemTick();
+      const Result r1 = nvMapCreate(&m, p, size, 0x10000, NvKind_Pitch, (rounds % 3) == 0);
+      t = armGetSystemTick() - t;
+      map_ticks += t;
+      max_map = std::max(max_map, t);
+      if (R_FAILED(r1)) {
+        if (!map_fail++) first_map = r1;
+        free(p);
+        ++rounds;
+        continue;
+      }
+      iova_t iova = 0;
+      t = armGetSystemTick();
+      const Result r2 = nvAddressSpaceMap(&as, nvMapGetHandle(&m), true, NvKind_Pitch, &iova);
+      t = armGetSystemTick() - t;
+      gpu_ticks += t;
+      max_gpu = std::max(max_gpu, t);
+      if (R_SUCCEEDED(r2))
+        nvAddressSpaceUnmap(&as, iova);
+      else if (!gpu_fail++)
+        first_gpu = r2;
+      nvMapClose(&m);
+      free(p);
+      ++rounds;
+    }
+    nvAddressSpaceClose(&as);
+  }
+  if (R_SUCCEEDED(rc_map)) nvMapExit();
+  if (R_SUCCEEDED(rc_nv)) nvExit();
+  const auto ms = [](uint64_t ticks) { return double(armTicksToNs(ticks)) / 1e6; };
+  const uint64_t made = rounds - map_fail;
+  REXLOG_WARN("[nv] stress (blur_nv_stress_s, {} s, {:.0f} s run): {} rounds of a 4-8 MB piece pinned (nvMapCreate) and "
+              "mapped for the GPU, then dropped. Refused after switch_nv_map_retry_ms's tries: the pin {} (the first "
+              "0x{:X}), the mapping {} (the first 0x{:X}); no memory {}. The pin {:.2f} ms on average (the longest "
+              "{:.1f}), the mapping {:.2f} (the longest {:.1f}). Set up: 0x{:X} 0x{:X} 0x{:X}",
+              seconds, ms(armGetSystemTick() - t0) / 1000.0, rounds, map_fail, first_map, gpu_fail, first_gpu, no_mem,
+              rounds ? ms(map_ticks) / double(rounds) : 0.0, ms(max_map), made ? ms(gpu_ticks) / double(made) : 0.0,
+              ms(max_gpu), rc_nv, rc_map, rc_as);
+}
+
 }  // namespace
 
 namespace blur::small_alloc {
@@ -684,6 +780,12 @@ void Enable() {
   if (REXCVAR_GET(blur_sbrk_race_test) && !race_tested) {
     race_tested = true;
     RunSbrkRaceTest();
+  }
+  static bool nv_stressed = false;
+  if (REXCVAR_GET(blur_nv_stress_s) > 0 && !nv_stressed) {
+    nv_stressed = true;
+    const int seconds = REXCVAR_GET(blur_nv_stress_s);
+    std::thread([seconds] { NvStressMain(seconds); }).detach();
   }
   if (REXCVAR_GET(blur_heap_watch) && !g_watch.exchange(true)) {
     const TopChunk t = ReadTop();
