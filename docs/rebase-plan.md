@@ -170,3 +170,61 @@ small-alloc arena, so newlib's malloc returned null). The heap report 30 s befor
 handed out; no growth over the race. Not exhaustion, then: newlib's heap state (a corruption) or something taking
 ~800 MB at once. First bad_alloc in any saved Blur crash log; the pre-sync 1.0.1 was the first build with the Opus
 streams and the H.265 movies, which B has too. B passed three race ends (B1, B2, the A/B race). Open.
+
+## Sync 2026-11-24: base b40a6f79 (ports 255-279)
+
+The user: "sync up to the ultimate base again please". Two merges, because the base moved on during the first:
+base-update `56951598` (the base at ac35fff5, ports 255-273) merged as `e6dbc0f9`, then base-update `1c7ee86a` (the
+base at b40a6f79, ports 274-279) merged as `8536019b`, both with `git checkout --conflict=diff3` and per-hunk picks (each
+merge commit lists its files). Points to know for the next sync:
+
+- **pgo-inplace is Blur's own**: the base now carries Katamari's profile (540 files). Keep Blur's set exactly and leave
+  the base's out; Blur's profile is trained fresh after each sync anyway.
+- **Katamari's own pieces in app/**: port 267's WMV hook (katamari_wmv_ffmpeg.cpp and its libavcodec link) and the
+  katamari_switch*.toml files stay out; the NRO's version stays Blur's (the base's 1.0.2 is Katamari's). Port 259's
+  nxvideo library is taken, and Blur's movie code moved behind its RENUT_NXVIDEO switch.
+- **Port 255's dynamic resolution stays off for Blur**: blur_switch_defaults.toml's
+  `banjo_renut_dynamic_resolution = false` sets both modes' keys; the console log says "off now" for both.
+- **blur_small_alloc.cpp**: port 270 is Blur's own ae5e607a (newlib's break under malloc's lock); one _sbrk_r is kept,
+  with SASRT's plume_region_give_back_for_sbrk added.
+- **tools/switch_remote.py**: both sides' commands (Blur's rm, port 277's append).
+- **Syntax check of a worktree's files**: scratch_scripts_1120/syntax_check_nopch.py (switch-release-final's command
+  without the precompiled header, and every -I into main's tree pointed at the worktree), so the worktree's headers are
+  not paired with main's copies (false redefinition errors otherwise).
+- **Ports 275 and 279 in Blur**: Blur's races log no predicated tile runs and 0 colour or depth hand-over losses, so the
+  tile twins and the second hand-over destination change nothing on screen here. Device offsets: draw.h keeps Blur's
+  declaration at 0x3050.
+
+PC checks of `e6dbc0f9` (C:/blur-nx-test/pc_runs): sync_verify_1124 (banjo_cpu_verify): 83 M calls compared, 0
+differences. sync_noguard_1124 (the first-64-calls guard): the game thread and the render thread went quiet 157 s in
+(~25 s into the race) while the audio and file threads ran on, and no stack was taken; the same race again under the
+Switch build's load (sync_noguard_1124b) reached the end. A hang watcher now sits beside the no-guard races
+(scratch_scripts_1120/pc_hang_watch.py: when the 10 s frame lines stop for 25 s, every thread's stack twice, named from
+renut.pdb).
+
+Profile (hb17, commit `ed6aa325`): the instrumented build of `8536019b` trained on the console 2026-11-24, 21:01-21:23,
+one race each of Barcelona Oval and Amboy (each track seen on its 20 s shot), 551 profile files, summary runs = 2. The
+release on it: C:/blur-nx-test/builds/2026-11-24_release_1_0_1_sync2 (clean build; the same four Vulkan-header notes as
+hb16's, no profile mismatch, no personal strings).
+
+Console ABBA (2026-11-24, 21:50-22:28; release builds, `log_level = "info"`, frame cap off, Barcelona Oval, the 240 s
+quiet drive; pacing_sum.py `--gpu-min 0 --cpu-min 150`). The console was in handheld mode (1280x720, the handheld GPU
+clock): every race is GPU-bound at ~31 fps (GPU ~28.5 ms a frame), so the mean cannot show CPU-side changes. A = the
+11-22 release (2026-11-22_release_1_0_1_sync, hb16, ports 1-254), B = the new release (hb17, ports 1-279, with the 11-23
+nv retries, abort report, audio re-appends and the sbrk lock), in the order A B B A:
+
+| race | mean fps | 1 % low | 0.1 % low | render thread ms | GPU ms |
+|---|---|---|---|---|---|
+| A1 | 30.90 | 16.78 | 13.68 | 13.59 | 28.70 |
+| B1 | 30.39 | 17.09 | 13.43 | 13.48 | 28.24 |
+| B2 | 30.79 | 17.14 | 13.53 | 13.73 | 28.76 |
+| A2 | 30.87 | 15.42 | 9.03 | 13.82 | 28.76 |
+
+Even: compare_runs.py pools A at 30.99 fps, render thread 13.29 ms, CPU 328 % and B at 30.79 fps, 13.53 ms, 327 %
+(B's races drew ~3 % fewer draws a frame: the scene, not the build). A2's lows are one render-thread stall of 170 ms at
+69 s (frames-ahead waits behind it). No crash in the four (the card's rex_crash.log is the 11-23 one), dynamic
+resolution off in both modes, 0 hand-over losses. The card was left with B and the player's own blur.toml.
+
+The PC build of `8536019b` and its races (verify, the hang hunt) were stopped mid-build at the user's word ("don't
+bother with the PC build", 2026-11-24 22:35): ports 274-279 change no CPU-side code, and `e6dbc0f9`'s verify race was
+clean. The no-guard hang of sync_noguard_1124 stays open (pc_hang_loop_1124.sh hunts it).
