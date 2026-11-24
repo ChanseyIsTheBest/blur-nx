@@ -371,3 +371,36 @@ Ports 1-43 are the first round: the universal fixes of the other ports' renderer
   (926, 950-973 and 977 stay in it), which the prebuild otherwise compiled blocking: RR6's 10 % GPU gap after the sync.
 - Port 254: the uam compile thread on core 2 by default (banjo_system_core_uam off); port 251's stage and warm helper
   keep core 3, where a race compile took minutes under them.
+- Port 255: dynamic resolution with a switch for each mode (handheld off, docked on at 972-1080 by default),
+  the game menu's fixed and dynamic resolution rows for each.
+- Port 256 (from sasrt-nx): sasrt_compile_threads_core (2): every shader compile thread on core 2 (-1 floating, -2 the
+  old keys).
+- Port 257 (from sasrt-nx): sasrt_resolve_remake_carry: a resolve destination remade at a dynamic resolution step keeps
+  its content; sasrt_resolve_alias_previous, off.
+- Port 258 (from sasrt-nx): weak stand-ins for the FPS overlay's counter and RenderDoc's game frame tick, so ports
+  without those files build display_sync.cpp and frame_stats.cpp.
+- Port 259 (from sasrt-nx, rr6-nx, culdcept-nx): the smaller game files in the SDK: .lz4b version 2 (ZXC), NAME.hevc
+  (H.265 movies), NAME.opcm (PCM as Opus), NAME.xmo / NAME.xmop (XMA as Opus), the merged lookup, libopus (rexopus) and
+  tools/switch/nxvideo as the static library renut_nxvideo.
+- Port 260 (from sasrt-nx): its render-thread rounds 2-4's 13 universal items (A/B 190-203, groups 241-243), on.
+- Port 261 (from sasrt-nx): sasrt_resolve_alias_previous (off) no longer takes a read of the latest depth resolve's
+  words (stripes through SASRT's far scenery below 1x).
+- Port 262 (from the Cave ports): the handheld GPU boost (RexSwitchApmApply) changes nothing when the clocks read 0
+  (Ryujinx: the SDK overlays drawn after it stayed invisible).
+- Port 263: sasrt_gpu_seed_cpu_direct off by default (banjo-nx's vertex explosions with it on).
+- Port 264 (culdcept-nx's two-size VFS index, for every kind): the index keeps a stand-in's SD size, so a game
+  folder with .lz4b / .hevc / .opcm / .xmo / .xmop files is no longer scanned again at every start.
+- Port 265 (rr6-nx's): downloadable content read in place from its packages, no longer unpacked at the first start.
+- Port 266: a VFS index made by the web installer is taken from a renamed folder and always validated, so the first
+  start skips the full scan.
+- Port 267 (Katamari): the movies by FFmpeg's WMV3 decoder, or by NVDEC once the installer re-encoded them to H.265.
+- Port 268: predicated tiling: a draw predicated to one tile keeps its screen viewport (Katamari's collection
+  screen, columns 2 and 4).
+- Port 269 (the Peggle 2 session's finding): the app's dialogs are released in OnShutdown, before the SDK frees
+  their drawer (a normal quit faulted in ~GameMenuDialog).
+- Port 270 (sasrt-nx 1.0.1, blur-nx's): newlib's break moves under malloc's lock, and the GPU region's free bottom
+  goes back before a move fails (in place: no malloc inside newlib's extend).
+- Port 271 (sasrt-nx 1.0.1): the memory governor watches the CPU side's own room (heap and the region's free
+  bottom), and the GPU region leaves the CPU side a reserve (sasrt_region_cpu_reserve_mb, 160).
+- Port 272 (sasrt-nx 1.0.1): sasrt_dynamic_docked_start_top, off: docked dynamic resolution may start at its top.
+- Port 273 (sasrt-nx 1.0.1): a bad_alloc crash reason gets the heap's figures.

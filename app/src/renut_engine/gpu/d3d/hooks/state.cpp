@@ -24,10 +24,50 @@
 #include <mutex>
 #include <unordered_map>
 #include <vector>
+#include <bit>
+
+#include <rex/cvar.h>
+
+// katamari-nx (2026-11-24, the collection screen's columns 2 and 4): the game's viewport and scissor calls as given,
+// and what the device holds after each, for a short window.
+REXCVAR_DEFINE_INT32(katamari_diag_viewport_log_s, 0, "Katamari/Debug",
+                     "Diagnostic: this many seconds after the first SetViewport, log the next "
+                     "katamari_diag_viewport_log_count SetViewport / SetScissorRect calls with their arguments and the "
+                     "device's viewport and window scissor after each ([vplog]; 0 = off)");
+REXCVAR_DEFINE_INT32(katamari_diag_viewport_log_count, 400, "Katamari/Debug",
+                     "Diagnostic: how many calls katamari_diag_viewport_log_s logs");
 
 using namespace renut::gpu;
 
 namespace {
+
+// Whether this call is in katamari_diag_viewport_log_s's window (game thread only): from that second for 15 s, calls
+// that pass 'wanted' (the full-screen ones are thousands a frame), at most katamari_diag_viewport_log_count.
+bool ViewportLogOn(bool wanted = true) {
+  static const int32_t at = REXCVAR_GET(katamari_diag_viewport_log_s);
+  if (at <= 0) [[likely]]
+    return false;
+  static const auto start = std::chrono::steady_clock::now();
+  static int32_t left = REXCVAR_GET(katamari_diag_viewport_log_count);
+  const auto since = std::chrono::steady_clock::now() - start;
+  if (!wanted || left <= 0 || since < std::chrono::seconds(at) || since > std::chrono::seconds(at + 15))
+    return false;
+  --left;
+  return true;
+}
+
+void ViewportLogAfter(const char *what, u32 device) {
+  const native::Device d = native::DeviceAt(device);
+  if (!d)
+    return;
+  const auto f = [&](u32 o) { return std::bit_cast<float>(d.W(o)); };
+  const u32 tl = d.W(native::off::WindowScissorTL), br = d.W(native::off::WindowScissorBR);
+  RGPU_INFO("[vplog]   after {}: viewport {} {} {} {} | scissor rect {} {} {} {} test {} | window {},{} - {},{} | "
+            "vport x {} + {} y {} + {}",
+            what, f(0x3160), f(0x3164), f(0x3168), f(0x316C), i32(d.W(0x317C)), i32(d.W(0x3180)), i32(d.W(0x3184)),
+            i32(d.W(0x3188)), d.W(0x2E48), tl & 0x7FFF, (tl >> 16) & 0x7FFF, br & 0x7FFF, (br >> 16) & 0x7FFF,
+            f(0x2908), f(0x290C), f(0x2910), f(0x2914));
+}
 
 template <u32 State>
 void SetRenderStateHook(u32 device, u32 value) {
@@ -212,6 +252,15 @@ void D3DDevice_SetVertexDeclaration_hook(u32 device, u32 declaration) {
 
 // void D3DDevice_SetViewport(D3DDevice*, const D3DVIEWPORT9*) [0x821F2090]
 void D3DDevice_SetViewport_hook(u32 device, u32 viewport) {
+  static const bool vplog = REXCVAR_GET(katamari_diag_viewport_log_s) > 0;
+  const auto *v = vplog ? GuestPtr<const be_u32>(viewport) : nullptr;
+  if (v && ViewportLogOn(u32(v[2]) <= 300 || u32(v[3]) <= 300)) [[unlikely]] {
+      RGPU_INFO("[vplog] SetViewport(struct {:08X}): {} {} {} {} z {} {}", viewport, u32(v[0]), u32(v[1]), u32(v[2]),
+                u32(v[3]), std::bit_cast<float>(u32(v[4])), std::bit_cast<float>(u32(v[5])));
+    native::SetViewport(native::DeviceAt(device), viewport);
+    ViewportLogAfter("SetViewport", device);
+    return;
+  }
   native::SetViewport(native::DeviceAt(device), viewport);
 }
 
@@ -219,6 +268,13 @@ void D3DDevice_SetViewport_hook(u32 device, u32 viewport) {
 //     float MinZ, float MaxZ) [0x821F2110]
 void D3D_SetViewport_hook(u32 device, float x, float y, float width, float height, float min_z,
                           float max_z) {
+  static const bool vplog = REXCVAR_GET(katamari_diag_viewport_log_s) > 0;
+  if (vplog && ViewportLogOn(width <= 300.0f || height <= 300.0f)) [[unlikely]] {
+    RGPU_INFO("[vplog] D3D::SetViewport(floats): {} {} {} {} z {} {}", x, y, width, height, min_z, max_z);
+    native::SetViewport(native::DeviceAt(device), x, y, width, height, min_z, max_z);
+    ViewportLogAfter("D3D::SetViewport", device);
+    return;
+  }
   native::SetViewport(native::DeviceAt(device), x, y, width, height, min_z, max_z);
 }
 
@@ -226,8 +282,17 @@ void D3D_SetViewport_hook(u32 device, float x, float y, float width, float heigh
 void D3DDevice_SetScissorRect_hook(u32 device, mapped_u32 rect) {
   if (!rect)
     return;
+  static const bool vplog = REXCVAR_GET(katamari_diag_viewport_log_s) > 0;
+  const bool log = vplog && ViewportLogOn(!(u32(rect[0]) == 0 && u32(rect[1]) == 0 &&
+                                            ((u32(rect[2]) == 65535 && u32(rect[3]) == 65535) ||
+                                             (u32(rect[2]) == 1280 && u32(rect[3]) == 720))));
+  if (log) [[unlikely]]
+    RGPU_INFO("[vplog] SetScissorRect: {} {} {} {}", i32(u32(rect[0])), i32(u32(rect[1])), i32(u32(rect[2])),
+              i32(u32(rect[3])));
   native::SetScissorRect(native::DeviceAt(device), i32(u32(rect[0])), i32(u32(rect[1])),
                          i32(u32(rect[2])), i32(u32(rect[3])));
+  if (log) [[unlikely]]
+    ViewportLogAfter("SetScissorRect", device);
 }
 
 // void D3D::SetSurfaceClip(CDevice*, int, int, int, int) [0x821F2460]: the

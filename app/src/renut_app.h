@@ -276,6 +276,19 @@ public:
     }
 
     void OnShutdown() override {
+        // Port 269 (2026-11-24, the Peggle 2 session's finding): the app's own dialogs go first, while the SDK's
+        // ImGuiDrawer still exists. ReXApp::OnDestroy frees the drawer right after OnShutdown, and these members
+        // were destroyed only later, in the app's destructor: each ImGuiDialog destructor calls the freed drawer's
+        // RemoveDialog, and Peggle 1's normal quit (the game ending its title) faulted at 0x0 in
+        // ImGui::IsAnyMouseDown (~GameMenuDialog -> ~ImGuiDialog -> ImGuiDrawer::ClearInput). The game menu first, as
+        // Peggle's fix; the overlays the same way. OnDestroy runs this on the UI thread, where the overlay pump records
+        // them (app_integration.cpp); port 159's close path runs it on a worker while the UI thread waits for it.
+        game_menu_.reset();
+        profiler_dialog_.reset();
+        fps_dialog_.reset();
+#if !REX_PLATFORM_SWITCH
+        mnk_dialog_.reset();
+#endif
 #if BANJO_RENUT_RENDERER
         if (banjo::renut_gpu::Active()) renut::gpu::ShutdownRenderer();
 #endif

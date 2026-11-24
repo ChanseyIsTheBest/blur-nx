@@ -21,6 +21,7 @@ says otherwise. A new port's differ wherever they name the game: its manifest, i
 | Take the base's later ports into a port | [building.md](building.md) section 7 (`tools/ult_port_sync.py`), then each port's row in [ultimate-fixes.md](ultimate-fixes.md) |
 | Make the game's CPU side faster | [hand-and-machine-optimising-guide.md](hand-and-machine-optimising-guide.md) (sasrt-nx's, with the later tools), then [optimising-functions.md](optimising-functions.md) (the method in full) and [sasrt-batch-cc2.md](sasrt-batch-cc2.md) (register liveness, stack forwarding, the calling-convention traps) |
 | Take load off the render thread | [render-thread-turn-offs.md](render-thread-turn-offs.md): the keys a port turns off when its own console log shows a 0 over whole gameplay sessions, and the measurements a player's build turns off |
+| Make the game's files smaller on the SD card | [media-compression.md](media-compression.md): H.265 movies, Opus audio, LZ4 / ZXC packing, every format the ports met, the encoder settings, the traps |
 | Fix a crash the code generation caused | [codegen-crash-fixes.md](codegen-crash-fixes.md): the kinds of bug, and the scans that find more of each |
 | Port a game built with a later XDK | [xdk-notes.md](xdk-notes.md) |
 | See a whole port, step by step | [katamari-notes.md](katamari-notes.md) |
@@ -43,6 +44,7 @@ what in it still applies.
 | [xdk-notes.md](xdk-notes.md) | Reference | What ports at a later XDK met: hooks, the device layout |
 | [hand-and-machine-optimising-guide.md](hand-and-machine-optimising-guide.md) | Guide | sasrt-nx's guide (2026-11-11): measuring first, machine copies, hand natives, the order that paid off, a checklist for one function |
 | [optimising-functions.md](optimising-functions.md) | Guide | The hot-function method written for Katamari: the machine track, the hand track, console profiles, checking, measuring, PGO |
+| [media-compression.md](media-compression.md) | Guide | sasrt-nx's (2026-11-23), from twelve ports: the files the SDK reads in a game file's place (port 259), LZ4 against ZXC, H.265 movies (CRI SFD and USM, ASF with WMV3 or VC-1, Bink 1), Opus from raw PCM, XMA1 / XMA2, Wwise, XACT, Blur's `.baf` and CRI ADX, each port's results, the traps, what the base still lacks |
 | [sasrt-batch-cc2.md](sasrt-batch-cc2.md) | Record | sasrt-nx's handoff of port 121: whole-program register liveness for the machine copies, stack forwarding, the trap and calling-convention rules, its results |
 | [katamari-notes.md](katamari-notes.md) | Record | katamari-nx's notes, 2026-10-30 to 11-05: code generation, Renut at Katamari's addresses, the shaders, the hot functions, Ryujinx, every console test, 1.0.0 and 1.0.1 |
 | [codegen-crash-fixes.md](codegen-crash-fixes.md) | Record | Katamari's code-generation crashes (a function never found, a function table read as a jump table, a split function, a vcall thunk, a DLC level) and the scans after them |

@@ -22,7 +22,7 @@
 #include <rex/filesystem/lz4_blocks.h>  // rr6-nx (2026-11-10)
 #include <rex/filesystem/opus_pcm.h>    // rr6-nx (2026-11-21)
 #include <rex/filesystem/sfd_hevc.h>    // rr6-nx (2026-11-21)
-#include <rex/filesystem/xmo.h>         // culdcept-nx / sasrt-nx (2026-11-21); blur-nx 1.0.1
+#include <rex/filesystem/xmo.h>         // culdcept-nx / sasrt-nx (2026-11-21)
 #include <rex/logging.h>
 #include <rex/math.h>
 #include <rex/string/utf8.h>
@@ -40,15 +40,17 @@ std::atomic<uint64_t> g_swept_in_sd{0};
 std::atomic<uint64_t> g_inputs_in_tree{0};
 
 // rr6-nx (2026-11-21): which of several files answering for the same game name wins: a re-encoded one
-// (NAME.opcm, NAME.hevc, NAME.xmo, NAME.xmop, packed or not) first, then NAME itself, then NAME.lz4b. A newer install unzipped over an older one
-// leaves the older NAME.lz4b beside the new NAME.hevc; the new one must be what the game reads. Entry::GetChild
-// takes the first child whose name matches, so a directory's children are kept in this order.
+// (NAME.opcm, NAME.hevc, NAME.xmo, NAME.xmop, packed or not) first, then NAME itself, then NAME.lz4b. A newer
+// install unzipped over an older one leaves the older NAME.lz4b beside the new NAME.hevc; the new one must be what
+// the game reads. Entry::GetChild takes the first child whose name matches, so a directory's children are kept in
+// this order.
 int AnswerRank(const std::string& name) {
   std::string_view n = name;
   const bool packed = HasLz4BlocksSuffix(n);
   if (packed) n.remove_suffix(kLz4BlocksSuffix.size());
-  if (HasOpusPcmSuffix(n) || HasSfdHevcSuffix(n) || HasXmoSuffix(n) || HasXmopSuffix(n))
-    return 0;  // and NAME.hevc.lz4b (sfd_hevc.h, 2026-11-21), NAME.xmop.lz4b (xmo.h; sasrt-nx, blur-nx 1.0.1)
+  if (HasOpusPcmSuffix(n) || HasXmoSuffix(n) || HasXmopSuffix(n) || HasSfdHevcSuffix(n)) {
+    return 0;  // and NAME.hevc.lz4b, NAME.xmop.lz4b
+  }
   return packed ? 2 : 1;
 }
 }  // namespace
@@ -205,7 +207,7 @@ Entry* HostPathDevice::ResolvePath(const std::string_view path) {
       g_stats_in_sd.fetch_add(1, std::memory_order_relaxed);
       // rr6-nx (2026-11-21): in AnswerRank's order: NAME.opcm (rex/filesystem/opus_pcm.h, the music as Opus),
       // NAME.hevc (rex/filesystem/sfd_hevc.h, a movie as H.265), NAME.xmo / NAME.xmop (rex/filesystem/xmo.h, XMA as
-      // Opus; culdcept-nx / sasrt-nx, blur-nx 1.0.1), each also packed as .lz4b, NAME, then NAME.lz4b (2026-11-10,
+      // Opus; sasrt-nx), each of those two also packed as .lz4b, NAME, then NAME.lz4b (2026-11-10,
       // rex/filesystem/lz4_blocks.h, the game's file packed).
       auto found_path = exact_path;
       bool found = false;
@@ -245,13 +247,13 @@ Entry* HostPathDevice::ResolvePath(const std::string_view path) {
         if (rex::filesystem::HasLz4BlocksSuffix(name)) {  // rr6-nx: NAME.lz4b answers for NAME
           name.resize(name.size() - rex::filesystem::kLz4BlocksSuffix.size());
         }
-        if (rex::filesystem::HasOpusPcmSuffix(name)) {  // rr6-nx (2026-11-21): and NAME.opcm (and NAME.hevc[.lz4b])
+        if (rex::filesystem::HasOpusPcmSuffix(name)) {  // rr6-nx (2026-11-21): and NAME.opcm
           name.resize(name.size() - rex::filesystem::kOpusPcmSuffix.size());
-        } else if (rex::filesystem::HasXmoSuffix(name)) {  // culdcept-nx: and NAME.xmo (blur-nx 1.0.1)
+        } else if (rex::filesystem::HasXmoSuffix(name)) {  // culdcept-nx: and NAME.xmo
           name.resize(name.size() - rex::filesystem::kXmoSuffix.size());
-        } else if (rex::filesystem::HasXmopSuffix(name)) {  // sasrt-nx: and NAME.xmop[.lz4b] (blur-nx 1.0.1)
+        } else if (rex::filesystem::HasXmopSuffix(name)) {  // sasrt-nx: and NAME.xmop[.lz4b]
           name.resize(name.size() - rex::filesystem::kXmopSuffix.size());
-        } else if (rex::filesystem::HasSfdHevcSuffix(name)) {  // and NAME.hevc
+        } else if (rex::filesystem::HasSfdHevcSuffix(name)) {  // rr6-nx (2026-11-21): and NAME.hevc[.lz4b]
           name.resize(name.size() - rex::filesystem::kSfdHevcSuffix.size());
         }
         return rex::string::utf8_equal_case(name, part);

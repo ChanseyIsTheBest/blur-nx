@@ -99,6 +99,9 @@ struct XmoSound {
 };
 // Whether a NAME.xmo / NAME.xmop the game has opened has this sound id (a tag naming an unknown id is not one: XMA bits).
 bool XmoSoundKnown(uint32_t id);
+// Base port 259: whether any NAME.xmo / NAME.xmop has been registered (XmaContext::DecodeXmoFrame asks this first, so a
+// game without them pays one load a frame, not a walk of the packet's tag bits).
+bool AnyXmoSound();
 // The sound with this id, its Opus data read if it is not held (the game's read of the file's data reads it, on the
 // game's thread); null if unknown or unreadable.
 std::shared_ptr<const XmoSound> FindXmoSound(uint32_t id);

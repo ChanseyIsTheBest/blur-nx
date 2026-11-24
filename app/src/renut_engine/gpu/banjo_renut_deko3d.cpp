@@ -634,6 +634,7 @@ void InstallShaderCache() {
   options.asyncVariants = Deko3DAsyncVariantsOn();  // banjo-nx (2026-10-21)
   // The uam thread on the background compile core, below the game's threads (2026-10-18).
   options.compileCore = Deko3DCompileCore();
+  options.placeCompileThread = Deko3DCompileThreadPlacer();  // sasrt-nx (2026-11-22): sasrt_compile_threads_core -1
   options.compilePriority = Deko3DCompilePriority();
   options.backgroundCompileShare = Deko3DBackgroundCompileShare();  // 2026-10-23
   options.compileWaitBoost = Deko3DCompileWaitBoostOn();  // 2026-10-23

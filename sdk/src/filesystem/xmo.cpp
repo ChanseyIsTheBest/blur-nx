@@ -15,6 +15,7 @@
 #include <cstring>
 #include <list>
 #include <map>
+#include <atomic>
 #include <mutex>
 
 #include <rex/filesystem.h>
@@ -256,9 +257,11 @@ std::mutex g_mutex;
 std::map<uint32_t, Registered> g_sounds;
 std::list<uint32_t> g_loaded;  // read sounds, the most recently used first
 size_t g_loaded_bytes = 0;
+std::atomic<bool> g_any_sound{false};  // base port 259: AnyXmoSound
 
 void Register(const std::filesystem::path& path, const Header& h) {
   std::lock_guard lock(g_mutex);
+  g_any_sound.store(true, std::memory_order_relaxed);
   auto [it, inserted] = g_sounds.try_emplace(h.id);
   if (!inserted && it->second.path != path) {
     REXFS_WARN("[xmo] sound id {:08X} is in both {} and {}: the second is used", h.id,
@@ -272,6 +275,7 @@ void Register(const std::filesystem::path& path, const Header& h) {
 
 void RegisterPack(const std::filesystem::path& path, const std::vector<PackSound>& sounds) {
   std::lock_guard lock(g_mutex);
+  if (!sounds.empty()) g_any_sound.store(true, std::memory_order_relaxed);
   for (const PackSound& s : sounds) {
     auto [it, inserted] = g_sounds.try_emplace(s.id);
     if (!inserted && it->second.path != path) {
@@ -618,6 +622,8 @@ std::unique_ptr<FileHandle> OpenXmop(std::unique_ptr<FileHandle> packed) {
              sounds.size(), double(h.size) / 1048576.0);
   return std::make_unique<XmopHandle>(std::move(packed), h, std::move(segments), std::move(sounds));
 }
+
+bool AnyXmoSound() { return g_any_sound.load(std::memory_order_relaxed); }
 
 bool XmoSoundKnown(uint32_t id) {
   std::lock_guard lock(g_mutex);

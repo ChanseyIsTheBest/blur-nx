@@ -50,7 +50,7 @@
 #include <thread>
 #include <vector>
 
-#if BLUR_NXVIDEO
+#if RENUT_NXVIDEO
 #include <switch.h>
 #include "nxvideo.h"
 #endif
@@ -131,7 +131,7 @@ bool BinkPlanes(uint8_t* base, uint32_t fb, Planes* p) {
          p->c_pitch >= p->w / 2 && cb_pitch == p->c_pitch;
 }
 
-#if BLUR_NXVIDEO
+#if RENUT_NXVIDEO
 // rr6-nx's read-ahead (2026-11-21, its console's second test): the frames a movie will ask for next are read by a
 // thread of their own, kAhead of them ahead of the decoder.
 constexpr int64_t kAhead = 45;  // 1.5 s at 30 frames a second
@@ -394,7 +394,7 @@ REX_HOOK_RAW(sub_82AFF648) {
                   id, index, fb);
     return;
   }
-#if BLUR_NXVIDEO
+#if RENUT_NXVIDEO
   std::lock_guard<std::mutex> lock(g_mutex);
   auto it = g_decoders.find(id);
   if (it == g_decoders.end()) {

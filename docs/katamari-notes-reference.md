@@ -883,3 +883,34 @@ now always comes from the floor.
 
 **PGO.** `pgo/` is still 1.0.0's profile. New functions are at the end of their files, and the SDK's core has no profile. A
 function changed since then keeps none (`-Wno-coverage-mismatch`).
+
+## 1.0.2, the PGO-instrumented build (2026-11-24)
+
+The user: "could you make nro 1.0.2 id like an instrumented nro now for collecting pgo data for final pgo+lto build",
+"Make sure 4xmsaa is on by default".
+- NRO version 1.0.2 (`app/CMakeLists.txt`). In it: the H.265 / Opus / LZ4-ZXC media, the installer's VFS index, the DLC
+  read in place, and the collection screen's tile fix (`banjo_renut_tile_screen_viewports`, render/draw.cpp
+  ComputeViewportSlow). Columns 2 and 4 now draw their objects; the user checked it on the console.
+- 4x MSAA by default: `msaa_level = 4` in `app/katamari_switch.toml` (the player's file) and in
+  `app/katamari_switch_defaults.toml` (built in); the game menu's reset gives 4x when `KATAMARI_BUILTIN_CONFIG` is set.
+  The base's cvar stays 1 (port 118). A `katamari.toml` an older NRO wrote keeps its own value.
+- Instrumented build: `app/out/switch-pgo-gen`, `-DBANJO_PGO=generate -DBANJO_SWITCH_LTO=ON
+  -DBANJO_RENUT_RELEASE_SHADERS=ON`, in place, no guard forms. It reads `deko3d_glsl.bin` beside itself, as the final
+  build does. The streams name `pgo-inplace/`. Merge: `python tools/pgo_merge.py <folder> pgo-inplace --gen-build
+  app/out/switch-pgo-gen/renut.nro`. Final: `tools/build_switch_release.bat` (`app/out/switch-pgo-use`).
+- Built from an uncommitted tree: the final build must use the same sources, or the changed functions keep no profile.
+
+## 1.0.2, the final build (2026-11-24)
+
+The user: "move the final build please and put it on my sd card and make it public on github as well as the installer",
+"Katamari's own repos".
+- **Training:** one console session of the instrumented NRO (`pgo/banjo_pgo_1.stream`, 6.6 MB, fetched by ftp).
+  `tools/pgo_merge.py out/pgo102_streams pgo-inplace --gen-build app/out/switch-pgo-gen/renut.nro`: 540 `.gcda`, largest
+  arc count 648,186,976, in `pgo-inplace/`.
+- **Final:** `tools/build_switch_release.bat` (`app/out/switch-pgo-use`: PGO use, LTO, in place, release shaders). No
+  profile mismatch in the log. NRO 67,387,684 bytes, SHA-256 b63136725dfadd3f8637700e5be02b4927f2043d3fca6199283a12ac64fee89b
+  (copied to `out/final_2026-11-24/katamari-nx.nro`).
+- **The console:** on the user's card as `katamari-nx.nro` (the instrumented NRO kept beside it). From the Home screen:
+  the logos, then the H.265 opening movie at 22-36 s.
+- **Shader records** for the installer: `tools/katamari_shader_files.py` again (`out/katamari_shader_files_102.json`):
+  195 shaders, 111 in `default.xex`, 84 in 57 records of the game's files (6.4 MB to read).

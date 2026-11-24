@@ -64,6 +64,56 @@ blur-nx's console +4.6 % fps (21.13 -> 22.10, ABBA), CPU 155 -> 147 ms a frame. 
 matters (a division or normalisation of the value, a guard against zero, a replay's simulation) builds its Switch
 folder with `-DBLUR_FPCR_ONE_MODE=OFF`. A compile-time switch: a PGO profile is trained with the setting it ships with.
 
+### 2a. How to check them on a game
+
+One PC run counts what most of these forms would change in a game. The counters are in the PC build only
+(`REX_DIET_CENSUS_ON`; the Switch build compiles them out, so neither the console nor Ryujinx can count). The PC build
+keeps CG-13 off, so the float mode still switches there and each switch can be checked.
+
+1. Build the PC folder as usual (`tools\build_pc.bat`). `tools/cg13_census.ps1` refuses a folder configured with
+   `BLUR_FPCR_ONE_MODE=ON`.
+2. Play gameplay with the census on, not only menus. In Ridge Racer 6 every denormal came in the race. Either
+   `powershell -File tools\cg13_census.ps1 -Seconds 420 -Script "<the game's input script>"` (or `-Visible` to play it
+   by hand), or the game's own scripted run with `--banjo_diag_runtime_census=true` added, then
+   `tools\cg13_census.ps1 -Log out\pc_runs\<run>\<run>.log` for the verdict.
+3. Read the log's `[census]` lines (each 10 s; the near-exact ones are cumulative, so the last one counts the run):
+   - **CG-13** (`[census] CG-13 (one flush mode)`): the verdict and, when a window met a denormal, the sites by
+     function and line (`tools/census_sites.py --denormal`). `banjo::FormsSelfCheck`'s sites are its own deliberate
+     ones at start-up. For each game site, look at what is done with the small value. A value that only decays, or goes
+     on into VMX code (the 360's VMX flushes it anyway), is harmless. A division, a normalisation, a comparison with
+     zero or a replay's simulation is not. If one matters, build the Switch folder with `-DBLUR_FPCR_ONE_MODE=OFF` and
+     train its PGO profile again.
+   - **Blur's near-exact switches** (`[census] near-exact (cumulative)`): #1 signalling NaNs at float copy stores, #2
+     NaNs into float-to-integer conversions, #17 divisions by zero and INT_MIN / -1, #41 float compares with a NaN, #42
+     vector max/min lanes that would differ, #5 compares copying XER[SO] = 1. 0 for an item means `BLUR_NEAR_EXACT`
+     (or `BLUR_NX_ONLY` for #2 and #42) would change nothing the run played.
+   - **fp_sign_ops' condition** (`[census] FPSCR rounding mode written by the guest`): `tools/fp_sign_ops.py`
+     (`BANJO_GEN_FP_SIGN_OPS`, ON) is exact only while "up or down" stays 0. A negation the compiler folds into the
+     arithmetic next to it is exact in round-to-nearest and toward-zero, not in round-up or round-down. If the count is
+     above 0, find what runs while that mode is set, or build with `-DBANJO_GEN_FP_SIGN_OPS=OFF` (the integer forms
+     back, `REX_FP_SIGN_INTEGER`; no new code generation needed).
+   - `[census] near-exact #32`: the words guest compare-and-swaps wrote, and how many were written by one thread only.
+
+Not counted by anything yet:
+- **Port 72's VMX estimates and fused multiply-add** (`SASRT_VMX_FAST_ESTIMATES`, `SASRT_VMX_FUSED_MADD`): AArch64
+  only, and the PC computes the exact forms, so no PC run sees a difference. What is known: sasrt-nx's console fuzz
+  (64 M lanes each) put vrsqrtefp within 3 ulp and vrefp within 1 ulp of exact, and the fused forms differ in 2.4 %
+  of lanes (one rounding, as the 360's own vmaddfp; the 360's own estimates are good to about 1/4096). A game's
+  exposure can be counted statically: each generated statement carries its guest instruction as a comment (`// vrefp`,
+  `// vrsqrtefp`, `// vlogefp`, `// vexptefp`, `// vmaddfp`, `// vnmsubfp`, and their 128 forms) in
+  `app/generated/*.cpp`.
+- **#232 (`BLUR_LOCALIZE_ABI_TRUST`), the stack-frame elisions, `SASRT_HOT_LR_ELIDE`, -fno-trapping-math and early
+  register allocation:** no census. For the machine copies' forms a guard run compares them with the generated
+  functions (`SASRT_HOT_GUARD_FORMS`, docs/building.md).
+
+Ridge Racer 6 (rr6-nx, 2026-11-22; Lakeshore Drive, about 170 s of race): CG-13 0 denormals in the menus. In the race at
+most 2,765 of about 320,000 FPU-mode regions a second (0.85 %), 0 any-mode cold paths. 92 % of them were tiny rotation
+angles going into a sin / cos rotation builder whose matrices are multiplied in VMX code, so CG-13 stays on. Every
+near-exact item 0 (#42: 0 of 18,460). Rounding up or down written 25 times during the menus and the race load (none in
+the race), through the C runtime's float control from math-library code: fp_sign_ops' condition is not met, and what
+runs in those windows has not been traced yet (at most an ulp, in a few library calls). Its code has the VMX estimates
+and fused multiply-adds in 82 functions.
+
 ## 3. Speed-ups the console measured
 
 All exact. Off because they did not pay on the console, not because they break anything. A game whose frames are
@@ -119,6 +169,7 @@ different may measure them again.
 | `banjo_deko3d_eager_kicks`, `banjo_deko3d_latency_trim` | Input-latency A/Bs: the frame sent to the GPU in more, earlier parts; the render thread waits for the GPU to trim its queue. | Latency trials, per game. | Lower input latency is the aim; frame time may rise |
 | `banjo_deko3d_skin_once`, `banjo_deko3d_light_branch`, `banjo_deko3d_gpr32` | GPU A/Bs of Banjo's fur and lit shaders: skinning once a frame, per-light branches, a 32-register cap. | The same pixels; whether faster is the console's to say (their configs/*_on.toml). Light branch and gpr32 act only on the pixel shaders Banjo's lists name (tools/lightbranch_shaders.txt, tools/gpr32_shaders.txt): in another game they change no shader, so they are no A/B targets there (vivapinata-nx, 2026-11-12: its in-run A/B halves of them ran at 2 fps, every pipeline looked up again as the variant key changed). | Not measured on the console |
 | `banjo_gpu_zcull_greater` | Asks the driver for ZCULL in the GREATER direction (reversed depth). | A console trial; the picture should be the same. It acts only on the Mesa/NVK path (setenv NVK_ZCULL for banjo-nx's patched NVK); on deko3d it does nothing, and nothing is needed there: dkCmdBufClearDepthStencil writes SET_ZCULL_DIR_FORMAT itself (method 0x36F), GREATER when the depth clear value is under 0.5 and LESS otherwise, so a reversed-depth game that clears depth to 0 already culls in its direction (vivapinata-nx, from libdeko3d.a's disassembly, 2026-11-12). | Not measured |
+| `sasrt_dynamic_docked_start_top` (port 272) | A game started docked begins dynamic resolution at the docked range's top, not 720, so the climb does not leave the GPU region's free space in pieces. | On in sasrt-nx 1.0.1, where it does nothing (its docked range ends at 720); its one docked test (start at 1080) dropped to 720/756 and flip-flopped. For a game whose docked range tops out above 720. | A memory layout change, not a speed-up |
 
 ## 5. tw2de_nx's fixes and accuracy options, off at the user's word
 

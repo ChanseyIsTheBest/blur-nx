@@ -417,6 +417,7 @@ struct XmaContext::XmoState {
 };
 
 int XmaContext::DecodeXmoFrame(const uint8_t* packet, uint32_t frame_offset, bool stereo) {
+  if (!rex::filesystem::AnyXmoSound()) return -1;  // base port 259: no .xmo / .xmop opened
   uint32_t id = 0, packet_index = 0;
   if (!rex::filesystem::ReadXmoPacketTag(packet, &id, &packet_index) || !rex::filesystem::XmoSoundKnown(id)) {
     return -1;

@@ -100,6 +100,17 @@ REXCVAR_DEFINE_INT32(banjo_renut_diag_draw_log_until_s, 0, "Banjo/Renut",
                      "up to this second (0 = the two frames only); clears are logged with the draws");
 REXCVAR_DEFINE_INT32(banjo_renut_diag_draw_log_every, 6, "Banjo/Renut",
                      "Diagnostic: the draw log's window takes one frame in this many");
+// katamari-nx (2026-11-24): ComputeViewportSlow's tile rule (the collection screen's columns 2 and 4).
+REXCVAR_DEFINE_BOOL(banjo_renut_tile_screen_viewports, true, "Banjo/Renut",
+                    "Renut's renderer, predicated tiling: a draw predicated to one tile whose viewport overlaps that "
+                    "tile's screen rect keeps its screen coordinates (as the GPU's per-tile window offset does); off, "
+                    "every one-tile draw smaller than the target is moved by its tile's corner (N&B's per-tile command "
+                    "buffers), which put Katamari's collection objects of columns 2 and 4 off their cells");
+// katamari-nx (2026-11-24, the collection screen's columns 2 and 4): the tiles set and the draws taken as one tile's.
+REXCVAR_DEFINE_INT32(katamari_diag_tiles, 0, "Katamari/Debug",
+                     "Diagnostic: log this many tile sets (BeginTiling's rects) and draws PredicatedTile takes as one "
+                     "tile's ([tilelog]; 0 = off)");
+
 REXCVAR_DEFINE_STRING(banjo_renut_diag_blend_skip_exclude, "", "Banjo/Renut",
                       "Diagnostic: pixel shader hashes (hex, comma separated) banjo_gpu_blend_skip leaves alone");
 
@@ -1189,6 +1200,19 @@ struct HeldExport {
   bool overwritten = false;
 };
 std::map<u32, HeldExport> g_held_exports;
+// sasrt-nx (2026-11-20, sasrt_rt2_held_export_bitmap): the 64 KB granules of the 512 MB physical space a kept export's
+// bytes may lie in (a superset: set at every hold, made again from the map when the frame's start drops some).
+uint64_t g_held_granules[8192 / 64] = {};
+inline void HeldGranulesMark(u32 base, u32 size) {
+  const u32 first = (base & 0x1FFFFFFFu) >> 16;
+  const u32 last = std::min<u32>(((base & 0x1FFFFFFFu) + size - 1u) >> 16, 8191u);
+  for (u32 g = first; g <= last; ++g)
+    g_held_granules[g >> 6] |= 1ull << (g & 63u);
+}
+[[gnu::always_inline]] inline bool HeldGranuleMayHold(u32 phys) {
+  const u32 g = (phys & 0x1FFFFFFFu) >> 16;
+  return (g_held_granules[g >> 6] >> (g & 63u)) & 1u;
+}
 std::vector<std::shared_ptr<std::vector<u8>>> g_held_retired;
 // sasrt-nx (2026-11-12, batch C/D, item D2; port 93): retired buffers nothing points into any more (the flush), for the
 // next holds.
@@ -1210,6 +1234,7 @@ void HoldExport(u32 base, const u8 *data, u32 size, uint64_t frame) {
     it = g_held_exports.erase(it);
   }
   HeldExport &h = g_held_exports[base];
+  HeldGranulesMark(base, size);  // sasrt-nx (2026-11-20, sasrt_rt2_held_export_bitmap)
   if (!g_held_pool.empty()) {  // sasrt-nx (2026-11-12, batch C/D, item D2; port 93): a pooled buffer, the same bytes
     h.data = std::move(g_held_pool.back());
     g_held_pool.pop_back();
@@ -1788,6 +1813,31 @@ bool PagesClean(const u8 *data, size_t bytes, uint64_t proven) {
         if (vmaxvq_u32(newer) != 0)
           clean = false;
         page += 7;  // the loop's ++page makes 8
+        continue;
+      }
+    }
+    // sasrt-nx (2026-11-20, sasrt_rt2_pages_tail; the second render-thread round): a range's last 1-7 pages (most vertex
+    // ranges are that short) in one block the same way, the lanes past the range masked: their cards read as written-
+    // never and their serials as old. Loads stay inside the card table and g_page_serial (page + 8 <= 0x20000).
+    if (!diag && page != 0 && last - page < 7 && page + 8 <= 0x20000u && (page + 8 <= 0x1000u || page >= 0x1000u) &&
+        sasrt::gpu_round::On(sasrt::gpu_round::kRt2PagesTail)) {
+      static const uint8_t kLanes8[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+      static const uint32_t kLanes32[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+      const u32 n = last - page + 1;
+      const uint8x8_t outside = vcge_u8(vld1_u8(kLanes8), vdup_n_u8(u8(n)));
+      const uint8x8_t ca = vld1_u8(cards + 0xA0000u + page), cc = vld1_u8(cards + 0xC0000u + page);
+      const uint8x8_t ce = vld1_u8(cards + 0xE0000u + page - 1);
+      const uint8x8_t cf = page < 0x1000u ? vld1_u8(cards + 0x7F000u + page) : ca;
+      if (vminv_u8(vorr_u8(vmin_u8(vmin_u8(ca, cc), vmin_u8(ce, cf)), outside)) != 0) {
+        const uint32x4_t nn = vdupq_n_u32(n), p = vdupq_n_u32(u32(proven));
+        const u32 *serials = g_page_serial + page;
+        const uint32x4_t newer =
+            vorrq_u32(vandq_u32(vcgeq_u32(vld1q_u32(serials), p), vcltq_u32(vld1q_u32(kLanes32), nn)),
+                      vandq_u32(vcgeq_u32(vld1q_u32(serials + 4), p), vcltq_u32(vld1q_u32(kLanes32 + 4), nn)));
+        if (vmaxvq_u32(newer) != 0)
+          clean = false;
+        sasrt::gpu_round::Count(sasrt::gpu_round::kRt2PagesTail);
+        page += n - 1;  // the loop's ++page makes n
         continue;
       }
     }
@@ -2915,6 +2965,16 @@ bool PredicatedTile(const GuestDevice &device, ClearRect &rect) {
   if (tile < 0)
     return false;
   rect = g_tiles[tile];
+  static int32_t left = REXCVAR_GET(katamari_diag_tiles) * 8;
+  if (left > 0 && float(device.dev().m_ValuesPacket.VportXScale) < 100.0f) [[unlikely]] {  // small viewports only
+    --left;
+    const d3d::ValuesPacket &v = device.dev().m_ValuesPacket;
+    RGPU_INFO("[tilelog] one-tile draw: device predication {:08X} replay {:08X} -> tile {} of {} ({},{} - {},{}); vport "
+              "x {} + {} y {} + {}",
+              device.U32(d3d::kDeviceOffsetPredication), g_replay_predication, tile, g_tiles.size(), rect.x1, rect.y1,
+              rect.x2, rect.y2, float(v.VportXScale), float(v.VportXOffset), float(v.VportYScale),
+              float(v.VportYOffset));
+  }
   return true;
 }
 
@@ -3028,7 +3088,25 @@ ViewportState ComputeViewportSlow(const GuestDevice &device, const Targets &t) {
   const bool screen_wide = one_tile && (vte & 0x0F) == 0x0F && t.guest_width && t.guest_height &&
                            (2.0f * xs > float(t.guest_width) + 0.5f ||
                             -2.0f * ys > float(t.guest_height) + 0.5f);
-  const bool tile_local = one_tile && !screen_wide;
+  // katamari-nx (2026-11-24, the collection screen: the objects of columns 2 and 4 missing, before CG-13 too;
+  // banjo_renut_tile_screen_viewports): the GPU replays a tiled frame once per tile with the window offset at minus the
+  // tile's corner, so a draw's viewport is in screen coordinates whichever tiles it is predicated to. Katamari draws each
+  // collection object with its own 100x100 viewport (sub_824DE730) while tiling in four 320-wide strips; D3D predicates
+  // the ones inside one strip (columns 2 and 4) to that strip, and the tile-local rule below added the strip's corner
+  // again: column 2 at x 754 instead of 434 and column 4 at 1384 instead of 744, their scissors cut to nothing by the
+  // strip (columns 1, 3 and 5 cross a strip's edge: predicated to two tiles, drawn). A viewport that overlaps its tile's
+  // own rect is in screen coordinates; one in the tile's coordinates (N&B's per-tile command buffers, 0 to the tile's
+  // size) cannot overlap the rect of a tile away from the origin (whose corner is at least the tile's size), and at the
+  // origin the two are the same.
+  static const bool screen_viewports = REXCVAR_GET(banjo_renut_tile_screen_viewports);
+  bool screen_coords = false;
+  if (one_tile && !screen_wide && screen_viewports && (tile_rect.x1 || tile_rect.y1) && (vte & 0x0F) == 0x0F) {
+    const float vx1 = xo - std::fabs(xs), vx2 = xo + std::fabs(xs);
+    const float vy1 = yo - std::fabs(ys), vy2 = yo + std::fabs(ys);
+    screen_coords = vx1 < float(tile_rect.x2) && vx2 > float(tile_rect.x1) && vy1 < float(tile_rect.y2) &&
+                    vy2 > float(tile_rect.y1);
+  }
+  const bool tile_local = one_tile && !screen_wide && !screen_coords;
   int32_t tx = 0, ty = 0;
   if (tile_local) {
     tx = tile_rect.x1;
@@ -3689,6 +3767,33 @@ inline bool StageSwapOn() {
     if (diff)
       push |= uint64_t(1) << bit;
   }
+  // sasrt-nx (2026-11-20, sasrt_rt4_push_runs_merged; the third table's #26): two runs of groups to push that one or two
+  // groups separate are pushed as one: the groups between them go too, with the device's current bytes (the loop below
+  // copies all four registers of a group and makes them valid, as for any group it pushes), so one dkCmdBufPushConstants
+  // call instead of two. Never across a group holding a literal register (this shader's or the buffer's): the device's
+  // bytes would overwrite the literal.
+  if (push && sasrt::gpu_round::On(sasrt::gpu_round::kRt4PushRunsMerged)) {
+    uint64_t gaps = 0;
+    for (uint64_t rest = push; rest;) {
+      const u32 first = u32(std::countl_zero(rest));          // the lowest group left (group g is bit 63 - g)
+      const u32 end = first + u32(std::countl_one(rest << first));  // the group after its run
+      rest = end >= 64 ? 0 : rest & (~uint64_t(0) >> end);    // the groups from 'end' on
+      if (!rest)
+        break;
+      const u32 next = u32(std::countl_zero(rest));
+      if (next - end > 2)
+        continue;
+      bool free = true;
+      for (u32 g = end; g < next && free; ++g)
+        free = !(((own_literals ? own_literals[g / 8] : 0u) | last.literal_regs[g / 8]) >> (g % 8 * 4) & 0xFu);
+      for (u32 g = end; free && g < next; ++g)
+        gaps |= uint64_t(1) << (63 - g);
+    }
+    if (gaps) {
+      push |= gaps;
+      sasrt::gpu_round::Count(sasrt::gpu_round::kRt4PushRunsMerged, uint64_t(std::popcount(gaps)));
+    }
+  }
   // The updates, a run of consecutive groups at a time.
   uint64_t pushed_bytes = 0;
   bool overwrote_literal = false;
@@ -4226,7 +4331,20 @@ TextureSlotMemo g_texture_slot_memo[kTextureMemoEntries];
 
 inline TextureSlotMemo &TextureMemoSlot(u32 texture_va, const TextureFetch &fetch) {
   static_assert(kTextureMemoEntries == 1u << 12);
-  return g_texture_slot_memo[((texture_va ^ (fetch.dword[0] * 0x85EBCA6Bu) ^ fetch.dword[1]) * 0x9E3779B1u) >> 20];
+  const u32 h = (texture_va ^ (fetch.dword[0] * 0x85EBCA6Bu) ^ fetch.dword[1]) * 0x9E3779B1u;
+  // sasrt-nx (2026-11-20, sasrt_rt2_texture_memo_two_way; the second render-thread round's #2): 2,048 sets of two (the
+  // same 4,096 entries): the entry of this texture and fetch words when either way holds it, else the way bound in an
+  // earlier frame (Sonic Transformed's four-player race missed ~1,950 a second by "another entry", each a whole
+  // BindTextureLocked). Every use checks the entry's words as before, so an entry stored under the other mapping (the
+  // A/B's other half) is only a miss.
+  if (sasrt::gpu_round::On(sasrt::gpu_round::kRt2TextureMemoTwoWay)) {
+    TextureSlotMemo *const set = &g_texture_slot_memo[(h >> 21) << 1];
+    for (u32 w = 0; w < 2; ++w)
+      if (set[w].va == texture_va && SameBytes<24>(set[w].device, fetch.dword))
+        return set[w];
+    return set[0].frame <= set[1].frame ? set[0] : set[1];
+  }
+  return g_texture_slot_memo[h >> 20];
 }
 
 // banjo-nx (2026-10-20, from sa2-nx, banjo_renut_chain_reuse): 'slot_fx' (32 entries, or null) receives each bound slot's effects (its
@@ -5831,7 +5949,9 @@ StreamSource GetStreamSource(const GuestDevice &device, const DrawCall &call,
     }
   }
   // sasrt-nx (2026-10-21, sasrt_renut_exports_held): inside a written-back export: its results as the GPU made them.
-  if (gpu_address && !g_held_exports.empty() && banjo::renut_gpu::ExportsHeldOn()) {
+  // sasrt-nx (2026-11-20, sasrt_rt2_held_export_bitmap): only where a kept export may lie (a std::map walk a stream).
+  if (gpu_address && !g_held_exports.empty() && banjo::renut_gpu::ExportsHeldOn() &&
+      (HeldGranuleMayHold(gpu_address) || !sasrt::gpu_round::On(sasrt::gpu_round::kRt2HeldExportBitmap))) {
     const u32 phys = gpu_address & 0x1FFFFFFFu;
     auto it = g_held_exports.upper_bound(phys);
     if (it != g_held_exports.begin()) {
@@ -6721,7 +6841,10 @@ struct WholeRepeat {
   CachedIndices *ci = nullptr;
   CachedStream *copies[kMaxVertexStreams] = {};
 };
-WholeRepeat g_whole_repeat;
+// sasrt-nx (2026-11-20, sasrt_rt2_repeat_ring; the second render-thread round's #41): the last four answers, not one
+// (draws that take turns between a few meshes of one kick: a kart's body and wheels, a view's props); [0] alone off.
+WholeRepeat g_whole_repeats[4];
+u32 g_whole_repeat_next = 0;
 [[gnu::always_inline]] inline void WholeRepeatWords(const GuestDevice &device, u32 stream, u32 w[4]) {
   const u32 fetch_index = d3d::kFirstVertexFetchIndex + d3d::StreamFetchIndex(stream);
   w[0] = device.VertexFetchWord(fetch_index, 0);
@@ -6732,11 +6855,20 @@ WholeRepeat g_whole_repeat;
 bool WholeRepeatHit(const GuestDevice &device, const DrawCall &call, const ShaderRecord &vs, const u32 *strides,
                     const HostVertexLayout &layout, uint64_t layout_hash, int64_t base, Geometry &g,
                     CachedStream *copies[kMaxVertexStreams]) {
-  const WholeRepeat &r = g_whole_repeat;
-  if (!r.valid || r.vs != &vs || r.strides != strides || r.layout != &layout || r.layout_hash != layout_hash ||
-      r.flush != g_flush_serial || r.frame != g_stream_cache_frame || r.mesh_gen != g_mesh_gen ||
-      r.indexed != call.indexed || uint64_t(base) >= r.min_vertices)
+  const bool ring = sasrt::gpu_round::On(sasrt::gpu_round::kRt2RepeatRing);
+  const WholeRepeat *found = nullptr;
+  for (u32 i = 0; i < (ring ? 4u : 1u); ++i) {
+    const WholeRepeat &c = g_whole_repeats[i];
+    if (c.valid && c.vs == &vs && c.strides == strides && c.layout == &layout && c.layout_hash == layout_hash &&
+        c.flush == g_flush_serial && c.frame == g_stream_cache_frame && c.mesh_gen == g_mesh_gen &&
+        c.indexed == call.indexed && uint64_t(base) < c.min_vertices) {
+      found = &c;
+      break;
+    }
+  }
+  if (!found)
     return false;
+  const WholeRepeat &r = *found;
   for (u32 left = r.used; left; left &= left - 1) {
     const u32 s = u32(std::countr_zero(left));
     u32 w[4];
@@ -6993,7 +7125,8 @@ bool WholeGeometryTry(const GuestDevice &device, const DrawCall &call, const Sha
     MeshObjectKeep(call, probe, layout, layout_hash, vs, shader_strides, u32(base), keys, copies, ci, index_key);
   // blur-nx (2026-11-18, #4): this answer for the next draws of the kick (WholeRepeat).
   if (repeat_on) {
-    WholeRepeat &r = g_whole_repeat;
+    const bool ring = sasrt::gpu_round::On(sasrt::gpu_round::kRt2RepeatRing);  // sasrt-nx (2026-11-20)
+    WholeRepeat &r = g_whole_repeats[ring ? (g_whole_repeat_next++ & 3u) : 0u];
     r.valid = true;
     r.vs = &vs;
     r.strides = shader_strides;
@@ -9941,8 +10074,35 @@ static bool GuestBytesReadable(const u8 *p, size_t len) {
   }
   if (!heap || address + len - 1 > 0xFFFFFFFFull)
     return false;
-  return uint32_t(heap->QueryRangeAccess(uint32_t(address), uint32_t(address + len - 1))) &
-         uint32_t(rex::memory::PageAccess::kReadOnly);
+  // sasrt-nx (2026-11-20, sasrt_rt2_readable_memo; the second render-thread round's #29): ranges found readable, 64 of
+  // them by their first 64 KB, kept while no page anywhere has lost read access since (g_page_access_generation: each
+  // query takes the heap's recursive mutex, which the game's allocations hold too, and walks the page table). Two
+  // readable ranges that touch are one.
+  struct ReadableMemo {
+    const rex::memory::BaseHeap *heap = nullptr;
+    uint32_t lo = 0, hi = 0;
+    uint64_t generation = 0;
+  };
+  static ReadableMemo memo[64];
+  const uint32_t lo = uint32_t(address), hi = uint32_t(address + len - 1);
+  const bool memo_on = sasrt::gpu_round::On(sasrt::gpu_round::kRt2ReadableMemo);
+  const uint64_t generation = rex::memory::g_page_access_generation.load(std::memory_order_acquire);
+  ReadableMemo &m = memo[(lo >> 16) & 63u];
+  if (memo_on && m.heap == heap && m.generation == generation && m.lo <= lo && hi <= m.hi) {
+    sasrt::gpu_round::Count(sasrt::gpu_round::kRt2ReadableMemo);
+    return true;
+  }
+  const bool readable = uint32_t(heap->QueryRangeAccess(lo, hi)) & uint32_t(rex::memory::PageAccess::kReadOnly);
+  if (memo_on && readable) {
+    sasrt::gpu_round::Count(sasrt::gpu_round::kRt2ReadableMemo, 1, 1);  // queried (the 10 s line's /n)
+    if (m.heap == heap && m.generation == generation && lo <= uint64_t(m.hi) + 1 && uint64_t(hi) + 1 >= m.lo) {
+      m.lo = std::min(m.lo, lo);
+      m.hi = std::max(m.hi, hi);
+    } else {
+      m = {heap, lo, hi, generation};
+    }
+  }
+  return readable;
 #endif
 }
 
@@ -10049,6 +10209,14 @@ void SasrtWarnStencilOnD32f(const HostSurface *d, bool clear = false, bool first
 }
 
 void SetTilesLocked(const ClearRect *rects, u32 count) {
+  static int32_t left = REXCVAR_GET(katamari_diag_tiles);
+  if (left > 0 && count) [[unlikely]] {
+    --left;
+    std::string line;
+    for (u32 i = 0; i < count && rects; ++i)
+      line += fmt::format(" ({},{} - {},{})", rects[i].x1, rects[i].y1, rects[i].x2, rects[i].y2);
+    RGPU_INFO("[tilelog] tiles {}:{}", count, line);
+  }
   g_tiles.assign(rects, rects + (rects ? count : 0));
 }
 
@@ -10671,12 +10839,35 @@ uint64_t RenderStateIdLocked(const u32 rs[20], const Targets &t) {
   sig[5] = t.depth ? u32(t.depth->format) : u32(plume::RenderFormat::UNKNOWN);
   const HostSurface *first = t.color_count ? t.colors[0] : t.depth;
   sig[6] = first ? u32(first->samples) : 0u;
-  uint64_t h = 0x9E3779B97F4A7C15ull;
-  for (u32 i = 0; i < 20; ++i)
-    h = (h ^ rs[i]) * 0xFF51AFD7ED558CCDull;
-  for (u32 i = 0; i < 7; ++i)
-    h = (h ^ sig[i]) * 0xC4CEB9FE1A85EC53ull;
-  RenderStateIdEntry &e = g_rs_ids[u32(h >> 56)];
+  u32 slot;
+#if defined(__aarch64__) && defined(__ARM_FEATURE_CRC32)
+  // sasrt-nx (2026-11-20, sasrt_rt4_state_id_crc; the third table's #25, the first's #42): the table's index from a
+  // CRC32C of the words, 8 bytes an instruction (14, 3 cycles each on the A57), not 27 dependent multiplies; a hit
+  // compares the words either way, so only the slots the states land in change.
+  if (sasrt::gpu_round::On(sasrt::gpu_round::kRt4StateIdCrc)) {
+    uint32_t c = 0xFFFFFFFFu;
+    for (u32 i = 0; i < 20; i += 2) {
+      uint64_t w;
+      std::memcpy(&w, rs + i, 8);
+      c = __builtin_aarch64_crc32cx(c, w);
+    }
+    for (u32 i = 0; i < 8; i += 2) {
+      uint64_t w;
+      std::memcpy(&w, sig + i, 8);
+      c = __builtin_aarch64_crc32cx(c, w);
+    }
+    slot = (c ^ (c >> 8) ^ (c >> 16) ^ (c >> 24)) & 0xFFu;
+  } else
+#endif
+  {
+    uint64_t h = 0x9E3779B97F4A7C15ull;
+    for (u32 i = 0; i < 20; ++i)
+      h = (h ^ rs[i]) * 0xFF51AFD7ED558CCDull;
+    for (u32 i = 0; i < 7; ++i)
+      h = (h ^ sig[i]) * 0xC4CEB9FE1A85EC53ull;
+    slot = u32(h >> 56);
+  }
+  RenderStateIdEntry &e = g_rs_ids[slot];
   if (e.id && SameBytes<sizeof(e.rs)>(e.rs, rs) && SameBytes<sizeof(sig)>(e.targets, sig)) {
     ++g_rs_id_hits;
     return e.id;
@@ -11011,6 +11202,29 @@ std::string RecordExtentsReport() {
                                 g_extent_answers, g_extent_fallbacks, g_extent_verified, g_extent_differ);
   g_extent_answers = g_extent_fallbacks = g_extent_verified = g_extent_differ = 0;
   return out;
+}
+
+// sasrt-nx (2026-11-20, sasrt_rt4_export_reads_fast; the third table's #34, the first's #16): whether every vertex stream
+// of the draw that meets a pending memexport window is one the host layout reads and whose window FindExportedStream
+// finds on the GPU (DrawNeedsExportFlush's stream part: then no wait, ConvertExportedStreamsLocked converts it). A stream
+// read only by vfetchBound (no host input) is not: the fast path's fetch data does not take export windows.
+bool SasrtExportStreamsOnGpu(const GuestDevice &device, const DrawCall &call, const ShaderRecord &vs,
+                             const u32 *shader_strides, const VertexDeclarationRecord &declaration) {
+  for (u32 k = 0; k < declaration.stream_count; ++k) {
+    const u32 stream = declaration.stream_order[k];
+    if (stream == 0 && call.up_vertices)
+      continue;
+    const u32 fetch_index = d3d::kFirstVertexFetchIndex + d3d::StreamFetchIndex(stream);
+    if (!PendingExportSlotsMemo(kExportAnswerFetch + ((fetch_index - 64) & 31),
+                                device.VertexFetchWord(fetch_index, 0) & ~3u,
+                                device.VertexFetchWord(fetch_index, 1) & 0x3FFFFFCu))
+      continue;
+    ExportedStream exported;
+    if (!declaration.layout.streams[stream].used ||
+        !FindExportedStream(device, call, vs, shader_strides, declaration, stream, exported))
+      return false;
+  }
+  return true;
 }
 
 bool FastExportReads(const GuestDevice &device, const DrawCall &call, const ShaderRecord &vs,
@@ -11484,16 +11698,48 @@ int FastDrawLocked(const u8 *device_state, const DrawCall &call, const ReplayCon
   }
   // Pending memexport results: the draw may read none of their windows (DrawNeedsExportFlush's "none, and no read met
   // a window"), each kind of read kept while its inputs and the pending exports are the same (round 4).
-  if ((check_streams || check_fetch || check_index || check_textures) &&
-      FastExportReads(device, call, *vs, *declaration, fetches, texture_mask, check_streams, check_fetch, check_index,
-                      check_textures))
-    return FastMiss(kFastExportRead);
+  // sasrt-nx (2026-11-20, sasrt_rt4_export_reads_fast; the third table's #34): with the key, the stream reads asked
+  // apart: a draw whose only export reads are vertex streams the host layout reads from windows found on the GPU
+  // (Sonic Transformed's 4P race: 93 "export read" draws a frame to the full path; banjo-nx's N&B city: ~6,300 a 10 s)
+  // has them converted here as DrawStateLocked does (ConvertExportedStreamsLocked before the streams are bound); not for
+  // whole-buffer geometry (WholeGeometryLocked took copies: the full path does not convert those either). Fetch, index
+  // and texture reads go the full way as before.
+  bool export_streams = false;
+  if (check_streams || check_fetch || check_index || check_textures) {
+    if (!sasrt::gpu_round::On(sasrt::gpu_round::kRt4ExportReadsFast)) {
+      if (FastExportReads(device, call, *vs, *declaration, fetches, texture_mask, check_streams, check_fetch,
+                          check_index, check_textures))
+        return FastMiss(kFastExportRead);
+    } else {
+      if ((check_fetch || check_index || check_textures) &&
+          FastExportReads(device, call, *vs, *declaration, fetches, texture_mask, false, check_fetch, check_index,
+                          check_textures))
+        return FastMiss(kFastExportRead);
+      if (check_streams &&
+          FastExportReads(device, call, *vs, *declaration, fetches, texture_mask, true, false, false, false)) {
+        if (whole || !SasrtExportStreamsOnGpu(device, call, *vs, shader_strides, *declaration))
+          return FastMiss(kFastExportRead);
+        export_streams = true;
+      }
+    }
+  }
 #if defined(PLUME_DEKO3D)
   if (!banjo::renut_gpu::PushConstantsOn() || !EnsurePushedBuffers())
     return FastMiss(kFastPushed);
 #else
   return FastMiss(kFastPushed);
 #endif
+  // sasrt-nx (2026-11-20, sasrt_rt4_export_reads_fast): the export windows' streams converted (their compute work and
+  // barriers recorded now; the bound pipeline and framebuffer are forgotten by it, so the binds below are made again).
+  // banjo-nx (2026-11-21, its lean batch): one render-thread object, set only for a draw with export streams (a
+  // GpuStreams a draw was ~320 bytes zeroed at every fast draw).
+  static GpuStreams export_gpu_streams;
+  if (export_streams) {
+    export_gpu_streams = GpuStreams{};
+    if (!ConvertExportedStreamsLocked(s, device, call, *vs, shader_strides, *declaration, geometry, export_gpu_streams))
+      return FastMiss(kFastExportRead);
+    sasrt::gpu_round::Count(sasrt::gpu_round::kRt4ExportReadsFast);
+  }
   // From here the draw is the fast path's: the state below is this draw's.
   ++g_trace_draws;
   if (::renut::gpu::host_batch::CensusOn()) {  // blur-nx (2026-11-18, the census's #19): the draws with no field changed
@@ -12124,7 +12370,15 @@ int FastDrawLocked(const u8 *device_state, const DrawCall &call, const ReplayCon
     }
     g_bound.pipeline = pipeline;
   }
-  SetDrawDepthBias(cmd, dev);  // rr6-nx (2026-11-03, rr6_depth_bias)
+  // rr6-nx (2026-11-03, rr6_depth_bias). sasrt-nx (2026-11-20, sasrt_rt3_depth_bias_fields; the third render-thread
+  // round's #31): not called when the bias set is still bound and none of the packets it reads changed since the draw
+  // before in the chain (its mode control in the view packets, its words in the point packet, kFieldMisc, the depth
+  // info in the destination packet): it would read three cold lines of the snapshot to set what is set.
+  if (!(g_bound.depth_bias_set && !(fields & (kFieldDest | kFieldViewPackets | kFieldMisc)) &&
+        sasrt::gpu_round::On(sasrt::gpu_round::kRt3DepthBiasFields)))
+    SetDrawDepthBias(cmd, dev);
+  else
+    sasrt::gpu_round::Count(sasrt::gpu_round::kRt3DepthBiasFields);
   float blend_constant[4];
   if (f.blend_used && DrawBlendConstant(dev, *f.kp, blend_constant) &&
       !(g_bound.blend_constant_set && SameBytes<sizeof(blend_constant)>(blend_constant, g_bound.blend_constant))) {
@@ -12152,9 +12406,14 @@ int FastDrawLocked(const u8 *device_state, const DrawCall &call, const ReplayCon
     g_bound.shared_words_set = true;
   }
 #endif
+  // banjo-nx (2026-11-21, its lean batch): sasrt_rt4_export_reads_fast's call apart, so the common call keeps the
+  // constant empty streams (one call with the runtime value left LTO no specialised copy of BindStreams for the fast
+  // path: one 14 KB copy at every draw).
   if (whole ? !BindWholeStreams(declaration->layout, whole_copies, base_draw ? 0u : geometry.whole_base)
-            : !BindStreams(device, call, *vs, shader_strides, declaration->layout, declaration->layout_hash, geometry,
-                           GpuStreams{}, nullptr))
+            : export_streams ? !BindStreams(device, call, *vs, shader_strides, declaration->layout,
+                                            declaration->layout_hash, geometry, export_gpu_streams, nullptr)
+                             : !BindStreams(device, call, *vs, shader_strides, declaration->layout,
+                                            declaration->layout_hash, geometry, GpuStreams{}, nullptr))
     return -1;
   if (targets_changed || (key_inputs && banjo::renut_gpu::DiagGpuShadersOn()) || SasrtProfileVsOn())
     f.profile_label = UINT32_MAX;  // the label reads the targets (and with the shaders' breakdown the shader and key)
@@ -12268,7 +12527,8 @@ int FastDrawLocked(const u8 *device_state, const DrawCall &call, const ReplayCon
   if (exports_pending) {
     f.export_generation = g_export_generation;
     f.export_none = true;
-    f.export_streams_ok = !call.up_vertices;  // stream 0 was not checked for a Draw*UP draw
+    // sasrt-nx (2026-11-20, sasrt_rt4_export_reads_fast): a draw that converted export streams asks again next time.
+    f.export_streams_ok = !call.up_vertices && !export_streams;  // stream 0 was not checked for a Draw*UP draw
     f.export_fetch_ok = true;
     f.export_index_ok = call.indexed || (f.export_index_ok && export_generation_same && !(fields & kFieldIndex));
     f.export_textures_ok = true;
@@ -12984,6 +13244,85 @@ bool g_ds_keys_ready = false;
 }
 }  // namespace
 
+// sasrt-nx (2026-11-21, sasrt_resolve_remake_carry; port 257; render/textures.cpp ResolveTarget): 'from''s image drawn
+// into 'to' (the same format and guest size, another scale): present_vs's triangle over 'to', ui_upscale_ps reading
+// 'from''s raw view (no swizzle) with the point sampler at the same guest coordinates, every texel written.
+bool SasrtCarryResolveContentLocked(HostTexture *from, HostTexture *to) {
+  auto &s = State();
+  plume::RenderCommandList *cmd = s.command_list;
+  if (!cmd || !from || !to || !from->texture || !to->texture || !s.present_vs || !s.utility_layout)
+    return false;
+  const uint32_t source_slot = RawViewSlotLocked(*from);
+  if (source_slot == kInvalidDescriptor)
+    return false;
+  static std::unique_ptr<plume::RenderShader> ps;
+  static bool tried = false;
+  if (!tried) {
+    tried = true;
+    ps = CreateHostShader(s.device.get(), RENUT_HOST_SHADER(ui_upscale_ps), "ui_upscale_ps");
+  }
+  if (!ps)
+    return false;
+  struct Entry {
+    plume::RenderFormat format = plume::RenderFormat::UNKNOWN;
+    std::unique_ptr<plume::RenderPipeline> pipeline;
+  };
+  static Entry entries[12];
+  plume::RenderPipeline *pipeline = nullptr;
+  for (Entry &e : entries) {
+    if (e.pipeline && e.format == to->host_format) {
+      pipeline = e.pipeline.get();
+      break;
+    }
+    if (e.pipeline)
+      continue;
+    plume::RenderGraphicsPipelineDesc desc;
+    desc.pipelineLayout = s.utility_layout.get();
+    desc.vertexShader = s.present_vs.get();
+    desc.pixelShader = ps.get();
+    desc.primitiveTopology = plume::RenderPrimitiveTopology::TRIANGLE_LIST;
+    desc.cullMode = plume::RenderCullMode::NONE;
+    desc.renderTargetCount = 1;
+    desc.renderTargetFormat[0] = to->host_format;
+    desc.renderTargetBlend[0] = plume::RenderBlendDesc::Copy();
+    e.pipeline = s.device->createGraphicsPipeline(desc);
+    e.format = to->host_format;
+    if (e.pipeline)
+      e.pipeline->setName("sasrt resolve carry");
+    pipeline = e.pipeline.get();
+    break;
+  }
+  if (!pipeline)
+    return false;
+  if (!to->copy_framebuffer) {
+    const plume::RenderTexture *targets[] = {to->texture.get()};
+    to->copy_framebuffer = s.device->createFramebuffer(plume::RenderFramebufferDesc(targets, 1));
+    if (!to->copy_framebuffer)
+      return false;
+  }
+  TransitionTextureLocked(from, plume::RenderTextureLayout::SHADER_READ);
+  TransitionTextureLocked(to, plume::RenderTextureLayout::COLOR_WRITE);
+  cmd->setFramebuffer(to->copy_framebuffer.get());
+  cmd->setViewports(plume::RenderViewport(0.0f, 0.0f, float(to->alloc_width), float(to->alloc_height)));
+  cmd->setScissors(plume::RenderRect(0, 0, int32_t(to->alloc_width), int32_t(to->alloc_height)));
+  cmd->setGraphicsPipelineLayout(s.utility_layout.get());
+  cmd->setPipeline(pipeline);
+  cmd->setGraphicsDescriptorSet(s.texture_set.get(), 0);
+  cmd->setGraphicsDescriptorSet(s.sampler_set.get(), 1);
+  UtilityPush push{};
+  push.scale[0] = push.scale[1] = 1.0f;
+  push.texture_index = source_slot;
+  push.sampler_index = kPointClampSamplerSlot;
+  cmd->setGraphicsPushConstants(0, &push, 0, sizeof(push));
+  cmd->drawInstanced(3, 1, 0, 0);
+  TransitionTextureLocked(to, plume::RenderTextureLayout::SHADER_READ);
+  // The draw path binds its own layout, pipeline, targets and viewport again.
+  g_bound.framebuffer = nullptr;
+  g_bound.pipeline = nullptr;
+  g_bound.layout = false;
+  g_bound.viewport_set = false;
+  return true;
+}
 bool DrawStateLocked(const u8 *device_state, const DrawCall &call, const ReplayConstants *replay) {
   ::renut::gpu::census::Scope census_scope(::renut::gpu::census::kDrawState);  // blur-nx (2026-11-17)
   if (!g_ds_keys_ready) [[unlikely]]  // blur-nx (2026-11-17, audit #24)
@@ -14875,6 +15214,14 @@ void DropReplacedRanges() {
   if (!over_limit && g_stream_cache_frame % kWholeReplacePeriod &&
       banjo::renut_gpu::g_ab_off_plain != 54)
     return;  // banjo-nx (2026-10-28): kWholeReplacePeriod (A/B 54: every frame, as before)
+  // sasrt-nx (2026-11-20, sasrt_rt2_drop_throttle): over the limit, every 4th frame (Sonic Transformed's 4-player race
+  // sat over it).
+  if (over_limit && g_stream_cache_frame % 4u != 0 && sasrt::gpu_round::On(sasrt::gpu_round::kRt2DropThrottle)) {
+    sasrt::gpu_round::Count(sasrt::gpu_round::kRt2DropThrottle);
+    return;
+  }
+  if (over_limit)
+    sasrt::gpu_round::Count(sasrt::gpu_round::kRt2DropThrottle, 1, 1);  // passes over the limit (the line's /n)
   const auto ready = std::find_if(g_whole_spans.begin(), g_whole_spans.end(), [](const WholeSpan &w) {
     return g_stream_cache_frame - w.frame < kWholeReplaceFrames;
   });
@@ -15068,13 +15415,21 @@ void AdvanceStreamCacheFrameLocked() {
   DropReplacedRanges();
   // sasrt-nx (2026-10-21, sasrt_renut_exports_held): kept exports four frames old go (a game exporting its skinned meshes every
   // frame, in two buffers by turns).
+  bool held_dropped = false;  // sasrt-nx (2026-11-20, sasrt_rt2_held_export_bitmap)
   for (auto it = g_held_exports.begin(); it != g_held_exports.end();) {
     if (g_stream_cache_frame - it->second.frame > 4) {
       g_held_retired.push_back(std::move(it->second.data));
       it = g_held_exports.erase(it);
+      held_dropped = true;
     } else {
       ++it;
     }
+  }
+  if (held_dropped) {  // the granules made again from what is kept (a few hundred entries, once a frame)
+    std::fill(std::begin(g_held_granules), std::end(g_held_granules), 0ull);
+    for (const auto &[base, h] : g_held_exports)
+      if (h.data && !h.data->empty())
+        HeldGranulesMark(base, u32(h.data->size()));
   }
   if (g_held_reads && banjo::renut_gpu::ExportsHeldOn() && g_stream_cache_frame % 300 == 0) {
     RGPU_INFO("[renut] vertex streams read from kept export results (sasrt_renut_exports_held): {} in 300 frames; {} kept",

@@ -147,6 +147,11 @@ namespace {
 char* g_break = nullptr;
 }  // namespace
 
+// sasrt-nx 1.0.1 (2026-11-24, base port 270 with this _sbrk_r): the GPU region's free bottom back to newlib when a move
+// would pass the heap's end (app/thirdparty/plume/plume_deko3d.cpp; weak, so a build without plume's region links and
+// simply fails as before).
+extern "C" __attribute__((weak)) uint64_t plume_region_give_back_for_sbrk(void);
+
 // libsysbase's _sbrk_r (devkitA64 libsysbase.a, sbrk.o: weak) with malloc's lock around it; see blur_sbrk_race_test
 // above. The same moves: the break starts at libnx's fake_heap_start (libsysbase falls back to the image's end, which
 // libnx never leaves it to: __libnx_initheap sets the bounds before any malloc), the end is fake_heap_end (plume's GPU
@@ -156,7 +161,12 @@ extern "C" __attribute__((used)) void* _sbrk_r(struct _reent* r, ptrdiff_t incr)
   __malloc_lock(r);
   if (!g_break) g_break = fake_heap_start;
   char* const prev = g_break;
-  char* const end = fake_heap_end ? fake_heap_end : static_cast<char*>(__builtin_frame_address(0));
+  char* end = fake_heap_end ? fake_heap_end : static_cast<char*>(__builtin_frame_address(0));
+  // sasrt-nx 1.0.1 (2026-11-24, base port 270): past the end, the GPU region's free bottom is asked for first (it raises
+  // fake_heap_end; see plume_region_give_back_for_sbrk), then the move is tried once more.
+  if (prev && incr > 0 && prev + incr > end && fake_heap_end && plume_region_give_back_for_sbrk &&
+      plume_region_give_back_for_sbrk() != 0)
+    end = fake_heap_end;
   void* result;
   if (!prev || prev + incr > end) {
     r->_errno = ENOMEM;
