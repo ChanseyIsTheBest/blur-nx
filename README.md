@@ -2,74 +2,64 @@
 
 <h1 align=center>Blur: Nintendo Switch port</h1>
 
-A port of the Xbox 360 game **Blur** (Bizarre Creations, 2010) to the Nintendo Switch, with a PC build as the step on
-the way.
+<p align=center><b>blur-nx 1.0.0</b> · <a href="https://chanseyisthebest.github.io/blur-nx-installer/">web installer</a> · <a href="https://github.com/ChanseyIsTheBest/blur-nx/releases/tag/v1.0.0">release</a></p>
 
-It's not an emulator. The PowerPC code of the game's `default.xex` (with title update 2) is statically recompiled to C++
-with [ReXGlue](https://github.com/rexglue/rexglue-sdk), and the game's Direct3D calls are drawn by
-[reNut](https://github.com/masterspike52/reNut)'s Direct3D-level renderer, on the Switch GPU's own API, deko3d. The port
-is built on [renut_nx_ultimate_base](https://github.com/ChanseyIsTheBest/renut_nx_ultimate_base), which gathers the
-fixes and optimisations of the other ports.
+An unofficial port of the Xbox 360 game **Blur** (Bizarre Creations, 2010), made by static recompilation with
+[ReXGlue](https://github.com/rexglue/rexglue-sdk) and drawn by [reNut](https://github.com/masterspike52/reNut)'s
+renderer on deko3d. No emulator. Built on
+[renut_nx_ultimate_base](https://github.com/ChanseyIsTheBest/renut_nx_ultimate_base); there is a PC build too.
 
-> [!NOTE]
-> You need your own copy of the Xbox 360 disc and its title update 2. Game data is never part of this repository or its
-> packages.
+This repository contains no game files. You need your own copy of the game: the Xbox 360 disc and its title update 2.
 
-## How to install
+## Playing it on the Switch
 
-1. Open the installer page: **https://chanseyisthebest.github.io/blur-nx-installer/**
-2. Choose your game (the disc image or an extracted folder), then title update 2 (its Xbox 360 package, or the folder
-   it was extracted to), and press **Create blur-nx.zip**. Everything runs in your browser and
-   your game files stay on your computer. The page makes the game's shaders for the Switch from your own files, and
-   packs the level files with LZ4 (the rest of Blur's data is compressed already).
-3. If you have an older blur-nx, delete its `switch/blur-nx/game_root` folder. Then extract `blur-nx.zip` to the root of
-   your SD card. It makes `switch/blur-nx/`.
+1. Open the web installer: **https://chanseyisthebest.github.io/blur-nx-installer/**
+2. Give it your disc image or extracted folder, then title update 2 (its Xbox 360 package or extracted folder), and
+   press **Create blur-nx.zip**. It all runs in your browser.
+3. If you have an older blur-nx, delete its `switch/blur-nx/game_root` folder. Extract `blur-nx.zip` to the root of
+   your SD card.
 4. In **Sphaira**, find Blur, press **X**, choose **Install Forwarder**, set **Address Space** to **39-bit**, choose
-   **Create Forwarder**, and start the game from the Home Screen. Start it from the forwarder: that is what gives it
-   four CPU cores.
+   **Create Forwarder**, and start the game from the Home Screen.
 
-Your options are in `switch/blur-nx/blur.toml`, which the game writes at its first start: the language (by default the
-Switch's), the frame rate cap, the handheld and docked resolutions, SMAA, MSAA, four-core mode, the button layout and
-the game menu's look. Every other setting is built into the NRO (`app/blur_switch.toml`). Hold **A+B+X+Y+L+R** during
-the game to open the game menu: the settings, the game's achievements and each player's controls.
-`dist/switch/README.txt` has the details.
+Features:
 
-## State
+- Plays on the console: menus, career and races with all the game's effects (motion blur, bloom, glow, reflections).
+- 30 fps most of the time at stock clocks.
+- Four CPU cores when started from the forwarder.
+- Game menu (hold **A+B+X+Y+L+R**): settings, the game's achievements and each player's controls.
+- Options in `switch/blur-nx/blur.toml`: language, frame rate cap, handheld and docked resolutions, SMAA, MSAA,
+  four-core mode, button layout and the menu's look. Everything else is built into the NRO (`app/blur_switch.toml`).
+- Level files packed with LZ4 by the installer.
+- No log in normal play; a crash writes `switch/blur-nx/logs/rex/rex_crash.log`.
 
-- **Plays on the console:** boot, menus, career, races with every effect of the game's picture (motion blur, bloom,
-  glow, reflections), at 30 fps most of the time at stock clocks. In a race: 29.3 fps on average with the cap at 30,
-  88 % of frames on time, 1 % lows about 18 fps (2026-11-18, handheld, four cores).
-- **Faster:** the release NRO is built with link-time optimisation and a profile (PGO) from a race on the console, the
-  hottest game functions as checked machine copies and hand-written natives, and the base's renderer and CPU work.
-- **Not tested:** split-screen multiplayer. Online play needs Xbox LIVE and is not supported.
-- **Known:** at very low frame rates (about 15 fps, seen only in instrumented test builds) the picture can ghost; at the
-  release's frame rate it does not.
+Known issues:
 
-Bug reports: add `log_level = "info"` at the top of `switch/blur-nx/blur.toml`, play until the problem happens, and
-include the `switch/blur-nx/logs/` folder. The release writes no log in normal play; a crash writes
-`switch/blur-nx/logs/rex/rex_crash.log`.
+- Split-screen multiplayer is not tested.
+- Online play needs Xbox LIVE and is not supported.
 
-## Documentation
+Bug reports: add `log_level = "info"` at the top of `switch/blur-nx/blur.toml`, play until the problem happens and
+send the `switch/blur-nx/logs/` folder. The player's guide (SD layout, settings, game menu) is
+[dist/switch/README.txt](dist/switch/README.txt).
 
-| File | What it holds |
-|---|---|
-| `docs/blur-notes.md` | This game: decisions, code generation, game fixes, the renderer at XDK 2.0.11164 |
-| `docs/progress-log.md` | The work in order |
-| `docs/building.md` | How to build (the base's guide) |
-| `docs/hand-and-machine-optimising-guide.md`, `docs/optimising-functions.md` | The hot-function method |
-| `docs/off-by-default.md` | The base's fixes that are off, and why |
-| `docs/base-README.md`, `docs/ultimate-fixes.md` | The base this port is built on |
-| `dist/switch/README.txt` | The player's guide: the SD card's layout, the settings, the game menu |
+## Building
 
-## Credits
+See [docs/building.md](docs/building.md) (the base's guide). More:
+
+- [docs/blur-notes.md](docs/blur-notes.md): this game (decisions, code generation, game fixes, the renderer)
+- [docs/progress-log.md](docs/progress-log.md): the work in order
+- [docs/hand-and-machine-optimising-guide.md](docs/hand-and-machine-optimising-guide.md), [docs/optimising-functions.md](docs/optimising-functions.md): the hot-function method
+- [docs/off-by-default.md](docs/off-by-default.md): the base's fixes that are off, and why
+- [docs/base-README.md](docs/base-README.md), [docs/ultimate-fixes.md](docs/ultimate-fixes.md): the base this port is built on
+
+## Credits and license
 
 - **reNut** by masterspike52: the renderer. Its author permits reuse in these ports.
 - **renut_nx_ultimate_base** and the ports its fixes come from (katamari-nx, banjo-nx, sa2-nx, rr6-nx, sasrt-nx,
   kameo-nx and the others); **banjo-nx** for the renderer's adaptation and the method docs.
-- **ReXGlue** for the recompiler and SDK; **NetherSX2_nx** by NaGaa95 (the four-core layout, MIT), **battd_nx** (the GPU
-  arena), **bejeweled3-nx** and the **Zuma** ports (the hot-function method).
+- **ReXGlue** for the recompiler and SDK; **NetherSX2_nx** by NaGaa95 (the four-core layout, MIT), **battd_nx** (the
+  GPU arena), **bejeweled3-nx** and the **Zuma** ports (the hot-function method).
 
-`THIRD_PARTY_NOTICES.md` has the full list and each project's license. GPL-3.0 where the sources are (`LICENSE`).
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) has the full list and each project's license. GPL-3.0 where the sources are ([LICENSE](LICENSE)).
 
-Blur is a trademark of Activision Publishing, Inc.; the icon artwork is © Activision. This project is not affiliated with
-or endorsed by Activision, Bizarre Creations, Microsoft or Nintendo.
+Blur is a trademark of Activision Publishing, Inc.; the icon artwork is © Activision. This project is not affiliated
+with or endorsed by Activision, Bizarre Creations, Microsoft or Nintendo.
