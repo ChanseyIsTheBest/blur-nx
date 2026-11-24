@@ -2,7 +2,7 @@
 
 <h1 align=center>Blur: Nintendo Switch port</h1>
 
-<p align=center><b>blur-nx 1.0.0</b> · <a href="https://chanseyisthebest.github.io/blur-nx-installer/">web installer</a> · <a href="https://github.com/ChanseyIsTheBest/blur-nx/releases/tag/v1.0.0">release</a></p>
+<p align=center><b>blur-nx 1.0.1</b> · <a href="https://chanseyisthebest.github.io/blur-nx-installer/">web installer</a> · <a href="https://github.com/ChanseyIsTheBest/blur-nx/releases/tag/v1.0.1">release</a></p>
 
 An unofficial port of the Xbox 360 game **Blur** (Bizarre Creations, 2010), made by static recompilation with
 [ReXGlue](https://github.com/rexglue/rexglue-sdk) and drawn by [reNut](https://github.com/masterspike52/reNut)'s
@@ -29,7 +29,8 @@ Features:
 - Game menu (hold **A+B+X+Y+L+R**): settings, the game's achievements and each player's controls.
 - Options in `switch/blur-nx/blur.toml`: language, frame rate cap, handheld and docked resolutions, SMAA, MSAA,
   four-core mode, button layout and the menu's look. Everything else is built into the NRO (`app/blur_switch.toml`).
-- Level files packed with LZ4 by the installer.
+- Smaller game files (1.0.1): the installer packs the level files (LZ4 and ZXC), re-encodes the movies to H.265 for
+  the Switch's video decoder and the streamed music to Opus (Chrome or Edge): 5.4 GB to about 4.2 GB.
 - No log in normal play; a crash writes `switch/blur-nx/logs/rex/rex_crash.log`.
 
 Known issues:
