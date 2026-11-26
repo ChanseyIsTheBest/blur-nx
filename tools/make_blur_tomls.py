@@ -99,7 +99,11 @@ SHIPPED = {
     # minute of the console race (11,302 frames) and answered 26 % of the frames; 128 MB answered 37 %, 256 MB 65 %
     # (119,441 frames, full after about 90 s of racing): the XMA Decoder 15.2 -> 10.9 ms a frame, the race 23.84 ->
     # 24.77 fps (build A of batch 3). The heap's room never handed out at the end of the race: 834 MB with 24 MB, ~600 MB with 256 MB (Renut's texture reserve, banjo_renut_textures_reserve_mb, is 384).
-    'banjo_xma_frame_cache_mb': '384  # blur-nx: 24 -> 256 (26 -> 65 % of the frames answered) -> 384 (2026-11-16, the 15 ms batch: 91-97 % answered at 256, ~600 MB of the heap still free at the race\'s end); the cvar allows up to 512',
+    # blur-nx 1.0.2 (2026-11-26, GitHub issue #9): 384 -> 192. Over a session of races (not one race from the start, as
+    # measured on 11-16) the cache took the heap that the GPU region also grows into: 178 MB after five races, the heap's
+    # room 1210 -> 263 MB, and what it frees inside newlib never reaches the region. A track's own frames fit in 192 MB
+    # (98-100 % answered in the five); the memory governor holds it at half or a quarter at its marks.
+    'banjo_xma_frame_cache_mb': '192  # blur-nx: 24 -> 256 (26 -> 65 % of the frames answered) -> 384 (2026-11-16, the 15 ms batch) -> 192 (1.0.2, GitHub issue #9: a session of races ran out of heap); the cvar allows up to 512',
     # blur-nx (2026-11-16, the 15 ms batch's "15 more": docs/cpu-15ms-batch-1116.md). The audio may cheat a bit (the
     # user's word): Blur's near-exact audio tolerances at their maximum, 2^-15 (under one step of the 16-bit output),
     # and the resampler's ratio-1 copy. Exact: the XMA kicks wake the decoder only when it waits, the exp native's memo.
