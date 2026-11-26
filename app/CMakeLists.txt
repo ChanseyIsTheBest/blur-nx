@@ -1213,12 +1213,13 @@ if(REXGLUE_PLATFORM_SWITCH)
     # cover art (D:/blur/i.jpg, 1024x1024, as a 256x256 JPEG: tools/switch/icon/blur_icon.jpg), the author as before.
     # 2026-11-18: version 1.0.0, the first release (the web installer, blur-nx-installer).
     # 2026-11-21: version 1.0.1, banjo_deko3d_copy_run_barriers off (GitHub issue #5: the car's ghosting and warping).
+    # 2026-11-26: version 1.0.2, GitHub issue #9 (the crash while saving after a race; saves set aside while rewritten).
     # The NRO keeps its path (sdmc:/switch/blur-nx/blur-nx.nro): Sphaira's forwarder id comes from it (05A5D8E1BAA3E000),
     # and the four-core NPDM is written for that id (RexSwitchEnsureForwarderNpdm).
     rexglue_switch_add_nro(renut
         NAME "${RENUT_GAME_NAME}"  # port 193: set once, above
         AUTHOR "ChanseyIsTheBest"
-        VERSION "1.0.1"
+        VERSION "1.0.2"
         ${RENUT_ICON_ARG})
 endif()
 
