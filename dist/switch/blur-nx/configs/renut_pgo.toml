@@ -584,6 +584,7 @@ banjo_renut_diag_terrain = false
 renut_shadow_resolution = "1x"
 renut_ambient_occlusion = "Half"
 banjo_xma_frame_cache = true  # blur-nx: on (the user's word); exact
+content_backup_root = "/switch/blur-nx/save_backup"
 kernel_timestamp_timer_on_import = false
 switch_profile_stacks_ms = 5  # blur-nx: 1 -> 5 (a fifth of the sampler's thread pauses)
 msaa_level = 1  # blur-nx: no MSAA + SMAA by default (the user, 2026-11-13: '2xMSAA and SMAA or no MSAA and SMAA'; batch 5 on the console, ABBA: none 21.99 / 21.50 fps, GPU 27.6 ms; 2x 21.57 / 20.90, 32.1 ms; 4x 20.35 / 19.41, 36.0 ms). 2 or 4 (the game's) also render right since the 2026-11-13 fixes

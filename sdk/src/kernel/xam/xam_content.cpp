@@ -161,7 +161,9 @@ u32 xeXamContentCreate(u32 user_index, mapped_string root_name, mapped_void cont
         // Games may reuse the same root without explicitly closing.
         content_manager->CloseContent(root_name);
         if (content_manager->ContentExists(xuid, content_data)) {
-          content_manager->DeleteContent(xuid, content_data);
+          // blur-nx 1.0.2 (2026-11-26, GitHub issue #9): set aside until the new one is closed, not deleted (a game
+          // closed while writing it left the save empty); ContentManager::SetAsideContent.
+          content_manager->SetAsideContent(xuid, content_data);
         }
         // Check filesystem state after deletion attempt to decide
         // whether to create fresh or open existing.
@@ -193,7 +195,7 @@ u32 xeXamContentCreate(u32 user_index, mapped_string root_name, mapped_void cont
           result = X_ERROR_PATH_NOT_FOUND;
         } else {
           content_manager->CloseContent(root_name);
-          content_manager->DeleteContent(xuid, content_data);
+          content_manager->SetAsideContent(xuid, content_data);  // blur-nx 1.0.2 (issue #9), as CREATE_ALWAYS
           if (content_manager->ContentExists(xuid, content_data)) {
             disposition = kDispositionState::Open;
           } else {

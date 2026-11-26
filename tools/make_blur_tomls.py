@@ -37,6 +37,10 @@ SHIPPED = {
     'banjo_renut_render_height_handheld': '720',
     'banjo_renut_render_height_docked': '972',  # the user (2026-11-18): "i want docked default to be 972p"
     'banjo_renut_dynamic_resolution': 'false',
+    # blur-nx 1.0.2 (2026-11-26, GitHub issue #9: a player's save was left empty when the game closed while saving):
+    # every save the game closes is copied to save_backup/<save>/current, and the copy before it moves to previous, so
+    # a save the game finds damaged can be put back by hand (the SDK's content_backup_root; saves are a few KB).
+    'content_backup_root': '"/switch/blur-nx/save_backup"',
     # blur-nx (2026-11-14 02:44, docs/cpu-near-exact-50-1113.md): M-38 off. Blur's XEX never imports KeTimeStampBundle,
     # yet the game reads its tick count (a runtime lookup), so with the timer started only on import the count froze
     # and the boot stalled on a black screen unless a button was pressed (console bisect: 8 of 8 boots hung on, 2 of 2

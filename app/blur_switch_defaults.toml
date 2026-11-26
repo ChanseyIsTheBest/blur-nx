@@ -581,6 +581,7 @@ banjo_renut_diag_terrain = false
 renut_shadow_resolution = "1x"
 renut_ambient_occlusion = "Half"
 banjo_xma_frame_cache = true  # blur-nx: on (the user's word); exact
+content_backup_root = "/switch/blur-nx/save_backup"
 kernel_timestamp_timer_on_import = false
 switch_profile_stacks_ms = 5  # blur-nx: 1 -> 5 (a fifth of the sampler's thread pauses)
 banjo_cpu_native_sub_8230B338 = false  # blur-nx: the copy writes r12 back, the original does not (guard)

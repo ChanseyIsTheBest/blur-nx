@@ -335,9 +335,33 @@ inline void Remember(void* p, size_t n, void* caller) {
 constexpr uintptr_t kMinChunk = 32;  // newlib's MINSIZE on aarch64
 constexpr uintptr_t kPageSize = 0x1000;
 
+// blur-nx 1.0.2 (2026-11-26, GitHub issue #9: a player's 1.0.1 crashed after a race, the save left empty). Not every
+// address inside libnx's heap can be read: the guest memory's chunks (core/guest_memory_switch.h: 8 MB pieces taken
+// from newlib, 622 MB in 78 of them in a race) are mapped away into the guest window, and their heap pages are left
+// with no permission at all. When a save's file write found malloc empty, CheckHeap's walk of the chunks below the top
+// went into one of those (a data abort at 0xF0 below such a region's end, an LDP of a chunk's first bytes) and the game
+// closed in the middle of the save, before the report and before the mend. Every read here of memory newlib did not
+// hand to the watch itself is now asked of the kernel first (svcQueryMemory: mapped, readable, and writable for the
+// mend); what cannot be read is said so in the report instead.
+bool Accessible(uintptr_t at, size_t n, bool write = false) {
+  const uintptr_t end = at + n;
+  if (!n || end < at) return n == 0;
+  const u32 need = write ? (Perm_R | Perm_W) : Perm_R;
+  while (at < end) {
+    MemoryInfo mi{};
+    u32 page_info = 0;
+    if (R_FAILED(svcQueryMemory(&mi, &page_info, at))) return false;
+    if (mi.type == MemType_Unmapped || (mi.perm & need) != need) return false;
+    const uintptr_t region_end = uintptr_t(mi.addr + mi.size);
+    if (region_end <= at) return false;
+    at = region_end;
+  }
+  return true;
+}
+
 struct TopChunk {
   uintptr_t top = 0, word = 0, brk = 0;
-  bool in_heap = false;  // a 16-aligned address inside libnx's heap
+  bool in_heap = false;  // a 16-aligned address inside libnx's heap whose first 16 bytes can be read
   bool sound() const { return in_heap && (word & 1) && top + (word & ~uintptr_t(3)) == brk; }
 };
 
@@ -347,7 +371,7 @@ TopChunk ReadTop() {  // under malloc's lock, or racy (the frame's look first)
   t.top = reinterpret_cast<uintptr_t>(av[2]);
   t.brk = reinterpret_cast<uintptr_t>(sbrk(0));
   const uintptr_t lo = reinterpret_cast<uintptr_t>(fake_heap_start), hi = reinterpret_cast<uintptr_t>(fake_heap_end);
-  t.in_heap = t.top >= lo && t.top + 16 <= hi && !(t.top & 15);
+  t.in_heap = t.top >= lo && t.top + 16 <= hi && !(t.top & 15) && Accessible(t.top, 16);
   t.word = t.in_heap ? *reinterpret_cast<const volatile uintptr_t*>(t.top + 8) : 0;
   return t;
 }
@@ -411,11 +435,13 @@ void GatherLocked(Evidence& e, const TopChunk& t) {
     e.recent[i] = i < e.ring_next ? b : BigBlock{};
   }
   if (!t.in_heap) return;
-  if (t.top >= e.heap_lo + sizeof(e.below)) {
+  // 1.0.2 (issue #9): each copy only of memory the kernel says can be read (Accessible).
+  if (t.top >= e.heap_lo + sizeof(e.below) && Accessible(t.top - sizeof(e.below), sizeof(e.below))) {
     e.below_from = t.top - sizeof(e.below);
     std::memcpy(e.below, reinterpret_cast<const void*>(e.below_from), sizeof(e.below));
   }
-  if (t.top + sizeof(e.at) <= e.heap_hi) std::memcpy(e.at, reinterpret_cast<const void*>(t.top), sizeof(e.at));
+  if (t.top + sizeof(e.at) <= e.heap_hi && Accessible(t.top, sizeof(e.at)))
+    std::memcpy(e.at, reinterpret_cast<const void*>(t.top), sizeof(e.at));
   // The ring's blocks within 64 KB below the top chunk, the highest kept (insertion into a short sorted list).
   for (uint32_t i = 0; i < kRing; ++i) {
     const BigBlock b = g_ring[i];
@@ -448,6 +474,12 @@ void GatherLocked(Evidence& e, const TopChunk& t) {
       e.walk_end = "a chunk runs past the top chunk";
       break;
     }
+    // 1.0.2 (issue #9): a chunk whose words or first bytes lie in memory that cannot be read (a guest memory chunk
+    // mapped away, or a size word that is not one led here) ends the walk; it is never read.
+    if (!Accessible(c, std::min<uintptr_t>(16 + sizeof(Evidence::Chunk::head), t.top - c))) {
+      e.walk_end = "a chunk in memory that cannot be read (a guest memory chunk mapped away, or a bad size)";
+      break;
+    }
     Evidence::Chunk& w = e.walk[e.walk_n++];
     w.at = c;
     w.prev = reinterpret_cast<const uintptr_t*>(c)[0];
@@ -469,6 +501,10 @@ void GatherLocked(Evidence& e, const TopChunk& t) {
 bool MendLocked(TopChunk& t, const char** why) {
   if (!t.in_heap) {
     *why = "the top chunk is not in the heap";
+    return false;
+  }
+  if (!Accessible(t.top, 16, true)) {  // 1.0.2 (issue #9)
+    *why = "the top chunk's words cannot be written";
     return false;
   }
   if (t.top + kMinChunk > t.brk) {

@@ -9,7 +9,9 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <algorithm>  // blur-nx 1.0.2: SameFolder
 #include <array>
+#include <cstdio>     // blur-nx 1.0.2: SameFiles
 #include <cstring>
 #include <queue>
 #include <string>
@@ -140,14 +142,16 @@ bool CopyFile(const std::filesystem::path& source, const std::filesystem::path& 
     fclose(entry);
     return false;
   }
-  std::vector<uint8_t> buffer(64 * 1024);
+  // blur-nx 1.0.2 (2026-11-26, GitHub issue #9): the copy runs as a save closes, which is when a heap short of room
+  // was seen to fail: a buffer on the stack (saves are a few KB), not a heap block that could throw.
+  uint8_t buffer[16 * 1024];
   bool ok = true;
   while (true) {
-    const size_t read = fread(buffer.data(), 1, buffer.size(), entry);
+    const size_t read = fread(buffer, 1, sizeof(buffer), entry);
     if (read == 0) {
       break;
     }
-    if (fwrite(buffer.data(), 1, read, output) != read) {
+    if (fwrite(buffer, 1, read, output) != read) {
       ok = false;
       break;
     }
@@ -182,7 +186,60 @@ bool CopyFolder(const std::filesystem::path& source, const std::filesystem::path
   return ok;
 }
 
+// blur-nx 1.0.2 (2026-11-26, GitHub issue #9): whether two folders hold the same files with the same bytes (saves are
+// a few KB: read whole, through stack buffers), and whether a folder holds nothing or an empty file (a write that never
+// happened).
+bool SameFiles(const std::filesystem::path& a, const std::filesystem::path& b) {
+  FILE* fa = rex::filesystem::OpenFile(a, "rb");
+  FILE* fb = fa ? rex::filesystem::OpenFile(b, "rb") : nullptr;
+  bool same = fa && fb;
+  uint8_t ba[4096], bb[4096];
+  while (same) {
+    const size_t na = fread(ba, 1, sizeof(ba), fa), nb = fread(bb, 1, sizeof(bb), fb);
+    if (na != nb || std::memcmp(ba, bb, na) != 0) same = false;
+    if (na == 0 || !same) break;
+  }
+  if (fa) fclose(fa);
+  if (fb) fclose(fb);
+  return same;
+}
+
+bool SameFolder(const std::filesystem::path& a, const std::filesystem::path& b) {
+  const auto la = rex::filesystem::ListFiles(a), lb = rex::filesystem::ListFiles(b);
+  if (la.size() != lb.size()) return false;
+  for (const auto& f : la) {
+    const auto it = std::find_if(lb.begin(), lb.end(), [&f](const rex::filesystem::FileInfo& g) {
+      return g.name == f.name && g.type == f.type;
+    });
+    if (it == lb.end()) return false;
+    if (f.type == rex::filesystem::FileInfo::Type::kDirectory) {
+      if (!SameFolder(a / f.name, b / f.name)) return false;
+    } else if (f.total_size != it->total_size || !SameFiles(a / f.name, b / f.name)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool EmptyOrHasEmptyFile(const std::filesystem::path& folder) {
+  bool any = false;
+  for (const auto& f : rex::filesystem::ListFiles(folder)) {
+    if (f.type == rex::filesystem::FileInfo::Type::kDirectory) {
+      if (EmptyOrHasEmptyFile(folder / f.name)) return true;
+      any = true;
+    } else if (f.total_size == 0) {
+      return true;
+    } else {
+      any = true;
+    }
+  }
+  return !any;
+}
+
 // The readable copy: <content_backup_root>/<profile>/current, and the previous one to <profile>/previous.
+// blur-nx 1.0.2 (issue #9): only a save that changed and has data moves the copies on. A close that only read the save
+// (the game's look at the start) left previous = current before, so after a save emptied by a crash the next start's
+// read and the game's recreated save pushed the last good one out of both.
 void CopyForTheUser(const std::string_view name, const std::filesystem::path& source) {
   const std::string root = REXCVAR_GET(content_backup_root);
   if (root.empty()) {
@@ -194,6 +251,13 @@ void CopyForTheUser(const std::string_view name, const std::filesystem::path& so
   const std::filesystem::path previous = base / "previous";
 
   std::error_code ec;
+  if (EmptyOrHasEmptyFile(source)) {
+    REXSYS_WARN("[save] '{}' has an empty file or none: not copied over {}", profile, rex::path_to_utf8(actual));
+    return;
+  }
+  if (std::filesystem::exists(actual, ec) && SameFolder(source, actual)) {
+    return;  // unchanged since the last copy
+  }
   if (std::filesystem::exists(actual, ec)) {
     std::filesystem::remove_all(previous, ec);
     ec.clear();
@@ -344,6 +408,7 @@ std::vector<XCONTENT_AGGREGATE_DATA> ContentManager::ListContent(uint32_t device
   // Search path:
   // content_root/xuid/title_id/type_name/*
   auto package_root = ResolvePackageRoot(xuid, content_type, title_id);
+  PutBackInterruptedUnder(package_root);  // blur-nx 1.0.2 (issue #9): saves whose last write never finished, back
   auto file_infos = rex::filesystem::ListFiles(package_root);
   for (const auto& file_info : file_infos) {
     if (file_info.type != rex::filesystem::FileInfo::Type::kDirectory) {
@@ -424,6 +489,7 @@ bool ContentManager::ContentExists(uint64_t xuid, const XCONTENT_AGGREGATE_DATA&
     return true;
   }
   auto path = ResolvePackagePath(xuid, data);
+  PutBackInterrupted(path);  // blur-nx 1.0.2 (issue #9): a save whose last write never finished comes back first
   return std::filesystem::exists(path);
 }
 
@@ -576,6 +642,7 @@ X_RESULT ContentManager::OpenContent(const std::string_view root_name, uint64_t 
 
   auto package_path = ResolvePackagePath(xuid, data);
   const auto package_file = PackageFileOf(data);  // rr6-nx (2026-11-18): DLC read in place
+  if (package_file.empty()) PutBackInterrupted(package_path);  // blur-nx 1.0.2 (issue #9)
   if (package_file.empty() && !std::filesystem::exists(package_path)) {
     REXSYS_WARN("[save] open '{}': {} does not exist", data.file_name(),
                 rex::path_to_utf8(package_path));
@@ -631,6 +698,24 @@ X_RESULT ContentManager::CloseContent(const std::string_view root_name) {
 
   REXSYS_INFO("[save] close '{}' (root {}) in {} -> {}", name, root_name,
               rex::path_to_utf8(path), ThatHasInside(path));
+  // blur-nx 1.0.2 (issue #9): a save written again is closed whole: the one set aside for it goes.
+  {
+    bool was_rewriting = false;
+    {
+      auto global_lock = global_critical_region_.Acquire();
+      const auto it = std::find(rewriting_.begin(), rewriting_.end(), path);
+      if (it != rewriting_.end()) {
+        rewriting_.erase(it);
+        was_rewriting = true;
+      }
+    }
+    const std::filesystem::path aside = ResolveSetAsidePath(path);
+    std::error_code ec;
+    if (was_rewriting && std::filesystem::exists(aside, ec)) {
+      std::filesystem::remove_all(aside, ec);
+      REXSYS_INFO("[save] '{}' written again and closed: the save set aside for it is dropped", name);
+    }
+  }
   CopyForTheUser(name, path);
   return X_ERROR_SUCCESS;
 }
@@ -695,6 +780,77 @@ X_RESULT ContentManager::DeleteContent(uint64_t xuid, const XCONTENT_AGGREGATE_D
     return X_ERROR_SUCCESS;
   }
   return X_ERROR_FILE_NOT_FOUND;
+}
+
+// blur-nx 1.0.2 (2026-11-26, GitHub issue #9; see SetAsideContent in content_manager.h).
+std::filesystem::path ContentManager::ResolveSetAsidePath(const std::filesystem::path& package_path) {
+  // content_root/xuid/title/type/name -> content_root/xuid/title/Rewriting/type/name (outside the type's folder, so
+  // the game's list of saves never shows it)
+  const std::filesystem::path type_dir = package_path.parent_path();
+  return type_dir.parent_path() / "Rewriting" / type_dir.filename() / package_path.filename();
+}
+
+bool ContentManager::IsPackagePathOpen(const std::filesystem::path& package_path) {
+  auto global_lock = global_critical_region_.Acquire();
+  if (std::find(rewriting_.begin(), rewriting_.end(), package_path) != rewriting_.end()) return true;
+  for (const auto& [root, package] : open_packages_) {
+    if (package && package->package_path() == package_path) return true;
+  }
+  return false;
+}
+
+void ContentManager::PutBackInterrupted(const std::filesystem::path& package_path) {
+  const std::filesystem::path aside = ResolveSetAsidePath(package_path);
+  std::error_code ec;
+  if (!std::filesystem::exists(aside, ec) || IsPackagePathOpen(package_path)) return;
+  // The game set this save aside to write it again and never closed the new one: what is in its place is that
+  // unfinished write. The save before it comes back.
+  const std::string what = ThatHasInside(package_path);
+  std::filesystem::remove_all(package_path, ec);
+  ec.clear();
+  std::filesystem::rename(aside, package_path, ec);
+  if (ec) {
+    REXSYS_ERROR("[save] '{}': its last write never finished, and the save before it could NOT be put back from {} "
+                 "({})", rex::path_to_utf8(package_path.filename()), rex::path_to_utf8(aside), ec.message());
+    return;
+  }
+  REXSYS_WARN("[save] '{}': its last write never finished (the game closed while saving; it held {}): the save "
+              "before it is back -> {}", rex::path_to_utf8(package_path.filename()), what,
+              ThatHasInside(package_path));
+}
+
+void ContentManager::PutBackInterruptedUnder(const std::filesystem::path& package_root) {
+  const std::filesystem::path aside_root = ResolveSetAsidePath(package_root / "x").parent_path();
+  std::error_code ec;
+  if (!std::filesystem::exists(aside_root, ec)) return;
+  for (const auto& f : rex::filesystem::ListFiles(aside_root)) {
+    if (f.type == rex::filesystem::FileInfo::Type::kDirectory) PutBackInterrupted(package_root / f.name);
+  }
+}
+
+X_RESULT ContentManager::SetAsideContent(uint64_t xuid, const XCONTENT_AGGREGATE_DATA& data) {
+  const std::filesystem::path path = ResolvePackagePath(xuid, data);
+  PutBackInterrupted(path);  // an older unfinished write first: the whole save it set aside is the one to keep
+  const std::filesystem::path aside = ResolveSetAsidePath(path);
+  std::error_code ec;
+  if (!std::filesystem::exists(path, ec)) return X_ERROR_FILE_NOT_FOUND;
+  std::filesystem::remove_all(aside, ec);
+  ec.clear();
+  std::filesystem::create_directories(aside.parent_path(), ec);
+  ec.clear();
+  std::filesystem::rename(path, aside, ec);
+  if (ec) {
+    REXSYS_WARN("[save] '{}' could not be set aside while it is written again ({}): deleted as before",
+                data.file_name(), ec.message());
+    return DeleteContent(xuid, data);
+  }
+  {
+    auto global_lock = global_critical_region_.Acquire();
+    if (std::find(rewriting_.begin(), rewriting_.end(), path) == rewriting_.end()) rewriting_.push_back(path);
+  }
+  REXSYS_INFO("[save] '{}' set aside while the game writes it again (in {} until it is closed)", data.file_name(),
+              rex::path_to_utf8(aside));
+  return X_ERROR_SUCCESS;
 }
 
 X_RESULT ContentManager::UnmountContent(uint64_t xuid, const XCONTENT_AGGREGATE_DATA& data) {
