@@ -28,6 +28,7 @@
 #include "renut_engine/perf/frame_stats.h"  // sasrt-nx (2026-11-09, sasrt_dynamic_cpu_aware; port 52)
 #include "renut_engine/gpu/sasrt_gpu_round.h"  // sasrt-nx (2026-11-09, sasrt_rt_restore_candidates; port 54)
 #include <rex/filesystem/devices/host_path_file.h>  // sasrt-nx (2026-11-09; port 58): TrimRangeCache (the governor)
+#include <rex/audio/xma/context.h>  // blur-nx 1.0.2 (issue #9): LimitXmaFrameCache (the governor)
 #if defined(PLUME_DEKO3D)
 #include <plume_deko3d.h>  // banjo-nx (2026-10-21, from sa2-nx 1.0.3.1): Deko3DSetSwapChainSize
 #endif
@@ -876,6 +877,24 @@ void LatchResolutionScaleLocked() {
         RGPU_INFO("[renut] {} MB free: {} MB of kept thread stacks given back to the heap (sasrt_memory_governor)", mb,
                   stacks >> 20);
 #endif
+    }
+    // blur-nx 1.0.2 (2026-11-26, GitHub issue #9): the XMA frame cache (Blur's holds up to 384 MB, filled over a session
+    // of races: 178 MB after five on 11-26, the heap's room 1210 -> 263 MB) gives memory back at the marks: half its
+    // size while memory is low, a quarter while critical; with twice the low marks free again it may grow back whole.
+    {
+      static uint32_t xma_percent = 100;
+      const bool plenty = mb >= 2 * banjo::renut_gpu::MemoryLowMarkMb() &&
+                          (!cpu_watch || cpu_mb >= 2 * banjo::renut_gpu::CpuLowMarkMb());
+      const uint32_t want = critical ? 25u : low ? std::min(xma_percent, 50u) : plenty ? 100u : xma_percent;
+      if (want != xma_percent) {
+        const uint64_t freed = rex::audio::LimitXmaFrameCache(want);
+        static uint32_t xma_logged = 0;
+        if (xma_logged++ < 32)
+          RGPU_INFO("[renut] {} MB free, the CPU side {} MB: the XMA frame cache held at {} % of "
+                    "banjo_xma_frame_cache_mb ({} MB given back; sasrt_memory_governor)",
+                    mb, cpu_room >> 20, want, freed >> 20);
+        xma_percent = want;
+      }
     }
 #if defined(__SWITCH__)
     // sasrt-nx (2026-11-09 night, sasrt_spare_stacks_idle_s; port 58): the kept guest thread stacks back to the heap once
