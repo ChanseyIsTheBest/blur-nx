@@ -48,8 +48,8 @@
  *     version to recover a profile that got corrupted.
  */
 REXCVAR_DEFINE_STRING(content_backup_root, "", "Kernel",
-                      "Folder where a copy of each save is left, with one subfolder per profile. "
-                      "Empty = nothing is copied");
+                      "Folder where a copy of each save is left: <profile id>/<save>/current, and the copy before it "
+                      "in previous (only a save that changed and has data moves them on). Empty = nothing is copied");
 // katamari-nx (2026-11-01): DLC kept from the game without uninstalling it (the user: Beautiful Katamari's packs that
 // only unlock what the game unlocks by itself take the fun out of unlocking it). The app's katamari_dlc_unlock_packs
 // adds those packs' names; anything listed here is left out of the game's DLC list, and emptying it shows them again.
@@ -236,17 +236,22 @@ bool EmptyOrHasEmptyFile(const std::filesystem::path& folder) {
   return !any;
 }
 
-// The readable copy: <content_backup_root>/<profile>/current, and the previous one to <profile>/previous.
+// The readable copy: <content_backup_root>/<profile id>/<save>/current, and the previous one to .../previous.
 // blur-nx 1.0.2 (issue #9): only a save that changed and has data moves the copies on. A close that only read the save
 // (the game's look at the start) left previous = current before, so after a save emptied by a crash the next start's
 // read and the game's recreated save pushed the last good one out of both.
+// blur-nx 1.0.2 (2026-11-26): one folder per profile, as this said: the save's name alone (Blur's AMAXSAVE) put every
+// profile's saves in one folder. The profile id is the save's own path's (content_root/<xuid>/<title>/<type>/<name>).
 void CopyForTheUser(const std::string_view name, const std::filesystem::path& source) {
   const std::string root = REXCVAR_GET(content_backup_root);
   if (root.empty()) {
     return;
   }
-  const std::string profile = SafeName(name);
-  const std::filesystem::path base = std::filesystem::path(root) / profile;
+  const std::string xuid = SafeName(rex::path_to_utf8(source.parent_path().parent_path().parent_path().filename()));
+  const std::string save = SafeName(name);
+  const std::string profile = xuid.empty() ? save : xuid + "/" + save;  // for the log
+  const std::filesystem::path base =
+      xuid.empty() ? std::filesystem::path(root) / save : std::filesystem::path(root) / xuid / save;
   const std::filesystem::path actual = base / "current";
   const std::filesystem::path previous = base / "previous";
 
